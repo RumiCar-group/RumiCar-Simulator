@@ -20,11 +20,11 @@
   "canonicalNode": {
     "node": "22.22.1",
     "v8": "12.4.254.21-node.35",
-    "resultSha256": "0876873296d8c2810a28e4f2c0f83e32cd69480f63785067b6bfd78eb4834a31",
+    "resultSha256": "0e244a0c5c87dc0523d5fe1d0d4e53eeb7712053f3dc0d4017689f62ab1e4c7f",
     "pinnedAt": "2026-08-02",
     "eventId": "official-sample-circuit",
-    "appVersion": "v5.0.1",
-    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: v5.0.1 版バンプ (＋車両追加タイルの見切れ是正・表示のみ) に伴う resultSha256 再ピン。verifyHash=c731ecce は不変 (走行物理・順位・タイムとも同一) で、appVersion が engineFingerprint 経由で resultSha256 のみを変えたため (AQ-1 の運用どおり)。"
+    "appVersion": "v5.1.0",
+    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: v5.1.0 版バンプ (サンプル参照の廃止置き場ガード追加・表示/取込制御のみ) に伴う resultSha256 再ピン。verifyHash は不変 (走行物理・順位・タイムとも同一) で、appVersion が engineFingerprint 経由で resultSha256 のみを変えたため (AQ-1 の運用どおり)。"
   },
   "history": [
     {

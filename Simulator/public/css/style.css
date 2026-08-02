@@ -575,6 +575,13 @@ input.cc-ghurl { flex: 1; min-width: 0; background: var(--bg-1); color: var(--te
 .filer-list li.up { color: var(--accent-hi); }
 .filer-list li.nofile { color: var(--text-faint); cursor: default; }
 .filer-list li.nofile:hover { background: transparent; }
+/* 廃止された置き場の警告 (main.js DEPRECATED_REPO_PATHS)。折返して全文を読ませる。 */
+.filer-list li.deprecated {
+  color: var(--amber); cursor: default; align-items: flex-start;
+  white-space: normal; line-height: 1.45; font-size: 12px;
+  border: 1px dashed var(--amber); border-radius: var(--radius-xs); margin-bottom: 4px;
+}
+.filer-list li.deprecated:hover { background: transparent; }
 .filer-list li .ic { width: 16px; text-align: center; }
 .filer-loading { padding: 12px; font-size: 12px; color: var(--text-dim); }
 

@@ -2223,6 +2223,19 @@ async function uploadTo(file) {
 // ---- RumiCar サンプル ファイラー ----
 const filer = $('repoFiler');
 let filerPath = '';
+// 上流リポジトリの「廃止された場所」。ここのファイルは取り込ませず、後継を案内する。
+// ファイラーはリポジトリのルートから辿れる (openFiler→navFiler('')) ので、廃止済みの
+// 置き場にも到達できてしまう。古い実装を誤って取り込むと、新機能 (例: 後方センサー
+// RC_read(BACK) 相当の REAR 定義) が無いために動かず、原因が分かりにくい。
+// prefix 一致で判定し、増えたらここに1行足すだけで済むようにしておく。
+const DEPRECATED_REPO_PATHS = [
+  // msg は関数にしておく: 言語切替に追従し、かつ i18n 孤児検査 (wf_i18n_check ③ は t('key') の
+  // リテラルを走査する) にも検出される。
+  { prefix: 'ArduinoAndESP32/Libraries', msg: () => t('filer.deprecated.arduinoLib') },
+];
+function deprecatedPathInfo(path) {
+  return DEPRECATED_REPO_PATHS.find(d => path === d.prefix || path.startsWith(d.prefix + '/')) || null;
+}
 function openFiler() { filer.hidden = false; navFiler(''); }
 function closeFiler() { filer.hidden = true; }
 async function navFiler(path) {
@@ -2237,11 +2250,16 @@ async function navFiler(path) {
       const up = path.split('/').slice(0, -1).join('/');
       addFilerItem('up', '⬆', t('filer.up'), () => navFiler(up));
     }
+    const dep = deprecatedPathInfo(path);
+    if (dep) addFilerItem('deprecated', '⚠', dep.msg(), null);
     let loadable = 0;
     for (const e of entries) {
       if (e.type === 'dir') addFilerItem('dir', '📁', e.name, () => navFiler(e.path));
+      // 廃止された場所のファイルは一覧には出すが取込不可 (クリックしても何も起きない)。
+      else if (e.loadable && dep) addFilerItem('nofile', '🚫', e.name, null);
       else if (e.loadable) { loadable++; addFilerItem('file', '📄', e.name, () => loadFilerFile(e)); }
     }
+    if (dep) return;   // 廃止フォルダでは「取込可能なスケッチはありません」を出さない (警告で十分)
     if (!entries.some(e => e.type === 'dir') && loadable === 0) {
       addFilerItem('nofile', '—', t('filer.nofile'), null);
     }
@@ -2259,6 +2277,9 @@ function addFilerItem(cls, icon, label, onClick) {
   $('repoList').appendChild(li);
 }
 async function loadFilerFile(entry) {
+  // 多重防御: 一覧側で取込不可にしてあるが、経路が増えても取り込まないようここでも止める。
+  const dep = deprecatedPathInfo(entry.path || '');
+  if (dep) { logLine(dep.msg()); return; }
   logLine(t('log.ghSampleFetching', { path: entry.path }));
   try {
     const { code, name, lang } = await fetchRawFile(entry.download_url, entry.name);

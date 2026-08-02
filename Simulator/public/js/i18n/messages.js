@@ -551,6 +551,10 @@ export const MESSAGES = {
   'filer.up':      { ja: '.. 上のフォルダへ',     en: '.. Up one folder' },
   'filer.nofile':  { ja: '(このフォルダに取込可能なスケッチはありません)', en: '(no loadable sketch in this folder)' },
   'filer.error':   { ja: 'エラー: {e}',          en: 'Error: {e}' },
+  'filer.deprecated.arduinoLib': {
+    ja: 'このフォルダの Arduino ライブラリは廃止されました。取込できません。Arduino IDE の「ライブラリを管理...」で RumiCar を検索してインストールしてください (ソース: github.com/RumiCar-group/RumiCar-lib)',
+    en: 'The Arduino library in this folder is deprecated and cannot be loaded. Install RumiCar from Arduino IDE via "Manage Libraries..." instead (source: github.com/RumiCar-group/RumiCar-lib)',
+  },
 
   // ---- 共有プログラム名の入力プロンプト (window.prompt) ----
   'prompt.shareProg': { ja: 'GitHub に保存するプログラム名を入力してください (英数字・ハイフン推奨)。\n同名でも別ファイルとして増やせます (上書きしません)。', en: 'Enter a name to save this program on GitHub (alphanumerics & hyphens recommended).\nThe same name still adds a new file (no overwrite).' },
