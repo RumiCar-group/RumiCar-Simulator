@@ -428,20 +428,56 @@ input[type=range]:focus-visible { outline: none; box-shadow: var(--ring); }
 .fleet-load { padding: 0 12px 4px; }
 .loadtarget { font-size: 12px; color: var(--text-dim); }
 .loadtarget b { color: var(--accent-hi); }
-.fleet-cols { display: flex; gap: 10px; overflow-x: auto; padding: 10px 12px 12px; align-items: stretch; }
+/* position:relative が無いと子要素の offsetLeft (main.js selectCar の横スクロール計算が使用)
+   がページ全体基準の絶対座標になり、.stage が幅を分け合うレイアウト (RC-UX-004) で
+   .side が狭くなる場面でスクロール量を過大に誤算し、初期表示が右にずれるバグがあった
+   (2026-08-02 利用者報告で発覚)。 */
+/* container-type: inline-size = 下の @container fleetcols のための計測基準。列ストリップの
+   幅は親から決まる (内容依存でない) ので inline 方向の containment で副作用は無い。 */
+.fleet-cols {
+  position: relative; display: flex; gap: 10px; overflow-x: auto;
+  padding: 10px 12px 12px; align-items: stretch;
+  container-type: inline-size; container-name: fleetcols;
+}
 .carcol {
   flex: 0 0 300px; min-width: 300px; background: var(--surface);
   border: 1px solid var(--border); border-radius: var(--radius);
   display: flex; flex-direction: column; overflow: hidden;
 }
 /* 車1台時の右側の大きな空白を、車両追加への導線タイルで埋める (RC-UX-004)。
-   .carcol ではない別クラスなので colEl(i)/.carcol セレクタの索引に影響しない。 */
+   .carcol ではない別クラスなので colEl(i)/.carcol セレクタの索引に影響しない。
+
+   このタイルは「余った空白を埋める」だけの導線であり、車両追加の唯一の入口ではない
+   (常設の #carAdd がパネル見出しにある = index.html)。したがって:
+   (1) 余りを作らない = 自分が横スクロールを生んではならない。旧 `flex:1 1 auto; min-width:160px`
+       は 160px を絶対に譲らないため必要幅が常に 494px 固定になり、2026-08-02 の
+       `.stage { flex:1 1 560px }` (RC-UX-004 第2弾) で .side が 380〜441px に縮んだ横並び
+       レイアウトでは必ず 55〜116px はみ出して見切れていた (2026-08-02 利用者報告)。
+       縦長では main の折返しで .side が全幅になるため発生しない = 「縦長は正しく横長は見切れる」
+       の正体。`flex:1 1 0; min-width:0` にすると基準幅0 = 余りぶんしか占めないので構造的に
+       はみ出せない。
+   (2) 余りの広さに応じて中身を段階的に落とす。.stage と .side の幅配分 (2026-08-02 の
+       「コース右側の余白がもったいない」対応) は変えずに、狭いときは「＋」だけのコンパクト表示に
+       する。説明は title/aria-label に常時持たせてある (main.js buildFleetColumns)。
+       @container 非対応ブラウザでは既定の display:none のまま = 見切れない安全側に倒れる。 */
 .carcol-add {
-  flex: 1 1 auto; min-width: 160px; align-self: stretch;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  flex: 1 1 0; min-width: 0; align-self: stretch;
+  display: none; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
   border: 1px dashed var(--border-strong); border-radius: var(--radius);
   background: transparent; color: var(--text-dim); cursor: pointer;
-  font-size: 13px; padding: 16px; text-align: center; white-space: normal;
+  font-size: 13px; padding: 16px 10px; text-align: center; white-space: normal;
+  overflow: hidden;
+}
+/* 判定はストリップの content box 幅 (padding 左右 12px を除く) で行う。
+   余り = content box - (カード 300px + gap 10px)。
+   350px → 余り 40px 以上 = 「＋」だけなら置ける (ca-plus は 28px)。
+   382px → 余り 72px 以上 = 説明の札も読める。 */
+@container fleetcols (min-width: 350px) {
+  .carcol-add { display: flex; }
+  .carcol-add .ca-label { display: none; }
+}
+@container fleetcols (min-width: 382px) {
+  .carcol-add .ca-label { display: block; }
 }
 .carcol-add:hover { border-color: var(--accent); color: var(--accent-hi); background: var(--accent-soft); }
 .carcol-add .ca-plus { font-size: 28px; line-height: 1; color: var(--accent-hi); }

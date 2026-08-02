@@ -20,11 +20,11 @@
   "canonicalNode": {
     "node": "22.22.1",
     "v8": "12.4.254.21-node.35",
-    "resultSha256": "01ac9da9e9854c3bbbedf5b2d6ab483c002100c020a1f84adf834432d67c8f2d",
-    "pinnedAt": "2026-08-01",
+    "resultSha256": "0876873296d8c2810a28e4f2c0f83e32cd69480f63785067b6bfd78eb4834a31",
+    "pinnedAt": "2026-08-02",
     "eventId": "official-sample-circuit",
-    "appVersion": "v5.0.0",
-    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: Stage AR (OSS 公開前の権利クリーンアップ) によるコース名・プログラム名の識別子改名で過去再現性が壊れるため v4.1.0→v5.0.0 (MAJOR) へバンプ。物理 verifyHash=c731ecce 不変・正準結果の差分は engineVer と engineFingerprint.appVersion のみ (実測 diff で確認)。AQ-1 の教訓どおり版バンプとセットで resultSha256 を再ピン。"
+    "appVersion": "v5.0.1",
+    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: v5.0.1 版バンプ (＋車両追加タイルの見切れ是正・表示のみ) に伴う resultSha256 再ピン。verifyHash=c731ecce は不変 (走行物理・順位・タイムとも同一) で、appVersion が engineFingerprint 経由で resultSha256 のみを変えたため (AQ-1 の運用どおり)。"
   },
   "history": [
     {

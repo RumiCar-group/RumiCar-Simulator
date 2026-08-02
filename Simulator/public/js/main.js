@@ -834,7 +834,11 @@ function buildFleetColumns() {
     const add = document.createElement('button');
     add.type = 'button';
     add.className = 'carcol-add';
-    add.innerHTML = `<span class="ca-plus" aria-hidden="true">＋</span><span>${t('fleet.addCard')}</span>`;
+    // 余白が狭いときは CSS (@container) が .ca-label を隠して「＋」だけのコンパクト表示にする。
+    // そのとき説明が消えるので title/aria-label を常に持たせる (言語切替は buildFleetColumns 再生成で追従)。
+    add.title = t('fleet.addCard');
+    add.setAttribute('aria-label', t('fleet.addCard'));
+    add.innerHTML = `<span class="ca-plus" aria-hidden="true">＋</span><span class="ca-label">${t('fleet.addCard')}</span>`;
     add.addEventListener('click', addCar);   // addCar 自身が running/maxCars をガード
     wrap.appendChild(add);
   }
