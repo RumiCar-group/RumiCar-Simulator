@@ -1,0 +1,683 @@
+// physics_v2.js — Stage AO 走行エンジン v2「精密動力学」(AO1 骨格 → AO2 タイヤ・荷重コア → AO3 駆動系)。
+// ════════════════════════════════════════════════════════════════════════════
+// 三軸直交アーキテクチャ (AO_spec §1) の「エンジン軸」の第3値 `v2` の実体。
+//   AO1 = 骨格＋配線 (DynCar 継承の暫定プレースホルダ)。
+//   AO2 = _substep を **4輪 two-track (結合 MF robust 形・輪別荷重・rollBalance・荷重感度・横力緩和長・
+//        β依存空力)** へ全面上書き。reset を v2 状態へ拡張。step を §2.6 積分契約 (外側 1/60・nSub 基本8・
+//        adaptiveSub 上限256) へ上書き。V2 定数ホルダ・タイヤモデル関数を新設。**単軌道 DynCar のハック
+//        (muY/muX 異方性・muXDrift・driftSteerMul・kinFactor/steerK シム) は一切参照しない** = 実機 ±24°
+//        統一の正直な物理 (AO_spec §0)。
+//   AO3 (本ブロック) = 縦方向を **車輪 ODE＋左右差動 (デフ)** へ差し替え (§2.4)。AO2 の縦は「準静的」=
+//        駆動/制動需要を線形剛性で κ へ逆算する暫定形だった。AO3 は per-wheel 面速度 `_vw[4]` を状態化し
+//        `dvw/dt = λ·(fApp − fx_tire)` で積分。差動 (open=等分/LSD=平滑粘性 lsdTorque)・モーターブレーキ
+//        (駆動軸 split のみ=FR 後軸ロック/FF 前軸)・エンコーダ (vwF/vwR=軸平均) を導入。**タイヤ力法則
+//        (tireForceMF)・荷重・空力・body 積分は不変** (κ の決まり方だけを差し替え)。step に車輪剛性の
+//        adaptiveSub 条件 (h·λ·μFz·C·Bp/(κP·denom)<0.5) を追加。
+// 後続ブロックが継承先の seam を差し替えて段階導入する:
+//   ・AO4 = 接触を contact_v2.js の integrateFleetV2 (CCD＋インパルス) へ (integrateSlot 無改変)。
+//   ・AO5 = applyRegimeV2 で V2.* を領域別較正・fullscale 既定化。**AO2 は V2.* を固定既定** (normal
+//           タイヤ・単一定数帯) で全領域を走らせる (g/空力/長さスケールは applyRegime が設定済の
+//           DYN/CAR を読む)。較正の絶対値は AO5、AO2 は「摩擦円・定常円・荷重・緩和・単調性・
+//           エネルギー」の**数理的性質**を検証する (性質はスケール不変)。
+//   ・AO6 = タイヤセット normal/slip を V2.* の可変化で導入 (AO2 は normal 固定・muDecay 0.75)。
+//   ・AO12 = 温度/摩耗 fT/fW (AO2 は fT=fW=1)。
+// 既存 physics_dyn.js / physics.js / integrateSlot / api.js / sensors.js は無改変。卓上既定
+// (dynamic・normal) の canonical f0/f1 は v2 が guarded branch (mode==='v2' のみ) のため byte 不変。
+// ════════════════════════════════════════════════════════════════════════════
+import { DynCar, DYN, DYN_DRIVE, dynDriveKey } from './physics_dyn.js';
+import { CAR, CONST, MASS, MASS_REF, REGIMES, registerRegimeHook, gForward } from './config.js';
+
+// 駆動方式キーは physics_dyn.js の dynDriveKey を共用する (AP22 で旧 driveKeyOf の再実装を 2→1 統合)。
+
+// V2 定数ホルダ (AO_spec §2・§4)。AO2 は **normal タイヤ・固定既定**。AO5 が applyRegimeV2 で領域別に、
+// AO6 が normal/slip タイヤセットで一部を書き換える (現段階は単一帯)。μ0 は等方 (縦横同一の実μ) =
+// DynCar の異方性ハック (muY≪muX) を廃する v2 の核。
+export const V2 = {
+  // ── タイヤモデル (結合 Magic Formula robust 形・§2.3) ──
+  mu0: 1.4,          // ピーク摩擦係数 μ0 (等方・normal・§4 fullscale 実績)。×course.grip×loadSens×fT×fW
+  kappaP: 0.10,      // ピーク縦スリップ率 κP (§2.3/§4 normal)
+  alphaP: 0.14,      // ピーク横スリップ (tanα の値・§2.3/§4 normal。α≈8°)。線形剛性 Cα=μFz·C·Bp/αP
+  muDecay: 0.75,     // gInf = ピーク後の漸近比 (§2.3 [0.35,0.95] クランプ)。舗装 normal=0.75 (ピーク後落ちる)
+  kLS: 0.10,         // 荷重感度 kLS (§2.3)。μ が荷重とともに目減り (重い輪ほど μ 低)
+  relLenFrac: 0.5,   // 横力緩和長 relLen = relLenFrac·wheelBase (m・領域スケールで自動追従)
+  kappaClamp: 3,     // κ クランプ (§2.3 ±3)
+  tanAClamp: Math.tan(80 * Math.PI / 180),  // tanα クランプ (§2.3 ±tan80°)
+  // ── 荷重・幾何 (§2.1–2.2) ──
+  twFrac: 0.85,      // トレッド tw = twFrac·CAR.width
+  hOverL: 0.35,      // 重心高 h = hOverL·wheelBase (DYN.hOverL と同値。荷重移動の強さ)
+  izK: 1.0,          // ヨー慣性係数 izK∈[0.95,1.15]。Iz/m = izK·(a·b + tw²/12)
+  rollBalance: 0.55, // ζF = 前軸の左右荷重移動分担率 (§2.2 既定0.55・後軸 1−ζF)。ζF↑=前抜け US 化
+  // ── 空力 (§2.5) ──
+  kBeta: 1.5,        // β依存抗力 (1+kβ·sin²β)。横向き走行は前面投影増で抗力増 (ドリフトのスクラブ)
+  // ── 駆動系 (§2.4・AO3) ──
+  wheelLambda: 28.0, // λ = m·R²/Iw (車輪応答の速さ・剛さ)。**無次元＝相似スケール不変** (小径/大径で同比)。
+                     //   dvw/dt = λ·(fApp − fx_tire)。grip 十分域は半陰的 Euler (AP13・無条件安定)、低グリップは
+                     //   原 explicit＋剛性 adaptiveSub を保存 (下 siMinMu)。
+  siMinMu: 0.35,     // 車輪 ODE 半陰的化 (AP13・nSub 削減) を適用する μ0eff=T.mu0·grip の下限。これ以上=grip 十分。
+                     //   **未満=低グリップ (卓上 slip 0.2 等) は near-limit の slide↔空転連成が鋭く、半陰的で安定でも
+                     //   粗い h でカオス発散し衝突多発 (実測 ao6 D2)** ゆえ原 explicit＋needW を保存 (opt-in の疑似ドリフト
+                     //   練習場=perf 非律速)。境界 0.35 は卓上 slip(0.2) を保存側・卓上 normal(0.8)/fullscale(1.4/0.9) を上。
+  siWheelThresh: 128,// 領域分類の閾値 (applyRegimeV2 が設定)。**領域の代表最大速度での陽的 needW がこれを超える**なら
+                     //   「構造的に低速＝needW が常に浪費的」な領域 (卓上 normal は max 速でも needW≈199) と判定し半陰的化
+                     //   を有効化 (siActive=true)。fullscale は max 速で needW 小 (走行中 p90≈24) ゆえ false → 全走行が原
+                     //   explicit=byte 不変 (エンコーダ vwF/vwR・f2/f3・ao10/ao11 完全保存)。128 は卓上(≈199) と fullscale
+                     //   (≪128) の中間。**領域レベルの一括判定ゆえ fullscale は発走 u≈0 の一過性も含め全て explicit=不変。**
+  siActive: false,   // 上記判定の結果 (applyRegimeV2 が領域切替時に設定)。true=この領域は車輪 ODE を半陰的化 (nSub 削減)。
+  // LSD (平滑粘性＋トルク感応・§2.4)。Tt = clamp(kv·Δvw + kp·|fAxle|·Δvw/(|Δvw|+εv), ±TtMax)·lsd。
+  // **sign() 不使用** (Δvw→0 で Δvw/(|Δvw|+εv)→0 連続 ⇒ Tt→0 連続)。lsd∈[0,1] は車種属性 (下 lsdOf)。
+  lsdKv: 2.0,        // 粘性結合 (速度差比例・VLSD 的)
+  lsdKp: 0.4,        // トルク感応 (伝達トルクに比例して締まる・Torsen/クラッチ式 LSD 的)
+  lsdTtMax: 8.0,     // 差動トルク上限 (mass-norm・完全ロックの飽和)
+  lsdEps: 0.05,      // 平滑 sign の速度差スケール (m/s・これ未満で連続に 0 へ)
+  // ── 定出力ドライブトレイン (§2.4・AO5 で領域別に applyRegimeV2 が書込) ──
+  // launchAccel=低速トルク律速の cap (×p.accel)、wheelPower=高速出力律速 (P/vw̄)。**v2 専用** (DynCar は
+  // DYN.launchAccel/wheelPower を読む=無改変)。既定 0 = fullscale ドライブトレイン無し (CAR.accel 律速=卓上
+  // dynamic と同型)。applyRegimeV2(fullscale) が REGIMES.fullscale.v2 の較正値を書く (AO5)。
+  launchAccel: 0,
+  wheelPower: 0,
+};
+
+// ── タイヤ熱・摩耗 (Stage AO12・AO_spec §6) ─────────────────────────────────────────
+// **opt-in (car.wear=true のときのみ作動・既定 OFF=fT=fW=1=byte 不変)**。輪ごとに滑り仕事率から温度と
+// 摩耗を決定論積分し、μ を fT(温度)·fW(摩耗) で変調する (**合計効果 ≤maxEffect にクランプ=支配しない設計**)。
+// 教材核心 (§6): **ドリフトは後輪を消耗する=使いどころを選ぶ「資源」**。常時ドリフト戦略が長丁場で自滅する
+// 様を測定可能にする。全定数は無次元 (P は摩擦円利用率×正規化スリップ速で領域不変=スケール不変・CI-14)。
+export const TH = {
+  t0: 0.20,        // 冷間 (発走時) 熱状態 (tOpt を1とした比・冷えたタイヤ)
+  tOpt: 1.0,       // 最適熱状態 (ピークグリップ)。fT はここで最大 (=1)
+  tauTh0: 6.0,     // 熱時定数アンカー (s・Froude スケール sqrt(L/0.13) で領域追従。suspension と同型)
+  gain: 1.2,       // 定常昇温 = t0 + gain·P (単位正規化スリップ仕事率あたりの温度上昇。ハードドリフトで温度~1.7)
+  kCold: 0.05,     // 冷間グリップ低下勾配 (per (tOpt−temp)⁺。t0 で ~4%=穏やか・暖まれば解消。摩耗に予算を残す)
+  kHot: 0.18,      // 過熱グリップ低下勾配 (per (temp−tOpt)⁺。過熱ドリフトで clamp へ近づく=資源の使い過ぎ)
+  c3: 0.06,        // 摩耗率 (単位 P·hot·(dt/tauTh) あたりの摩耗増分。数ドリフト周回で ≤10% クランプへ漸近)
+  kW: 0.40,        // 摩耗グリップ低下勾配 (per 摩耗量 wear。wear=0.25 で clamp 境界へ)
+  maxEffect: 0.10, // 合計 μ 低下クランプ (≤10%=「支配しない」設計・§6)
+};
+
+// ── タイヤセット較正 (Stage AO6・AO_spec §4/§10.2) ────────────────────────────────
+// v2 は車ごとに `car.tireSet` ('normal'|'slip') を持ち、タイヤの物理定数 (mu0/muDecay/alphaP/kappaP/
+// relLenFrac) を切替える (normal=既定・byte 不変／slip=疑似ドリフト環境)。定数は **領域別** (卓上ゴム μ0≈0.8
+// と fullscale スリック μ0=1.4 は別ハード) なので REGIMES[name].v2tire に持ち、applyRegimeV2 が領域切替の
+// たびに **現在アクティブ領域の値** を _tireCal へ複製する。μ0/muDecay 等は無次元ゆえ midscale は tabletop
+// の v2tire を継承 (Froude 導出)。既定 (領域に v2tire 無し) は下記リテラル (=V2 既定=fullscale normal 相当)。
+const _tireCalDefault = () => ({
+  normal: { mu0: 1.4, muDecay: 0.75, alphaP: 0.14, kappaP: 0.10, relLenFrac: 0.5 },
+  slip:   { mu0: 0.9, muDecay: 0.95, alphaP: 0.25, kappaP: 0.18, relLenFrac: 0.6 },
+});
+let _tireCal = _tireCalDefault();
+// car.tireSet に応じたタイヤ定数を返す (未知/未指定は normal)。_substep/step が per-car に引く。
+export function tireParamsFor(tireSet) { return _tireCal[tireSet === 'slip' ? 'slip' : 'normal']; }
+
+// v2 の領域別較正を V2 holder / _tireCal へ適用する (Stage AO5/AO6・applyRegime の choke point からフック
+// 起動)。**DYN/CAR は applyRegime が既に設定済** (g/空力/長さスケール) — 本関数は v2 専用パラメータ
+// (定出力ドライブトレイン＋タイヤセット) のみを書く。引数は REGIMES キー文字列 or applyRegime が渡す領域
+// オブジェクト。REGIMES[name].v2 が無ければ駆動 0 (=CAR.accel 律速=卓上 dynamic 同型)、v2tire が無ければ
+// リテラル既定へフォールバック (tabletop/midscale/fullscale は全て v2tire を持つ)。
+export function applyRegimeV2(nameOrObj) {
+  const named = typeof nameOrObj === 'string';
+  const r = named ? (REGIMES[nameOrObj] || REGIMES.tabletop) : (nameOrObj || REGIMES.tabletop);
+  const v = r.v2 || {};
+  V2.launchAccel = (v.launchAccel != null) ? v.launchAccel : 0;
+  V2.wheelPower = (v.wheelPower != null) ? v.wheelPower : 0;
+  // タイヤセット (AO6): 領域の v2tire を _tireCal へ **値複製** する (midscale が tabletop の v2tire を
+  // 参照共有するため領域オブジェクトを書き換えない)。normal/slip 両方が揃うときのみ採用・欠落は既定。
+  const ts = r.v2tire;
+  const pick = (o) => ({ mu0: o.mu0, muDecay: o.muDecay, alphaP: o.alphaP, kappaP: o.kappaP, relLenFrac: o.relLenFrac });
+  _tireCal = (ts && ts.normal && ts.slip) ? { normal: pick(ts.normal), slip: pick(ts.slip) } : _tireCalDefault();
+  // 後方互換: V2.* は「アクティブ領域の normal タイヤ」を映す (V2.muDecay/kappaP/alphaP を読む既存の AO2
+  // ゲート・診断は normal を得る)。per-car の実解決は必ず tireParamsFor(car.tireSet) を経由する。
+  const nrm = _tireCal.normal;
+  V2.mu0 = nrm.mu0; V2.muDecay = nrm.muDecay; V2.alphaP = nrm.alphaP; V2.kappaP = nrm.kappaP; V2.relLenFrac = nrm.relLenFrac;
+  // AP13: この領域で車輪 ODE 半陰的化 (nSub 削減) を有効化するか — 領域レベルの一括判定 (per-step でなく決定論・
+  // 軌跡カオス無し)。領域の代表最大速度でも陽的 needW=ceil(2·λ·μFz·C·Bp/(κP·|u|)·dt) が siWheelThresh を超える
+  // なら「構造的に低速で nSub が常に上限へ貼り付く」領域 (卓上/midscale) と判定 → siActive=true (nSub 253→28)。
+  // fullscale は max 速で needW 小 → false ⇒ 全走行 (発走 u≈0 含む) が原 explicit=byte 不変 (エンコーダ/f2/f3/
+  // ao10/ao11 保存)。DYN/CAR は applyRegime が本フック起動前に設定済 (registerRegimeHook)。dt=1/60=RACE_DT。
+  const maxU = Math.max(CAR.maxSpeed, DYN.absUFloor);
+  const qMax = (DYN.rho > 0 && DYN.frontalArea > 0) ? 0.5 * DYN.rho * DYN.frontalArea / MASS_REF : 0;
+  const muFzAtMax = V2.mu0 * (0.7 * DYN.g + DYN.Cl * qMax * maxU * maxU);
+  const cbMax = mfCoeffs(V2.muDecay);
+  const needWatMax = 2 * V2.wheelLambda * (muFzAtMax * cbMax.C * cbMax.Bp / (V2.kappaP * maxU)) / 60;
+  V2.siActive = needWatMax > V2.siWheelThresh;
+}
+// applyRegime (physics_dyn.js) の末尾フックへ登録 → 領域切替のたびに V2.* が同期する (循環 import 回避)。
+registerRegimeHook(applyRegimeV2);
+
+// 車種の LSD 強度 lsd∈[0,1] (§2.4)。**既定 open(0)**、ドリフト車 (profile.drift) は LSD 装備 (実車ドリ車の
+// 必須) で高 lsd。AO3 は駆動別 open 既定＋drift boost で決める (config.js の CAR_TYPES/DYN_DRIVE は無改変
+// ＝卓上 byte・共有 URL 不変。AO5+ で normal スポーツカーへの LSD 付与や編集可能フィールド化は別途)。
+const V2_LSD_BY_DRIVE = { ff: 0, fr: 0, awd: 0 };
+export function lsdOf(profile, driveKey) {
+  const base = V2_LSD_BY_DRIVE[driveKey] || 0;
+  const boost = (profile && profile.drift) ? 0.8 : 0;
+  return Math.max(0, Math.min(1, base + boost));
+}
+
+// LSD 差動トルク Tt (§2.4)。Δvw = vw_L − vw_R (左−右の車輪面速度差)。faster 輪から slower へ移す
+// (Δvw>0 で左が速い ⇒ Tt>0 ⇒ 左 fApp を減じ右を増やす ⇒ 速度差を詰める)。lsd=0 (open) は Tt=0=等トルク。
+// 平滑 sign で Δvw→0 で連続に 0 (§12 AO3「Δω→0 で Tt→0」)。総軸力は不変 (内部移送) ⇒ ヨーのみ変える。
+export function lsdTorque(dvw, fAxle, lsd) {
+  if (lsd <= 0) return 0;
+  const smooth = dvw / (Math.abs(dvw) + V2.lsdEps);   // ∈(−1,1)・Δvw→0 で 0 連続
+  const Tt = V2.lsdKv * dvw + V2.lsdKp * Math.abs(fAxle) * smooth;
+  return Math.max(-V2.lsdTtMax, Math.min(V2.lsdTtMax, Tt)) * lsd;
+}
+
+// 結合 Magic Formula の robust 係数 (§2.3)。gInf=muDecay から C・Bp を閉形式導出:
+//   C  = 2 − (2/π)·asin(gInf)      Bp = tan(π/(2C))
+// これで g(σ)=sin(C·atan(Bp·σ)) が g(1)=1 (peak)・g(∞)=gInf (漸近) を全 gInf∈(0,1) で厳密に満たす。
+// E 項は不採用 (低 gInf×高 B で力の符号反転の破綻域が生じるため・AO_spec §2.3 設計判断固定)。
+export function mfCoeffs(gInf) {
+  const gi = Math.max(0.35, Math.min(0.95, gInf));
+  const C = 2 - (2 / Math.PI) * Math.asin(gi);
+  const Bp = Math.tan(Math.PI / (2 * C));
+  return { C, Bp };
+}
+
+// 結合 MF タイヤ力 (§2.3)。κ=縦スリップ率, ta=tanα, muFz=μ·Fz (質量正規化 accel), (C,Bp)=mfCoeffs,
+// kP/aP=ピークスリップ。返り {fx, fy, sigma}: fx=縦力/fy=横力 (車輪系・mass-norm), sigma=正規化スリップ長。
+// **|(fx,fy)| = muFz·g(σ) ≤ muFz を構造保証** (摩擦円不変条件)。σ<ε は線形勾配 C·Bp で接続。
+// **接地スリップに対し常に散逸的** (fx·(−κ) ≤0 かつ fy·ta ≤0 = エネルギー非注入・§2.3)。
+export function tireForceMF(kappa, ta, muFz, C, Bp, kP, aP) {
+  const nk = kappa / kP, na = ta / aP;
+  const sigma = Math.hypot(nk, na);
+  const EPS = 1e-6;
+  if (muFz <= 0) return { fx: 0, fy: 0, sigma };
+  if (sigma < EPS) {
+    const lin = muFz * C * Bp;   // σ→0 の線形勾配 (縦横共通)
+    return { fx: lin * nk, fy: -lin * na, sigma };
+  }
+  const g = Math.sin(C * Math.atan(Bp * sigma));   // ∈(0,1]・g(1)=1・g(∞)=gInf
+  const Fss = muFz * g;                            // 合力 |F| = Fss ≤ muFz
+  return { fx: Fss * nk / sigma, fy: -Fss * na / sigma, sigma };
+}
+
+// CarV2: v2 エンジンの車両。AO2 = 4輪 two-track。DynCar を継承し公開面 (フィールド/メソッド) を
+// 完全一致させた drop-in (配線検査ゲート wf_ao1_v2 A/B)。`engine='v2'` マーカーで実行時判別可能。
+export class CarV2 extends DynCar {
+  constructor(start) {
+    super(start);          // DynCar.reset(→ CarV2.reset 仮想) で公開面フィールド初期化
+    this.engine = 'v2';    // 実体マーカー (DynCar は持たない)
+    this.tireSet = 'normal';  // 装備タイヤ (Stage AO6・car.type と同様に外部から上書き・reset で不変)
+    this.wear = false;     // タイヤ熱・摩耗モデル (Stage AO12・opt-in)。tireSet 同様 外部設定・reset で不変。
+  }
+
+  // v2 状態フィールドを追加 (DynCar の公開面は super.reset で全て初期化)。
+  reset(start) {
+    super.reset(start);
+    // 路面 muDecay 上書き (§5・AO8)。course.start.muDecay (buildFromSpec→spawn 経由) が渡れば
+    // タイヤセット既定 (T.muDecay) を上書きする。null=上書きなし (既定=タイヤ値)。低μ路面の忘れ物
+    // 防止に reset のたび再評価 (grip と同型・grip は super.reset が設定)。
+    this.muDecay = (start && start.muDecay != null) ? +start.muDecay : null;
+    this._axF = 0;         // 前後加速度の1次 LPF 状態 (荷重移動用・タイヤ縦力 accel)
+    this._ayF = 0;         // 横加速度の1次 LPF 状態 (荷重移動用・タイヤ横力 accel)
+    this._fyRel = [0, 0, 0, 0];  // 輪ごと横力緩和長の状態 [FL,FR,RL,RR] (車輪系・mass-norm)
+    this._FzWheel = [0, 0, 0, 0];// 輪ごと垂直荷重 (mass-norm・診断/荷重移動ゲート用)
+    this._fcMarginSS = 0;  // 定常 MF 力の摩擦円マージン max_i(|(fx,fy)|−μFz) (≤0=円内・不変条件ゲート)
+    this._fcMargin = 0;    // 適用力 (緩和+半径クランプ後) の摩擦円マージン (≤0=物理適用力も円内)
+    this._slipPowerSS = 0; // 定常 MF 力の接地スリップ仕事率 max_i(F·v_slip) (≤0=散逸的・エネルギー監査)
+    this._latCapSS = 0;    // 横グリップ容量 Σμ_i·Fz_i (定常円ゲート)
+    this._nFaxle0 = 0; this._nRaxle0 = 0;  // 前後移動前の軸荷重 (荷重移動ゲート)
+    this._ayTire = 0; this._ayFrontTire = 0; this._ayRearTire = 0;  // 総/前/後軸 横タイヤ accel
+    this._muUseF = 0; this._muUseR = 0;  // 軸ごと摩擦円使用率 σ (HUD #18・slip 表示)
+    this._vw = [0, 0, 0, 0];  // 車輪面速度 vw=ωR の状態 [FL,FR,RL,RR] (AO3 車輪 ODE＋左右差動)。
+                              // vwF/vwR (エンコーダ公開面) は軸平均で毎ステップ導出 ⇒ api.js 無改変。
+    // ── Stage AO12: タイヤ熱・摩耗 状態 (発走ごとに冷間・無摩耗へ=各レース新品タイヤ) ──
+    this._temp = [TH.t0, TH.t0, TH.t0, TH.t0];  // 輪ごと温度 (熱状態・冷間 t0 始動・§6)
+    this._wear = [0, 0, 0, 0];                  // 輪ごと摩耗量 (単調増加=資源枯渇・§6)
+    this._muUse4 = [0, 0, 0, 0];  // 輪ごと摩擦円利用率 |F|/μFz∈[0,1] (HUD #AO12・表示層のみ・物理非読取)
+  }
+
+  // 停止 (衝突/オーバーラップ解決時)。DynCar.halt は vwF/vwR を 0 化 = CarV2 は車輪状態 _vw も 0 化。
+  halt() { super.halt(); if (this._vw) this._vw[0] = this._vw[1] = this._vw[2] = this._vw[3] = 0; }
+
+  // ── 接触 v2 (AO4) の剛体インターフェース ──────────────────────────────────────
+  // contact_v2.js のインパルスソルバは車の内部 (aFrac/izK/twFrac) を知らない純粋な幾何/力学解法。
+  // ここで CarV2 が自分の「剛体パラメータ」(質量中心 CG・世界系 CG 速度・ヨーレート・逆質量・逆慣性) を
+  // _substep と同じ定数で提供し、ソルバはこれを介してのみ状態を読み書きする (カプセル化)。
+  //   ・(u,vlat) は **CG の車体系速度** (位置積分が CG を進めるため・_substep ⑩)。
+  //   ・Iz は _substep と同一 (izK·(a·b+tw²/12)·m)。逆慣性 = 1/Iz。壁は静的 (invM=invI=0・ソルバ側)。
+  // 位置補正は剛体並進 (x,y=後輪軸基準を Δだけ動かせば CG も四隅も同一に並進) ゆえ car.x/y へ直接足す。
+  _contactBody() {
+    const p = this.profile();
+    const dk = DYN_DRIVE[dynDriveKey(p.key || this.type)] || DYN_DRIVE.fr;
+    const L = CAR.wheelBase;
+    const a = dk.aFrac * L, b = L - a;              // CG→前軸 / CG→後軸 (後輪軸=公開 x,y から前へ b)
+    const tw = V2.twFrac * CAR.width;
+    const iz = V2.izK * (a * b + tw * tw / 12);     // Iz/m (質量正規化・_substep と同一)
+    const m = p.mass || MASS_REF;
+    const cth = Math.cos(this.theta), sth = Math.sin(this.theta);
+    const cx = this.x + b * cth, cy = this.y + b * sth;         // CG 世界座標
+    const vx = this.u * cth - this.vlat * sth;                 // CG 速度 世界系 (車体系→世界)
+    const vy = this.u * sth + this.vlat * cth;
+    return { m, invM: 1 / m, invI: 1 / (m * iz), cx, cy, vx, vy, w: this.r, b };
+  }
+
+  // ソルバが解いた世界系 CG 速度 (vx,vy)・ヨーレート w を車体系 (u,vlat,r) へ書き戻す。位置 (theta) は不変。
+  _setContactVel(vx, vy, w) {
+    const cth = Math.cos(this.theta), sth = Math.sin(this.theta);
+    this.u = vx * cth + vy * sth;
+    this.vlat = -vx * sth + vy * cth;
+    this.r = w;
+    this.v = this.u;   // 表示/派生用 (step 末尾と同期)
+  }
+
+  // v2 は driftSteerMul を参照しない = 実機 ±24° 全車統一 (AO_spec §2.1)。
+  get steerTarget() {
+    if (this.steer === CONST.LEFT) return CAR.maxSteer;
+    if (this.steer === CONST.RIGHT) return -CAR.maxSteer;
+    return 0;
+  }
+
+  // step 内 substep 反復で不変な量を1回だけ算出して束ねる (AP12 巻き上げ)。旧 _substep はこれらを毎 substep
+  // (卓上 v2 は平均 253 回/step) 再計算していた: driveKeyOf の正規表現・mfCoeffs の asin/tan・muOf クロージャ
+  // 確保・Math.sqrt(サス/熱)・多数の不変スカラー。**各値は旧 _substep 内の式と同一・同一入力** (this.type/
+  // tireSet/grip/muDecay/wear は step 実行中に不変=同一 double 結果) ゆえ **byte 完全不変** (f0-f3・S1/S4
+  // verifyHash/traceHash 不変)。dt(=h) はステアレート・積分で使うため _substep 引数のまま残す。p/T/C/Bp は
+  // step() が nSub 決定で既に算出したものを受け取る (二重計算も排除)。
+  _subCtx(p, T, C, Bp, h) {
+    const dkey = dynDriveKey(p.key || this.type);
+    const dk = DYN_DRIVE[dkey] || DYN_DRIVE.fr;
+    const g = DYN.g, grip = this.grip || 1;
+    const m = p.mass || MASS_REF;
+    const massK = m / MASS_REF;
+    const L = CAR.wheelBase;
+    const a = dk.aFrac * L, b = L - a;          // CG→前軸 / CG→後軸
+    const tw = V2.twFrac * CAR.width;           // トレッド
+    const halfT = tw / 2;
+    const hCG = V2.hOverL * L;                  // 重心高
+    const iz = V2.izK * (a * b + tw * tw / 12); // ヨー慣性 (質量正規化 Iz/m)
+    const maxV = CAR.maxSpeed * p.maxSpeed;
+    const CBp = C * Bp;
+    const kP = T.kappaP, aP = T.alphaP;
+    const vLow = Math.max(DYN.absUFloor, 1e-4);
+    // ④ 荷重感度つき μ_i (等方・§2.3)。捕捉する T.mu0/grip/V2.kLS はすべて step 中不変。
+    const muOf = (n, n0) => {
+      const ls = Math.max(0.7, Math.min(1.15, 1 - V2.kLS * (n - n0) / n0));
+      return T.mu0 * grip * ls;
+    };
+    const doWear = this.wear === true;
+    const relLen = T.relLenFrac * L;
+    const lsd = lsdOf(p, dkey);
+    // ⑪サス LPF 係数 kf・⑫熱時定数 kth (dt=h 固定ゆえ step で確定。式は旧 _substep と厳密同一)。
+    const tauSusp = 0.12 * Math.sqrt(L / 0.13);
+    const kf = Math.max(0, Math.min(1, h / tauSusp));
+    const tauTh = TH.tauTh0 * Math.sqrt(L / 0.13);
+    const kth = Math.max(0, Math.min(1, h / tauTh));
+    return { p, dk, g, grip, m, massK, L, a, b, tw, halfT, hCG, iz, maxV,
+             C, Bp, CBp, kP, aP, vLow, muOf, doWear, relLen, lsd, kf, kth };
+  }
+
+  // 外側 1/60 固定 → nSub 分割 (§2.6 積分契約)。基本8。高速コーナリングの陽的 body 積分安定条件で
+  // adaptiveSub (上限256)。横力は緩和長で陰的=無条件安定だが、body の semi-implicit Euler は高速で
+  // yaw/横の剛性が上がるため速度・剛性比で刻む。AO3 の車輪 ODE 剛性条件も併せて最小 nSub を取る。
+  step(dt) {
+    if (this.crashed) { this.v = 0; this.u = 0; this.vlat = 0; this.r = 0; this.vwF = 0; this.vwR = 0; this._vw[0] = this._vw[1] = this._vw[2] = this._vw[3] = 0; return; }
+    let nSub = Math.max(8, DYN.nSub);
+    const p = this.profile();
+    const T = tireParamsFor(this.tireSet);   // AO6: この車の装備タイヤ (normal/slip) の定数
+    const absU = Math.max(Math.abs(this.u), DYN.absUFloor);
+    // v2 コーナリング剛性の粗い上限 (mass-norm): 2軸ぶんの Cα ≈ 2·μ0·g·grip·C·Bp/αP。陽的横積分の
+    // 安定条件 (Cα_total·h/absU < subSafety) を満たす最小 nSub。緩和長で実効剛性は下がるが安全側。
+    const { C, Bp } = mfCoeffs((this.muDecay != null) ? this.muDecay : T.muDecay);   // 路面 muDecay 上書き (§5・AO8)
+    const CaTot = 2 * T.mu0 * DYN.g * (this.grip || 1) * C * Bp / T.alphaP;
+    let need = Math.ceil(CaTot * dt / (Math.max(1.2, DYN.subSafety) * absU));
+    // 車輪 ODE 陽的剛性条件 needW = ceil(2·λ·μFz·C·Bp/(κP·denom)·dt) (h·eig<0.5)。縦タイヤ剛性が車輪応答 λ で
+    // 増幅され陽的発散する低速域を刻む。μFz は輪荷重上限 (前後左右移動＋ダウンフォース込)×μ、denom=|u| フロア。
+    const q = (DYN.rho > 0 && DYN.frontalArea > 0) ? 0.5 * DYN.rho * DYN.frontalArea / (p.mass || MASS_REF) : 0;
+    const fDownEst = DYN.Cl * q * absU * absU;                              // 高速ダウンフォース (mass-norm)
+    const muFzMax = T.mu0 * (this.grip || 1) * (0.7 * DYN.g + fDownEst);   // per-wheel μ·Fz 上限
+    const dFxdvw = muFzMax * C * Bp / (T.kappaP * absU);
+    const needW = Math.ceil(2 * V2.wheelLambda * dFxdvw * dt);
+    // ── 半陰的化の適用境界 (AP13): 「構造的に低速な領域 かつ grip 十分」なときだけ nSub を削減する ──────
+    // AO3 車輪 ODE を半陰的化 (_substep ⑥・無条件安定) すれば、上の陽的 needW (低速 1/absU で発散し nSub を上限
+    //   256 へ貼り付かせ卓上 v2 の avgNSub を 253.5 へ押し上げていた・binding 100%) を課さずに済み、nSub は横タイヤ
+    //   陽的積分の安定条件 need だけで決まる (卓上 normal: 253.5→28.4・§2.6)。ただし2つの条件で原 explicit＋needW を
+    //   **保存**する (両立して初めて全 v2 が健全):
+    //   (a) **領域が構造的低速でない (!V2.siActive・fullscale)**: fullscale は原 explicit で既に nSub≈16 と適正＝浪費で
+    //       ない。これを **領域一括で** 保存する (per-step 判定だと発走 u≈0 の一過性だけ半陰的化してもカオスで全周回が
+    //       発散し、エンコーダ vwF/vwR 依存の戦略制御が退行する=実測 ao11 で戦略レーサー DNF/crash)。∴ applyRegimeV2 が
+    //       領域単位で siActive を決め、fullscale は **発走含め全走行 explicit=byte 完全不変** (f2/f3・ao10/ao11 保存)。
+    //   (b) **低グリップ (μ0eff<siMinMu・卓上 slip 0.2 等)**: near-limit の slide↔空転連成が鋭く、半陰的で安定でも粗い h
+    //       では軌跡がカオス発散し衝突多発 (実測 ao6 D2: crash は nSub に過敏=48→0/50→4 でチューニング不可)→保存。
+    //   ⇒ **siWheel = 構造的低速領域 ∧ grip 十分** のときだけ半陰的化。卓上 normal だけが該当し nSub 削減、
+    //   fullscale 全走行 と 卓上 slip は非該当で byte 保存。μ0eff・siActive とも step 中不変=前ステップ非依存=決定論。
+    const mu0eff = T.mu0 * (this.grip || 1);
+    const siWheel = V2.siActive && mu0eff >= V2.siMinMu;   // 領域が半陰的化対象(卓上/midscale) ∧ grip 十分(slip 除外)
+    if (!siWheel) need = Math.max(need, needW);   // 非該当 (fullscale 全走行・低グリップ slip): 原 needW を課す (byte 保存)
+    nSub = Math.max(nSub, Math.min(256, need));
+    const h = dt / nSub;
+    const sc = this._subCtx(p, T, C, Bp, h);   // AP12: step 不変量を1回だけ算出し全 substep で共有 (byte 不変)
+    sc.siWheel = siWheel;   // AP13: 半陰的 on/off を _substep へ (非該当は原 explicit 車輪 ODE)
+    for (let i = 0; i < nSub; i++) this._substep(h, sc);
+    this.v = this.u;
+    this._recordTrail();
+  }
+
+  // 4輪 two-track サブステップ (AO_spec §2)。順序は §2.6:
+  // ①サーボ ②空力 ③荷重(LPF) ④μ_i ⑤スリップ→タイヤ力(緩和) ⑥車輪 ODE＋差動(AO3・§2.4) ⑦合力/モーメント
+  // ⑧semi-implicit Euler(REVERSE横半陰) ⑨低速キネマブレンド ⑩位置(CG→後輪軸) ⑪LPF更新 ⑫(温度/摩耗=AO12)
+  _substep(dt, sc) {
+    // AP12: step 不変量は sc (per-step context・_subCtx で1回算出) から取得。旧版はこの束を毎 substep 再計算
+    // していた (driveKeyOf 正規表現/mfCoeffs/muOf クロージャ/Math.sqrt/不変スカラー群)。sc の各値は旧 substep
+    // 内の式と同一・同一入力ゆえ byte 同一 (f0-f3/S1/S4 verifyHash・traceHash 不変)。dt(=h) は引数のまま。
+    const { p, dk, g, grip, m, massK, L, a, b, tw, halfT, hCG, iz, maxV,
+            C, Bp, CBp, kP, aP, vLow, muOf, doWear, relLen, lsd, kf, kth, siWheel } = sc;
+
+    // ── ① 操舵サーボ (3値→有限速度で実舵角) ＋ アッカーマン (左右前輪) ──
+    const tgt = this.steerTarget;
+    const maxd = CAR.steerRate * dt;
+    this.steerAngle += Math.max(-maxd, Math.min(maxd, tgt - this.steerAngle));
+    const delta = this.steerAngle;
+    const td = Math.tan(delta);
+    // δ→0 で両輪 δ に連続接続する形 (1/tanδ の発散を回避)。左旋回 δ>0 で内輪(左)が大。
+    const dFL = Math.atan(L * td / (L - halfT * td));
+    const dFR = Math.atan(L * td / (L + halfT * td));
+
+    // ── ② 空力 (§2.5・β依存抗力・ダウンフォースは前進成分 u² のみ=ドリフト中喪失) ──
+    let dragX = 0, dragY = 0, fDown = 0;
+    if (DYN.rho > 0 && DYN.frontalArea > 0) {
+      const V = Math.hypot(this.u, this.vlat);
+      const q = 0.5 * DYN.rho * DYN.frontalArea / m;   // ½ρA/m
+      if (V > 1e-9) {
+        const sin2b = (this.vlat * this.vlat) / (V * V);
+        const dragMag = DYN.Cd * q * V * V * (1 + V2.kBeta * sin2b);  // |抗力| (mass-norm)
+        dragX = dragMag * this.u / V;                  // 速度ベクトル逆向き
+        dragY = dragMag * this.vlat / V;
+      }
+      const uf = Math.max(this.u, 0);
+      fDown = DYN.Cl * q * uf * uf;                    // ダウンフォース (mass-norm・前進のみ)
+    }
+
+    // ── 勾配重力の車体前方成分 (AP10) ── downhill(=g·sinθ) を世界固定の下り方向 slopeDir へ向く
+    // ベクトルとみなし車体前方へ射影。gFwd = downhill·cos(theta−slopeDir)。旧「常に車体+x」のコンベア
+    // (theta=π でも前進・登り不能) を是正。downhill===0 (平地・全凍結 f2/f3・全オラクルゲート) は gFwd=0 で
+    // 以降の勾配項 (荷重・比力・車体前方 accel) が完全 no-op = byte 不変。
+    const gFwd = gForward(this.downhill, this.theta, this.slopeDir);   // AP22: config.gForward へ 3→1 統合
+
+    // ── ③ 輪ごと垂直荷重 (準静的+前ステップ LPF・mass-norm=g スケール accel・§2.2) ──
+    // 荷重移動は輪浮きで inner→0 に連続縮退させつつ **Σ Fz = g + ダウンフォース を厳密保存** する
+    // (移動量を利用可能荷重にクランプ=inner が浮いたぶんは outer が軸荷重を全部背負う。非保存だと
+    //  外輪荷重が軸総和を超え μ·Fz 合計が膨れて ay が μg を超える非物理が起きる)。
+    const axF = this._axF, ayF = this._ayF;
+    const zF = V2.rollBalance;
+    const nF0 = g * (b / L) / 2, nR0 = g * (a / L) / 2;   // 静的 per-wheel 荷重 (Fz0・荷重感度の基準)
+    // 勾配ピッチ荷重 (AP10 defect④): 斜面の傾きで CG が幾何的に前後へ寄り静的輪荷重が移る。下り(gFwd>0)で
+    // 前軸 +gFwd·hCG/L・後軸 −同 (Σ保存)。静的重力項ゆえ準静的 base(=_nFaxle0)に含める(動的移動 dLong とは別)。
+    // downhill===0 で dGrade=0 = +0 加算 = byte 不変。定常(theta=0)では前軸 Fz 増分 = gFwd·hCG/L = downhill·hOverL。
+    const dGrade = gFwd !== 0 ? gFwd * hCG / L : 0;
+    // 軸ごと総荷重 (静的+ダウンフォース+勾配) → 前後移動をクランプ (軸荷重を非負に=Σ保存)
+    let nFaxle = g * (b / L) + fDown * DYN.downforceBalance + dGrade;
+    let nRaxle = g * (a / L) + fDown * (1 - DYN.downforceBalance) - dGrade;
+    this._nFaxle0 = nFaxle; this._nRaxle0 = nRaxle;   // 前後移動前の軸荷重 (荷重移動ゲート: 移動量=軸荷重−これ)
+    const dLong = Math.max(-nRaxle, Math.min(nFaxle, axF * hCG / L));  // accel>0=前軸→後軸
+    nFaxle -= dLong; nRaxle += dLong;
+    // 左右移動 (§2.2 ζF 前軸分担/1−ζF 後軸)。総量 ayF·h/tw を軸内でクランプ (inner を非負に)。
+    const dLat = ayF * hCG / tw;
+    const nFh = nFaxle / 2, nRh = nRaxle / 2;
+    const latF = Math.max(-nFh, Math.min(nFh, zF * dLat));
+    const latR = Math.max(-nRh, Math.min(nRh, (1 - zF) * dLat));
+    // side: 左輪(y>0) は ayF>0 で抜ける ⇒ −lat。右輪(y<0) は +lat。各輪∈[0,軸荷重]・和=Σ保存。
+    const nFL = nFh - latF, nFR = nFh + latF;
+    const nRL = nRh - latR, nRR = nRh + latR;
+
+    // ── ④ 荷重感度つき μ_i (等方・§2.3・muOf は sc へ巻き上げ済 = T.mu0·grip·荷重感度) ──
+    // ── Stage AO12: タイヤ熱・摩耗 の μ 変調係数 fTW[idx] (opt-in・§6) ──
+    // 前ステップ末で積分した温度/摩耗を今ステップの μ に反映 (緩い状態量=1次遅れで十分)。fT(温度窓)·fW(摩耗)
+    // を合計効果 ≤maxEffect にクランプ (支配しない設計)。OFF (doWear=false) は乗じない=byte 完全不変 (§7)。
+    let fTW = null;   // doWear は sc へ巻き上げ済
+    if (doWear) {
+      fTW = [0, 0, 0, 0];
+      for (let k = 0; k < 4; k++) {
+        const tp = this._temp[k], wr = this._wear[k];
+        const fT = 1 - TH.kCold * Math.max(0, TH.tOpt - tp) - TH.kHot * Math.max(0, tp - TH.tOpt);
+        const fW = 1 - TH.kW * wr;
+        fTW[k] = Math.max(1 - TH.maxEffect, Math.min(1, fT * fW));
+      }
+    }
+    const wSlipP = doWear ? [0, 0, 0, 0] : null;   // 輪ごと滑り仕事率 P (無次元・熱/摩耗の駆動量)。OFF は未使用。
+
+    // ── 縦方向の指令 (§2.4・AO3 駆動系) = 駆動軸への総トルク相当力 fCmd (split・差動 前・mass-norm) ──
+    const thrFwd = this.driveDir === CONST.FORWARD;
+    const driven = thrFwd || this.driveDir === CONST.REVERSE;
+    const braking = this.driveDir === CONST.BRAKE;
+    const activeDrive = driven || braking;   // FREE 以外＝駆動軸に実トルクあり (惰行は全輪自由転動)
+    let fCmd = 0;     // 駆動軸への縦力指令 (split・差動 前・mass-norm)
+    let coast = 0;    // 転がり抵抗 (全輪・body ax へ直接・§2.5 coast 継承)
+    let brakeStop = false;
+    // 駆動輪の平均車輪面速度 vw̄ (定出力 knee・§2.4「P_wheel/max(|vw̄|,vLow)」。前ステップ状態から)。
+    let vwBar = 0, nDrv = 0;
+    if (dk.split[0] > 0) { vwBar += Math.abs(this._vw[0]) + Math.abs(this._vw[1]); nDrv += 2; }
+    if (dk.split[1] > 0) { vwBar += Math.abs(this._vw[2]) + Math.abs(this._vw[3]); nDrv += 2; }
+    vwBar = nDrv > 0 ? vwBar / nDrv : Math.abs(this.u);
+    if (driven) {
+      const sgn = thrFwd ? 1 : -1;
+      const desired = sgn * (this.pwm / 255) * maxV;
+      const dBand = DYN.driveBand || 0.06;
+      let aCap = CAR.accel * p.accel;
+      if (V2.wheelPower > 0) {   // fullscale 定出力ドライブトレイン (§2.4・knee は車輪面速度・**V2 専用較正=AO5**)
+        const vKnee = Math.max(DYN.absUFloor, vwBar);
+        aCap = Math.min(V2.launchAccel * p.accel, V2.wheelPower / vKnee);
+      }
+      fCmd = aCap * Math.max(-1, Math.min(1, (desired - this.u) / dBand));
+    } else if (braking) {   // モーターブレーキ = 駆動軸のみへ逆トルク (split 従い FR=後軸ロック/FF=前軸のみ)
+      const bk = CAR.brake * p.brake * grip / (1 + MASS.brake * (massK - 1));
+      fCmd = -Math.sign(this.u) * bk;
+      if (Math.abs(this.u) < DYN.uStop) { fCmd = 0; this.u = 0; brakeStop = true; }
+    } else {   // FREE: 惰行 (全輪 自由転動 = 接地追従) + 勾配重力
+      if (gFwd === 0) {
+        coast = -Math.sign(this.u) * Math.min(CAR.coast, Math.abs(this.u) / dt);   // 平地: 従来 (byte 不変)
+      } else {
+        // 勾配あり (AP10 defect③): 重力 gFwd と Coulomb 転がり抵抗 (速度を反転させない) を合成した正味縦 accel。
+        // |gFwd|≤coast の緩斜面は静止保持 (u→0)、|gFwd|>coast で正味転動。gFwd=0 なら従来式に厳密一致。
+        const uTent = this.u + gFwd * dt;
+        const resist = Math.min(CAR.coast * dt, Math.abs(uTent));
+        coast = (uTent - Math.sign(uTent) * resist - this.u) / dt;
+      }
+    }
+
+    // ── 差動 (§2.4): 軸指令 fCmd·split を左右輪へ配分。open=等分、LSD=Δvw で移送 (総軸力は不変=ヨーのみ) ──
+    // relLen・lsd は sc へ巻き上げ済。
+    const fApp = [0, 0, 0, 0];   // [FL,FR,RL,RR] への適用力 (mass-norm・非駆動/惰行輪は 0)
+    if (activeDrive) {
+      for (let ax = 0; ax < 2; ax++) {
+        const share = dk.split[ax];
+        if (share <= 0) continue;               // 非駆動軸: fApp=0 (接地追従)
+        const wl = ax === 0 ? 0 : 2, wr = ax === 0 ? 1 : 3;   // 左/右輪 idx
+        const fAxle = fCmd * share;             // 軸合計トルク相当力
+        const half = 0.5 * fAxle;
+        const Tt = lsdTorque(this._vw[wl] - this._vw[wr], fAxle, lsd);
+        fApp[wl] = half - Tt;                   // faster 輪 (Δvw>0=左速い) は Tt>0 で減、slower は増
+        fApp[wr] = half + Tt;
+      }
+    }
+
+    // ── ⑤ 輪ごと 結合 MF タイヤ力 (横力緩和込) → 車体系へ回転して合算 ──
+    const WH = [
+      { x: a, y: +halfT, d: dFL, n: nFL, n0: nF0, split: dk.split[0], idx: 0 },  // FL
+      { x: a, y: -halfT, d: dFR, n: nFR, n0: nF0, split: dk.split[0], idx: 1 },  // FR
+      { x: -b, y: +halfT, d: 0, n: nRL, n0: nR0, split: dk.split[1], idx: 2 },   // RL
+      { x: -b, y: -halfT, d: 0, n: nRR, n0: nR0, split: dk.split[1], idx: 3 },   // RR
+    ];
+    let sumFx = 0, sumFy = 0, sumMz = 0, sumFyTire = 0, sumFyFront = 0, sumFyRear = 0, latCap = 0;
+    let fcMarginSS = -Infinity, slipPowSS = -Infinity, fcMarginApp = -Infinity;
+    let sigFmax = 0, sigRmax = 0, arRear = 0;
+    for (const w of WH) {
+      const cD = Math.cos(w.d), sD = Math.sin(w.d);
+      // 接地点速度 (車体系) → 車輪系へ回転
+      const vx = this.u - this.r * w.y;
+      const vy = this.vlat + this.r * w.x;
+      const vcx = vx * cD + vy * sD;
+      const vcy = -vx * sD + vy * cD;
+      const denom = Math.max(Math.abs(vcx), vLow);
+      let muFz = muOf(w.n, w.n0) * w.n;   // μ_i·Fz_i (mass-norm)
+      if (doWear) muFz *= fTW[w.idx];        // AO12: 熱・摩耗変調 (OFF は乗じない=byte 不変)
+      latCap += muFz;                        // 横グリップ容量 Σμ_i·Fz_i (定常円ゲート)
+      // 縦スリップ率 κ (§2.4・AO3 = 車輪 ODE 状態から)。駆動輪は面速度 vw_i と接地縦速 vcx の差、
+      // 非駆動/惰行輪は接地追従 (κ=0=自由転動)。±クランプ (物理スリップ上限＋数値安定)。飽和で空転/ロック創発。
+      const wheelDriven = activeDrive && w.split > 0;
+      let kappa = 0;
+      if (wheelDriven) {
+        kappa = Math.max(-V2.kappaClamp, Math.min(V2.kappaClamp, (this._vw[w.idx] - vcx) / denom));
+      }
+      const ta = Math.max(-V2.tanAClamp, Math.min(V2.tanAClamp, vcy / denom));
+      const F = tireForceMF(kappa, ta, muFz, C, Bp, kP, aP);
+      // 定常 MF 力 (fx,fy) の摩擦円マージン (構造的に |F|=μFz·g(σ)≤μFz) と 接地スリップ散逸性
+      // (fx·vslx+fy·vsly≤0 を構造保証)。**§2.3 の不変条件を測る連続量オラクル (再実装でなく実力を読む)**。
+      const vslx = -kappa * denom, vsly = vcy;   // v_slip (車輪系): 縦 vcx−vw=−κ·denom, 横 vcy
+      fcMarginSS = Math.max(fcMarginSS, Math.hypot(F.fx, F.fy) - muFz);
+      slipPowSS = Math.max(slipPowSS, F.fx * vslx + F.fy * vsly);
+      // 横力緩和長 (§2.3): 陰的 Euler (無条件安定)。τ=relLen/denom。fx は瞬時 (車輪動特性は AO3)。
+      const tau = relLen / denom;
+      const alpha = dt / Math.max(tau, 1e-9);
+      let fyDyn = (this._fyRel[w.idx] + alpha * F.fy) / (1 + alpha);
+      this._fyRel[w.idx] = fyDyn;
+      // 緩和した横力は fy が遅れるため瞬時 fx と合成すると過渡で円を僅かに超えうる (緩和モデルの
+      // 既知アーティファクト = カーカス撓みのエネルギー蓄積)。適用力は物理的にタイヤ限界を超えられない
+      // ので (fx,fyDyn) を μFz へ半径クランプ (線形域では |F|≪μFz で不発 ⇒ fx≈需要は不変)。
+      let fxA = F.fx, fyA = fyDyn;
+      const Fapp = Math.hypot(fxA, fyA);
+      if (Fapp > muFz && Fapp > 1e-12) { const s = muFz / Fapp; fxA *= s; fyA *= s; }
+      fcMarginApp = Math.max(fcMarginApp, Math.hypot(fxA, fyA) - muFz);
+      // ── AO12: 輪ごと摩擦円利用率 |F|/μFz∈[0,1] (HUD・表示層のみ・物理非読取)＋滑り仕事率 P (熱/摩耗駆動量)。
+      //    P = 利用率×正規化スリップ速 (|v_slip|/maxV) = **無次元＝相似スケール不変** (卓上⇔実機で同尺度・CI-14)。──
+      const utilW = muFz > 1e-12 ? Math.hypot(fxA, fyA) / muFz : 0;
+      this._muUse4[w.idx] = utilW;
+      if (doWear) wSlipP[w.idx] = utilW * (Math.hypot(vslx, vsly) / Math.max(maxV, 1e-6));
+      // 車輪系 → 車体系 (前輪は δ_i で回転)
+      const fxB = fxA * cD - fyA * sD;
+      const fyB = fxA * sD + fyA * cD;
+      sumFx += fxB; sumFy += fyB; sumFyTire += fyB;
+      if (w.idx <= 1) sumFyFront += fyB; else sumFyRear += fyB;  // 軸別横力 (緩和長/rollBalance ゲート)
+      sumMz += w.x * fyB - w.y * fxB;
+      // ── 車輪 ODE (§2.4・AO3): dvw/dt = λ·(fApp − fx_tire)。fx は適用縦力 fxA (body と同一=作用反作用)。
+      //    縦力は瞬時 (緩和は横力のみ)。κ を ±clamp で数値安定 (nSub 上限時の発散止め=最終防波堤)。
+      //    非駆動/惰行輪は接地追従 vw=vcx (自由転動・スリップなし)。──
+      if (wheelDriven) {
+        const v0 = this._vw[w.idx];
+        // ── AO3 車輪 ODE (AP13): grip 十分域は半陰的化 (無条件安定・nSub 削減の核)、低グリップ (slip) は原
+        //    explicit を保存 (near-limit のカオス的挙動を byte 維持・境界は step() の siWheel=μ0eff≥siMinMu)。──
+        //  半陰的: dvw/dt=λ·(fApp−fx(vw)) の fx を vw で1次陰的化。線形域 fx=muFz·C·Bp·(vw−vcx)/(kP·denom) ゆえ
+        //    局所縦剛性 kD=∂fx/∂vw=muFz·C·Bp/(kP·denom)≥0。backward Euler vw'=v0+λ·dt·(fApp−fxA−kD·(vw'−v0)) を
+        //    解くと **vw' = v0 + λ·dt·(fApp − fxA)/(1 + λ·dt·kD)**。**無条件安定** (剛い程 増分→0=vw が接地速度に
+        //    slave)・定常 fApp=fxA で vw'=v0 不変。線形 kD は飽和域の実勾配を上回る安全側の減衰で、空転/ロックの
+        //    定常点と kappaClamp 上限は不変。旧陽的 (needW で nSub を 256 へ貼り付かせていた) を置換。
+        //  explicit: 原 vw'=v0+λ·(fApp−fxA)·dt (低グリップは step() が needW を復元し高 nSub で走る=byte 保存)。
+        let vwNew;
+        if (siWheel) {
+          const kD = muFz * CBp / (kP * denom);   // 縦タイヤ剛性 ∂fx/∂vw (線形域・安全側)
+          vwNew = v0 + V2.wheelLambda * (fApp[w.idx] - fxA) * dt / (1 + V2.wheelLambda * kD * dt);
+        } else {
+          vwNew = v0 + V2.wheelLambda * (fApp[w.idx] - fxA) * dt;   // 原 explicit (低グリップ保存・byte 不変)
+        }
+        const kN = (vwNew - vcx) / denom;
+        if (kN > V2.kappaClamp) vwNew = vcx + V2.kappaClamp * denom;
+        else if (kN < -V2.kappaClamp) vwNew = vcx - V2.kappaClamp * denom;
+        // モーターブレーキは回転を止めるだけ=車輪を逆回転へは駆動しない (0 でロック。ブレーキはエネルギーを
+        // 注入できない)。制動中は vw の符号を跨がせず 0 クランプ (F5 の vwLock 相当・ロック輪=最大スリップ)。
+        if (braking) vwNew = v0 >= 0 ? Math.max(0, vwNew) : Math.min(0, vwNew);
+        this._vw[w.idx] = vwNew;
+      } else {
+        this._vw[w.idx] = vcx;
+      }
+      this._FzWheel[w.idx] = w.n;
+      if (w.idx <= 1) sigFmax = Math.max(sigFmax, F.sigma); else sigRmax = Math.max(sigRmax, F.sigma);
+      if (w.idx === 2) arRear = ta;
+    }
+    this._fcMarginSS = fcMarginSS;    // 定常 MF 力の摩擦円マージン (≤0=円内・不変条件)
+    this._fcMargin = fcMarginApp;     // 適用力 (緩和+クランプ後) のマージン (≤0=クランプで保証)
+    this._slipPowerSS = slipPowSS;    // 定常 MF 力の接地散逸性 (≤0=エネルギー非注入)
+    this._latCapSS = latCap;          // 横グリップ容量 Σμ_i·Fz_i (定常円 ay/(μg_eff) 突合)
+    this._ayTire = sumFyTire;         // 総横タイヤ accel (瞬時・緩和/クランプ後)
+    this._ayFrontTire = sumFyFront;   // 前軸横タイヤ accel (緩和長ステップ応答)
+    this._ayRearTire = sumFyRear;     // 後軸横タイヤ accel (rollBalance バランスシフト)
+    this._muUseF = sigFmax; this._muUseR = sigRmax;
+    // ── エンコーダ公開面 vwF/vwR = 軸平均 (§12 AO3・api.js は car.vwF/vwR を読むだけ=無改変で成立) ──
+    this.vwF = 0.5 * (this._vw[0] + this._vw[1]);   // 前軸 (非駆動なら接地追従の平均=地面速度)
+    this.vwR = 0.5 * (this._vw[2] + this._vw[3]);   // 後軸
+    if (brakeStop) { this._vw[0] = this._vw[1] = this._vw[2] = this._vw[3] = 0; this.vwF = 0; this.vwR = 0; }
+
+    // ── ⑦ 車体合力/モーメント (mass-norm) ──
+    let ax = sumFx + coast - dragX + this.r * this.vlat;   // Coriolis +r·vlat
+    let ay = sumFy - dragY - this.r * this.u;              // Coriolis −r·u
+    const rdot = sumMz / iz;
+    // 勾配重力の適用 (AP10): 駆動中(FORWARD/REVERSE)と BRAKE 走行中は gFwd をそのまま加算。BRAKE 静止は
+    // ブレーキ保持で掛けない (現仕様踏襲)。FREE は上の惰行ブロックで転がり抵抗と合成済 (coast に内包) ゆえ
+    // ここでは加えない (二重加算回避)。gApplied は荷重 LPF の縦比力にも同値で入る (下・FREE は coast 経由)。
+    let gApplied = 0;
+    if (gFwd !== 0 && this.driveDir !== CONST.FREE && (driven || Math.abs(this.u) > 1e-3)) gApplied = gFwd;
+    ax += gApplied;
+
+    // ── ⑧ セミインプリシット Euler (REVERSE 横半陰化は DynCar 方式継承・sign-1 後退連成安定化) ──
+    this.u += ax * dt;
+    if (this.driveDir === CONST.REVERSE) {
+      const absU = Math.max(Math.abs(this.u), DYN.absUFloor);
+      // 線形横剛性 (2軸ぶんの Cα・前輪は cos²δ 投影)。緩和後の実効剛性より安全側 (陰的で無条件安定)。
+      const cd0 = Math.cos(delta);
+      let CaF, CaR;
+      if (doWear) {   // AO12: 熱・摩耗で低下した μ を後退時の横剛性推定にも反映 (OFF は下の else=byte 不変)
+        CaF = (muOf(nFL, nF0) * fTW[0] * nFL + muOf(nFR, nF0) * fTW[1] * nFR) * CBp / aP;
+        CaR = (muOf(nRL, nR0) * fTW[2] * nRL + muOf(nRR, nR0) * fTW[3] * nRR) * CBp / aP;
+      } else {
+        CaF = (muOf(nFL, nF0) * nFL + muOf(nFR, nF0) * nFR) * CBp / aP;
+        CaR = (muOf(nRL, nR0) * nRL + muOf(nRR, nR0) * nRR) * CBp / aP;
+      }
+      const kLat = (CaF * cd0 * cd0 + CaR) / absU;
+      const ayNoLat = ay - sumFyTire;   // 横タイヤ力を除いた横 accel (Coriolis+空力)
+      this.vlat = (this.vlat + ayNoLat * dt) / (1 + kLat * dt);
+    } else {
+      this.vlat += ay * dt;
+    }
+    this.r += rdot * dt;
+
+    // ── ⑨ 低速キネマティックブレンド (停止付近の特異点回避・uBlend0/1 継承) ──
+    const spd = Math.hypot(this.u, this.vlat);
+    const wB = Math.max(0, Math.min(1, (spd - DYN.uBlend0) / (DYN.uBlend1 - DYN.uBlend0)));
+    const rKin = (this.u / L) * Math.tan(delta);
+    const vlatKin = rKin * b;
+    this.r = wB * this.r + (1 - wB) * rKin;
+    this.vlat = wB * this.vlat + (1 - wB) * vlatKin;
+    // 完全停止スナップ。ただし FREE で勾配が転がり抵抗を超え正味転動する急坂 (gRoll) はスナップしない
+    // (AP10 defect③: v2 は substep が細かく静止転動の微小増分が uStopHard 未満で毎回 0 へ潰されるため)。
+    // downhill===0 では gFwd=0→gRoll=false で従来条件 (!driven) と同一 = byte 不変。
+    const gRoll = this.driveDir === CONST.FREE && Math.abs(gFwd) > CAR.coast;
+    if (Math.abs(this.u) < DYN.uStopHard && !driven && !gRoll) this.u = 0;
+    if (this.u === 0 && Math.abs(this.vlat) > 0) this.vlat *= Math.max(0, 1 - DYN.vlatStop * dt);
+
+    // ── ⑩ 位置更新 (CG で積分 → 公開 x,y は後輪軸へ変換) ──
+    const cth = Math.cos(this.theta), sth = Math.sin(this.theta);
+    let cx = this.x + b * cth, cy = this.y + b * sth;
+    cx += (this.u * cth - this.vlat * sth) * dt;
+    cy += (this.u * sth + this.vlat * cth) * dt;
+    this.theta += this.r * dt;
+    this.x = cx - b * Math.cos(this.theta);
+    this.y = cy - b * Math.sin(this.theta);
+
+    // ── ⑪ 荷重 LPF 状態更新 (次ステップの荷重移動用・§2.2「測定加速度の1次 LPF」) ──
+    // 荷重移動は CG の縦横「比力 (specific force)」= 実在力 (タイヤ+転がり+空力+勾配) の総和/m が生む
+    // ピッチ/ロールモーメントで決まる。Coriolis (r·vlat/−r·u) は見かけ項なので除く。直進定常では
+    // axSpec=du/dt に一致 ⇒ ΔF_long=|du/dt|·h/L (§12 荷重移動突合が独立測定 du/dt と一致する)。
+    // kf (サス LPF 係数) は sc へ巻き上げ済 (dt=h 固定)。
+    const axSpec = sumFx + coast - dragX + gApplied;    // 縦 比力 (タイヤ+coast+空力抗力+勾配・AP10 gApplied で ax と同値)
+    const aySpec = sumFyTire - dragY;             // 横 比力 (タイヤ+空力横成分)
+    this._axF += (axSpec - this._axF) * kf;
+    this._ayF += (aySpec - this._ayF) * kf;
+
+    // ── ⑫ タイヤ熱・摩耗 積分 (Stage AO12・§6・opt-in)。温度=Froude スケール1次フィルタで t0+gain·P へ緩和、
+    //    摩耗=P·hot(温度) を単調累積 (資源枯渇)。全て前ステップ状態量の純関数=決定論。OFF は完全 no-op=byte 不変。──
+    if (doWear) {
+      // kth (熱時定数の 1次係数) は sc へ巻き上げ済 (dt=h 固定)。
+      for (let k = 0; k < 4; k++) {
+        const P = wSlipP[k];
+        this._temp[k] += (TH.t0 + TH.gain * P - this._temp[k]) * kth;   // 定常 t0+gain·P へ1次緩和
+        const hot = this._temp[k] / TH.tOpt;                            // 高温ほど摩耗が速い (単調・正)
+        this._wear[k] += TH.c3 * P * hot * kth;                         // 摩耗 単調累積 (資源枯渇=戦略資源)
+      }
+    }
+
+    // ── 描画用 slip (後軸飽和度: σ_rear。ドーナツ/ドリフト保持で 1 に張り付く) ＋ slipSign ──
+    const slipNow = Math.max(0, Math.min(1, (sigRmax - 0.85) / 0.6)) * wB;
+    this.slip += (slipNow - this.slip) * Math.min(1, 6 * dt);
+    if (Math.abs(arRear) > 0.03) this.slipSign = arRear > 0 ? 1 : -1;
+  }
+}

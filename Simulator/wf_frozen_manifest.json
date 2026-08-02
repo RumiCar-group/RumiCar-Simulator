@@ -1,0 +1,53 @@
+{
+  "_doc": "凍結回帰ハッシュの中央マニフェスト (Stage AP3・単一の真実源)。物理を意図的に変えた版では wf_refreeze.mjs で刻み直す (実行→差分→人間承認→書込・CI-11)。意図せぬ変化は 5 参照ゲート (ab8_bench/ak5_robustness/ao5_calib/collision_model/recover_model) が exit 1 で検出する。AP-0 方針: 卓上 byte 不変は 2026-07-10 に緩和され、f0〜f3 は『絶対不変ゲート』から『版付き回帰記録』へ降格 (旧版値は当時のエンジン版・条件の時点記録として history に保持)。",
+  "schemaVersion": 1,
+  "current": {
+    "appVersion": "v5.0.0",
+    "stampedAt": "2026-08-01",
+    "hashes": {
+      "f0": "4bbed0f4",
+      "f1": "2359a857",
+      "f2": "af5a68bd",
+      "f3": "6bb96b8a"
+    },
+    "meta": {
+      "f0": "卓上オーバル×3周 dynamic・normal (走行エンジン v1・AM1 コーン測距で再凍結)",
+      "f1": "卓上オーバル×2周 rejoin dynamic・normal (走行エンジン v1・AM1 で再凍結)",
+      "f2": "競技サーキット×3車種(FF/FR/AWD)×v2・normal (Circuit Racer・AO7 で凍結)",
+      "f3": "競技サーキット×ドリフト FR×v2・slip (Slip Attack・AO7 で凍結)"
+    }
+  },
+  "canonicalNode": {
+    "node": "22.22.1",
+    "v8": "12.4.254.21-node.35",
+    "resultSha256": "01ac9da9e9854c3bbbedf5b2d6ab483c002100c020a1f84adf834432d67c8f2d",
+    "pinnedAt": "2026-08-01",
+    "eventId": "official-sample-circuit",
+    "appVersion": "v5.0.0",
+    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: Stage AR (OSS 公開前の権利クリーンアップ) によるコース名・プログラム名の識別子改名で過去再現性が壊れるため v4.1.0→v5.0.0 (MAJOR) へバンプ。物理 verifyHash=c731ecce 不変・正準結果の差分は engineVer と engineFingerprint.appVersion のみ (実測 diff で確認)。AQ-1 の教訓どおり版バンプとセットで resultSha256 を再ピン。"
+  },
+  "history": [
+    {
+      "appVersion": "v5.0.0",
+      "stampedAt": "2026-08-01",
+      "hashes": {
+        "f0": "4bbed0f4",
+        "f1": "2359a857",
+        "f2": "af5a68bd",
+        "f3": "6bb96b8a"
+      },
+      "reason": "Stage AR / AR4: v5.0.0 への版バンプに伴う版スタンプ更新。物理は無改変で f0〜f3 は据え置き (4bbed0f4/2359a857/af5a68bd/6bb96b8a を v5.0.0 で再計算し全一致を実測)。旧スタンプ v3.57.1 (2026-07-11) は history に保持。"
+    },
+    {
+      "appVersion": "v3.57.1",
+      "stampedAt": "2026-07-11",
+      "hashes": {
+        "f0": "4bbed0f4",
+        "f1": "2359a857",
+        "f2": "af5a68bd",
+        "f3": "6bb96b8a"
+      },
+      "reason": "AP3 中央マニフェスト化・初回スタンプ。物理無変更 — 従前 5 ファイルにハードコードされていた凍結値 (f0/f1=AM1 再凍結・f2/f3=AO7 凍結) をそのまま記録。以後の刻み直しは wf_refreeze.mjs 経由 (人間承認)。"
+    }
+  ]
+}

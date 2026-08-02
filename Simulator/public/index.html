@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RumiCar Simulator</title>
+  <!-- テーマを CSS 適用前に反映してフラッシュを防ぐ (選択は localStorage に保存)。
+       既定テーマは 'green' (ライトグリーン。data-theme 属性なし=:root)。 -->
+  <script>try { var t = localStorage.getItem('rumicar.theme'); if (t && t !== 'green') document.documentElement.dataset.theme = t; } catch (e) {}</script>
+  <link rel="stylesheet" href="css/style.css?v=20260802a">
+</head>
+<body>
+  <header>
+    <h1>RumiCar Simulator <span class="ver" id="appVer" data-i18n-title="appVer.title" title="バージョン">v5.0.0</span></h1>
+    <label class="themesel" data-i18n-title="theme.title" title="画面テーマ (保存されます)"><span data-i18n="theme.label">テーマ</span>
+      <select id="themeSel">
+        <option value="green" data-i18n="theme.green">ライトグリーン (標準)</option>
+        <option value="dark" data-i18n="theme.dark">ダーク</option>
+        <option value="light" data-i18n="theme.light">ライト・クリーン</option>
+        <option value="glass" data-i18n="theme.glass">グラスモーフィズム</option>
+        <option value="neon" data-i18n="theme.neon">レーシング・ネオン</option>
+        <option value="paper" data-i18n="theme.paper">ウォーム・ペーパー</option>
+        <option value="sunset" data-i18n="theme.sunset">サンセット</option>
+        <option value="ocean" data-i18n="theme.ocean">オーシャン</option>
+        <option value="mono" data-i18n="theme.mono">モノクローム</option>
+        <option value="lavender" data-i18n="theme.lavender">ラベンダー</option>
+        <option value="carbon" data-i18n="theme.carbon">カーボン</option>
+      </select>
+    </label>
+    <label class="themesel langsel" data-i18n-title="lang.title" title="表示言語 (保存されます)"><span data-i18n="lang.label">言語</span>
+      <select id="langSel">
+        <option value="ja">日本語</option>
+        <option value="en">English</option>
+      </select>
+    </label>
+    <div class="docbtns">
+      <button id="helpUsage" data-i18n="help.usage" data-i18n-title="help.usage.title" title="操作方法を表示">❓ 使い方</button>
+      <button id="helpSpec" data-i18n="help.spec" data-i18n-title="help.spec.title" title="シミュレータの仕様と制限を表示">📋 仕様・制限</button>
+      <button id="helpCars" data-i18n="help.cars" data-i18n-title="help.cars.title" title="車種ごとのパラメータを表示・独自車種を追加">🚗 車種</button>
+      <button id="helpPhysics" data-i18n="help.physics" data-i18n-title="help.physics.title" title="車両の運動方程式・タイヤ/空力モデルの解説 (数式つき)">🔬 物理モデル</button>
+      <button id="helpRace" data-i18n="help.race" data-i18n-title="help.race.title" title="レースの使い方・ルール・設計思想を表示">🏁 レースガイド</button>
+      <a id="ghProg" class="ghbtn" href="https://github.com/RumiCar-group/RumiCar/tree/master/programs" target="_blank" rel="noopener" data-i18n="gh.prog" data-i18n-title="gh.prog.title" title="GitHub の「車種別 最速プログラム」(Fable Racing Line) を開く">🏁 最速プログラム</a>
+      <button id="docSpec" data-i18n="doc.spec" data-i18n-title="doc.spec.title" title="courses.json のスキーマ (コースデータの書式) を表示">📐 コースデータ仕様</button>
+      <a id="ghRepo" class="ghbtn" href="https://github.com/RumiCar-group/RumiCar" target="_blank" rel="noopener" data-i18n="gh.repo" data-i18n-title="gh.repo.title" title="RumiCar の GitHub を開く (リポジトリ全体)">⧉ GitHub</a>
+      <button id="helpAsk" data-i18n="help.ask" data-i18n-title="help.ask.title" title="技術・アイデアの質問/提案を投稿 (コミュニティ)">💬 質問・提案</button>
+      <button id="shareLink" data-i18n="share.copy" data-i18n-title="share.copy.title" title="現在の設定を再現できるリンクをコピー">🔗 共有リンク</button>
+    </div>
+  </header>
+
+  <!-- 利用者向けドキュメント (ヘッダー右上のボタンで開閉) -->
+  <dialog id="dlgUsage" class="docdlg">
+    <div class="docdlg-head"><h2 data-i18n="usage.title">使い方</h2><button class="docdlg-x" data-close="dlgUsage" data-i18n-aria="modal.close">×</button></div>
+    <div class="docdlg-body">
+      <h3 data-i18n="usage.s1.h">1. コースを選ぶ</h3>
+      <ul>
+        <li data-i18n-html="usage.langNote">画面右上の<b>言語</b>セレクタで<b>日本語/English</b>を切り替えられます (選択は保存されます)。操作系UIと実況メッセージが対象で、この長文ヘルプ本文の英訳は順次対応します。</li>
+        <li data-i18n-html="usage.s1.courseOps">コース関連の操作 (<b>コース選択・コース編集</b>) は<b>一人称ビューの上</b>にまとめてあります。「コース編集 ✎」で壁・スタート・フィニッシュを自作し保存できます (★付きで一覧に追加)。</li>
+        <li data-i18n-html="usage.s1.diff">各コースには<b>難易度★ (★1〜5)</b>・<b>推奨領域 (卓上/フルスケール)</b>・<b>🔰入門</b>のバッジが付き、選ぶ前に向き不向きが分かります。起動時はまず<b>入門コース</b>から選ばれるので、いきなり完走しにくいコースに当たりません。<b>フルスケール専用</b>のコースを選ぶと走行領域が自動でフルスケールに切り替わります。</li>
+        <li data-i18n-html="usage.s1.touge"><b>峠コース</b> (スイッチバック / 架空ロングワインディング) は周回ではなく<b>頂上→麓のスタート/ゴール型</b>。下りの重力で速度が乗るためブレーキングが鍵で、ゴール到達タイムを競います。<b>高低差は一人称ビュー下の「立体プレビュー」</b>で表示。高低差違いの複数モデルがあります。</li>
+        <li data-i18n-html="usage.s1.wet"><b>ウェット路面コース</b> (雨) はグリップが低く、攻めるとテールの出る車はスピンしやすく、アンダーの車は安定。条件で有利な車種が変わります。</li>
+      </ul>
+      <h3 data-i18n="usage.s2.h">2. 車両を用意する</h3>
+      <ul>
+        <li data-i18n-html="usage.s2.add">「＋ 車両追加」で最大6台まで並走できます。各列で<b>車種</b> (ノーマル/ドリフト × FF/FR/4WD) を選択。</li>
+        <li data-i18n-html="usage.s2.auto"><b>車種を選ぶと、その車に最適化した最速プログラムが自動で読み込まれます</b> (Fable Racing Line)。</li>
+      </ul>
+      <h3 data-i18n="usage.s3.h">3. 走行プログラムを選ぶ・作る</h3>
+      <ul>
+        <li><span data-i18n-html="usage.s3.menu"><b>走行</b> メニューから選べます:</span>
+          <ul>
+            <li data-i18n-html="usage.s3.generic"><b>🏎 汎用・実機準拠 — Fable Racing Line</b> — 車種別の基礎→応用プログラム6種。<b>センサーで判断して走る=実機 RumiCar でそのまま動く</b>のが基本です。</li>
+            <li data-i18n-html="usage.s3.simopt"><b>🏁 sim最適化・競技 / 🎪 sim最適化・ショー</b> — フルスケール領域や動力学モデルなど<b>このシミュレータ向けに最適化</b>した演目(実機・他コースでの汎用性は下がります)。</li>
+            <li data-i18n-html="usage.s3.community"><b>🌐 みんなの投稿</b> — 利用者が GitHub に投稿したプログラム。誰でも選んで使えます。</li>
+            <li data-i18n-html="usage.s3.basic"><b>汎用 (壁回避サンプル)</b> — シンプルな基本プログラム。</li>
+          </ul>
+        </li>
+        <li data-i18n-html="usage.s3.principle"><b>設計原則</b>: <b>基本は「センサーで判断して走る」</b>=実機でも他コースでも動く頑健なコードです。車両パラメータに合わせた作り込み(物理特性チューニング)は<b>レース最適化という応用</b>で、禁止はしませんが汎用性は下がります。まずはセンサー反応で書き、最適化は次の段階として捉えるのがおすすめです。</li>
+        <li data-i18n-html="usage.s3.crosscar"><b>他の車種用のプログラムを別の車に入れて比較</b>もできます (例: 攻めの 4WD 用を FF 車に入れるとアンダーで膨らむ)。</li>
+        <li data-i18n-html="usage.s3.editor">エディタで<b>直接編集</b>でき、編集すると「(カスタム編集)」表示に変わります。📄 (既定サンプル)・GitHub URL 取込・「参照」(GitHub のプログラム閲覧)・⬆ (ファイル) からも読み込めます。<b>言語</b>は Arduino C++ / Python / JavaScript。</li>
+      </ul>
+      <h3 data-i18n="usage.s4.h">4. 走らせる</h3>
+      <ul>
+        <li data-i18n-html="usage.s4.run"><b>自動 ▶</b> で全車同時スタート。一時停止 ⏸ 中は ステップ ⏭ で1周期ずつ実行でき、実行中の行がハイライトされます。</li>
+        <li data-i18n-html="usage.s4.manual">停止中は <b>手動</b> ボタンまたはキーボードの矢印キーで選択車を運転できます (PWM スライダーで出力調整)。</li>
+        <li data-i18n="usage.s4.drag">車体はマウスでドラッグして好きな位置に置き直せます。</li>
+      </ul>
+      <h3 data-i18n="usage.s5.h">5. 観察する</h3>
+      <ul>
+        <li data-i18n="usage.s5.realtime">各列に状態・周回数・測距 (左/中/右)・速度 (km/h)・シリアル出力をリアルタイム表示。</li>
+        <li data-i18n="usage.s5.opts">表示オプション: センサーレイ / 距離ラベル / グリッド / 一人称ビュー。車体スケール・軌跡長・再生速度 (0.1〜3×) も調整可能。</li>
+        <li data-i18n="usage.s5.lap">フィニッシュライン通過でラップ計測。ベストラップはコースごとにブラウザへ保存されます。</li>
+        <li data-i18n="usage.s5.theme">右上の「テーマ」で画面配色を5種から選べます (保存されます)。</li>
+      </ul>
+      <h3 data-i18n="usage.s6.h">6. GitHub で共有する (作る → 走らせる → 保存 → みんなで再利用)</h3>
+      <ul>
+        <li data-i18n-html="usage.s6.course"><b>コースを共有</b>: コース編集で作ったコースを「🌐 GitHubで共有」ボタンで投稿 (プルリクエスト)。承認されると全利用者の「🌐」コースに並びます。</li>
+        <li data-i18n-html="usage.s6.prog"><b>プログラムを共有</b>: 編集して納得したら各車の「🌐保存」ボタンで<b>別名保存</b> (上書きしません)。承認されると「🌐 みんなの投稿」に並び、誰でも再利用できます。</li>
+        <li data-i18n="usage.s6.account">投稿には GitHub アカウントが必要です (書込権限が無ければ自動 fork)。削除は GitHub 上で管理します。</li>
+      </ul>
+      <h3 data-i18n="usage.s7.h">7. プログラミング API (主要)</h3>
+      <ul class="api">
+        <li data-i18n-html="usage.s7.steer"><code>RC_steer(LEFT / CENTER / RIGHT)</code> — 操舵 (3値)</li>
+        <li data-i18n-html="usage.s7.drive"><code>RC_drive(FORWARD / REVERSE / FREE / BRAKE, pwm)</code> — 駆動 (pwm 0〜255)</li>
+        <li data-i18n-html="usage.s7.read1"><code>sensor0/1/2.readRangeSingleMillimeters()</code> (C++) / <code>get_distance()</code> (Python) — 測距 [mm] (左/中央/右)</li>
+        <li data-i18n-html="usage.s7.read2"><code>RC_read(LEFT/CENTER/RIGHT)</code> — 測距の別形 (範囲外は -3)</li>
+        <li data-i18n-html="usage.s7.conf"><b>信頼区間 (CONF)</b>: 内蔵サンプルは「これより遠い測距や範囲外 (-3) は信頼せず<b>開放とみなす</b>」しきい値 <code>CONF</code> を持ちます。実機 ToF は遠方が地面反射などで信頼できないためで、卓上は実スケール換算で約640mm、実機へ移すときは自機の搭載高に合わせて約250mmへ下げます (詳細は 🔬 物理モデル)。</li>
+        <li data-i18n-html="usage.s7.serial"><code>Serial.println(...)</code> / <code>print(...)</code> — シリアル出力、<code>delay(ms)</code> / <code>time.sleep(s)</code> — 待機</li>
+      </ul>
+      <h3 data-i18n="usage.s8.h">8. もっと詳しく (GitHub)</h3>
+      <ul>
+        <li data-i18n-html="usage.s8.gh">ヘッダー右上の <b>「⧉ GitHub」</b> から RumiCar の GitHub (RumiCar-group/RumiCar) を<b>ワンクリックで開けます</b>。各車カラムの <b>「参照」</b> でも GitHub のサンプル(プログラム/コース)を直接ブラウズして取り込めます。</li>
+        <li data-i18n-html="usage.s8.readme"><b>走行ロジックの解説</b>: 車種別プログラム「Fable Racing Line」の設計思想・各車の物理特性に基づく定数の意味・<b>実車でのチューニング手順</b>は GitHub の <code>programs/README.md</code> にまとめてあります 〔RumiCar-group/RumiCar の programs フォルダ〕。</li>
+        <li data-i18n-html="usage.s8.ino">各プログラム本体 (.ino) の冒頭にも「<b>なぜこの設定にしたか</b>」を物理特性とともに記載。実機 RumiCar でもそのまま動作します。</li>
+        <li data-i18n-html="usage.s8.courses">コースのカタログ・投稿方法は同リポジトリの <code>courses/README.md</code> を参照してください。</li>
+      </ul>
+    </div>
+  </dialog>
+
+  <dialog id="dlgRaceGuide" class="docdlg">
+    <div class="docdlg-head"><h2 data-i18n="rg.title">🏁 レースガイド (使い方・ルール・設計思想)</h2><button class="docdlg-x" data-close="dlgRaceGuide" data-i18n-aria="modal.close">×</button></div>
+    <div class="docdlg-body">
+      <p data-i18n-html="rg.intro">RumiCar のレースは決定論を土台にした上級者向けの機能です。</p>
+
+      <h3 data-i18n="rg.layers.h">二層モデル — 練習と公式</h3>
+      <ul data-i18n-html="rg.layers.body"><li>練習と公式の二層。</li></ul>
+
+      <h3 data-i18n="rg.howto.h">使い方 — ボタン別</h3>
+      <ul data-i18n-html="rg.howto.body"><li>🏁 レース / 📋 開催 / 🏆 公式レース / 🏅 ランキング。</li></ul>
+
+      <h3 data-i18n="rg.recon.h">コース試走で学ぶ — Recon Racer (上級者向け学習モデル)</h3>
+      <ul data-i18n-html="rg.recon.body"><li>コースを試走して覚え、本番は他車を見て最善手を選ぶ学習モデル。</li></ul>
+
+      <h3 data-i18n="rg.feel.h">レースの体感・演出</h3>
+      <ul data-i18n-html="rg.feel.body"><li>カウントダウン・勝者演出・観戦リプレイ・効果音・お手本ライン。</li></ul>
+
+      <h3 data-i18n="rg.rules.h">ルール</h3>
+      <ul data-i18n-html="rg.rules.body"><li>クラス・フィールド成立・クラッシュ規則・公開ポリシー。</li></ul>
+
+      <h3 data-i18n="rg.gear.h">装備と条件 — エンジン・タイヤ・試走・摩耗 (精密 v2)</h3>
+      <ul data-i18n-html="rg.gear.body"><li>物理エンジン・タイヤ (ノーマル/スリップ)・試走 0〜3周・タイヤ摩耗はいずれも記録に刻まれ再現される。既定のままなら従来と完全一致。</li></ul>
+
+      <h3 data-i18n="rg.design.h">設計思想</h3>
+      <ul data-i18n-html="rg.design.body"><li>決定論・正準エンジン・持ち込み自由・適不適・ToF のみ・学んで伸びる。</li></ul>
+    </div>
+  </dialog>
+
+  <dialog id="dlgSpec" class="docdlg">
+    <div class="docdlg-head"><h2 data-i18n="spec.title">仕様と制限</h2><button class="docdlg-x" data-close="dlgSpec" data-i18n-aria="modal.close">×</button></div>
+    <div class="docdlg-body">
+      <h3 data-i18n="spec.veh.h">車両・物理モデル</h3>
+      <ul>
+        <li data-i18n-html="spec.veh.model">物理エンジンは<b>3種</b>から選べます (ツールバー下「物理エンジン」セレクト)。既定は<b>動力学モデル</b> (タイヤが生む力を積分するシングルトラック=自転車モデル・簡易物理で実機の厳密な再現ではありません)。<b>クラシック</b>は従来のキネマティック物理、<b>精密 v2</b>は4輪 two-track＋インパルス接触の精密エンジン (フルスケール推奨)。卓上の既定は互換維持のため動力学モデルのままです。</li>
+        <li data-i18n-html="spec.veh.dims">車体 0.19 × 0.08 m / ホイールベース 0.13 m / 最大舵角 ±24°。操舵は実機同様 <b>左・中央・右の3値のみ</b>です。</li>
+        <li data-i18n-html="spec.veh.speed">最高速 0.7 m/s (PWM 255 時) を基準に車種ごとの倍率がかかります。加速 2.5 m/s² / 制動 4.0 m/s² / 惰行減速 1.2 m/s² 基準。</li>
+        <li data-i18n-html="spec.veh.speedDisp"><b>画面の速度表示は体感に合わせた「相対補正表示」</b>です (卓上スケールの実寸 km/h は小さく感覚と合わないため、全開を <b>サーキット≒350 / 峠≒180 km/h</b> の目安へ写像)。<b>物理計算・判定・タイムには影響しません。</b></li>
+        <li data-i18n-html="spec.veh.physicsLink">👉 運動方程式・摩擦円・タイヤ曲線・空力・領域スケールの<b>数式つき解説</b>はツールバーの <b>「🔬 物理モデル」</b> にまとめてあります。</li>
+      </ul>
+      <h3 data-i18n="spec.cars.h">車種特性 (6種)</h3>
+      <ul>
+        <li data-i18n-html="spec.cars.normal"><b>ノーマル FF</b>: アクセルONで強アンダー、発進空転大、制動安定。<b>FR</b>: よく曲がるがパワーオンで巻き込み・制動時リアが軽い。<b>4WD</b>: 発進最速・安定。</li>
+        <li data-i18n-html="spec.cars.drift"><b>ドリフト FR/4WD</b>: 旋回中に強くアクセル (目安 PWM 220 以上) を入れると、タイヤのグリップ円を超えて滑り出します (硬いしきい値ではなく速度・舵角で滑り出し点は動く連続判定。→「🔬 物理モデル」参照)。旋回中の急ブレーキでも滑ります。FRは大きく回頭、4WDは車体ごと流れて回復が速い。</li>
+        <li data-i18n-html="spec.cars.driftFF"><b>ドリフト FF</b>: 高速旋回中のアクセルOFF/減速でリアだけが流れ、再加速で収束します (パワーでは滑りません)。</li>
+      </ul>
+      <h3 data-i18n="spec.sensor.h">センサー</h3>
+      <ul>
+        <li data-i18n-html="spec.sensor.tof">ToF 距離センサー3基 (左 +65° / 中央 / 右 -65°)＋任意の後方1基。各基は 25° の視野コーン (FoV) で扇内の最近反射面を測ります (実機 VL53L0X 準拠)。計測レンジ 2,000 mm。</li>
+        <li data-i18n-html="spec.sensor.range">範囲外は <code>RC_read</code> 系で -3、生読取 (<code>readRangeSingleMillimeters</code> 等) は実機準拠の 8190 を返します。</li>
+        <li data-i18n-html="spec.sensor.obstacle">「他車を障害物にする」ON のとき、他車の車体もセンサーに映り衝突対象になります。</li>
+      </ul>
+      <h3 data-i18n="spec.exec.h">実行モデル</h3>
+      <ul>
+        <li data-i18n-html="spec.exec.rate">ユーザープログラムの <code>loop()</code> は 20 Hz、物理演算は 60 Hz で実行されます。<code>delay()</code> は次の loop 呼び出しを遅らせます。</li>
+        <li data-i18n-html="spec.exec.crash">壁に接触すると<b>クラッシュ (恒久停止)</b>。初期化 ↺ かドラッグで復帰できます。<b>「衝突で自動復帰(切り返し)」をON</b>にすると、恒久停止せず<b>後退して開いた側へ切り返し</b>、自動で走行を再開します。他車との接触はその場停止のみ (前が空けば再発進)。</li>
+      </ul>
+      <h3 data-i18n="spec.lang.h">プログラミング言語の対応範囲</h3>
+      <ul>
+        <li data-i18n-html="spec.lang.subset">Arduino C++ と Python は<b>教育用サブセットのインタープリタ</b>です。変数・四則演算・if/else・for/while・関数定義・上記 API をサポートします。</li>
+        <li data-i18n-html="spec.lang.unsupported">外部ライブラリの include/import、クラス定義、ポインタ、文字列の高度な操作などは使えません。JavaScript はブラウザネイティブ実行 (setup/loop 関数を定義)。</li>
+        <li data-i18n-html="spec.lang.runaway">無限ループ等の暴走は1反復あたりのステップ上限で打ち切られます。</li>
+      </ul>
+      <h3 data-i18n="spec.misc.h">その他</h3>
+      <ul>
+        <li data-i18n-html="spec.misc.cars">最大6台同時走行。シリアル出力は約8,000字で古い分から破棄されます。</li>
+        <li data-i18n-html="spec.misc.storage">ベストラップ・自作コース・テーマ選択は<b>このブラウザの localStorage</b> に保存されます (サーバーには送信されません)。</li>
+        <li data-i18n-html="spec.misc.share">GitHub への共有 (コース/プログラム/車種) は<b>プルリクエスト方式</b>です。投稿内容は GitHub の公開リポジトリ (RumiCar-group/RumiCar) に保存され、承認後に全利用者へ反映されます。</li>
+      </ul>
+
+      <h3 data-i18n="sys.h">システム仕様（技術アーキテクチャ）</h3>
+      <p data-i18n-html="sys.intro">このシミュレータは<b>静的配信の単一ページアプリ (SPA)</b> です。サーバーに状態を持たず、物理・学習プログラムの実行・描画はすべて<b>ブラウザ内</b>で完結します。以下は外部からデータで拡張・自作するための技術仕様です (実装＝ソースを正とします)。コースデータの書式は別ダイアログ「<b>📐 コースデータ仕様</b>」にまとめています。</p>
+
+      <h3 data-i18n="sys.arch.h">システム構成</h3>
+      <ul data-i18n-html="sys.arch.body">
+        <li><b>配信</b>: <code>public/</code> をそのまま配信 (Docker <code>rumicar-simulator</code>)。CSS/JS/HTML/<code>courses.json</code> は編集→<b>ページ再読込で即反映</b> (再ビルド不要)。</li>
+        <li><b>主要モジュール</b> (ES Modules・<code>public/js/</code>): 物理エンジン＝<code>physics.js</code> (キネマティック) / <code>physics_dyn.js</code> (動力学・自転車モデル) / <code>physics_v2.js</code>＋<code>contact_v2.js</code> (精密 v2・4輪 two-track＋インパルス接触) / <code>sensors.js</code> (ToF) / <code>runner.js</code> (実行ループ) / <code>fleet.js</code> (最大6台)。学習側＝<code>api.js</code> (RC_*/rc_* ホスト) / <code>programs.js</code>・<code>samples.js</code> (内蔵プログラム) / <code>interp/</code> (lexer・parser_c・parser_py・evaluator)。コース/描画＝<code>data/courses.json</code> / <code>course.js</code>・<code>course_editor.js</code> / <code>geom.js</code>・<code>depth.js</code>・<code>elev3d.js</code>・<code>hud.js</code>・<code>lap.js</code>。UI/設定＝<code>index.html</code>・<code>css/style.css</code>・<code>main.js</code>・<code>loader.js</code>・<code>config.js</code> (定数/車種/CHANGELOG/版)・<code>i18n/</code> (メッセージカタログ)。</li>
+        <li><b>実行モデル</b>: ユーザープログラムの <code>loop()</code> は <b>20 Hz</b>、物理積分は <b>60 Hz</b>。<code>delay()</code> は次の <code>loop()</code> を遅らせ、無限ループは1反復あたりのステップ上限で打ち切られます。</li>
+      </ul>
+
+      <h3 data-i18n="sys.car.h">独自車種 JSON</h3>
+      <ul data-i18n-html="sys.car.body">
+        <li>車種は車種ダイアログで作れます。「<b>独自車種を追加</b>」に JSON を貼るか、「<b>フォームで作る</b>」エディタ (スライダー/数値・下の JSON と双方向同期) で追加します。<b>必須</b>: <code>key</code> (一意のID) と <code>name</code> (表示名)。</li>
+        <li><b>任意フィールド</b> (未指定はノーマルFRの既定値で補完): <code>mass</code> (車重kg) / <code>accel</code>・<code>brake</code>・<code>maxSpeed</code> (加速/制動/最高速の倍率) / <code>spin</code> (発進空転) / <code>yawGain</code> (旋回ヨー) / <code>us</code>・<code>os</code> (定常アンダー/オーバー) / <code>powerUs</code>・<code>powerOs</code> (アクセルONで増すアンダー/オーバー) / <code>liftOffOs</code> (アクセルOFFのタックイン) / <code>brakeOs</code> (制動時オーバー) / <code>slide</code> (横滑り量)。各パラメータの意味は車種ダイアログのパラメータ表に記載。</li>
+        <li><code>drift</code>: <code>null</code>＝滑らない。ドリフト車は <code>{trigger, grip, gain, minSp, slipYaw, slipSlide, attack, release, brakeDrift}</code> で滑り出し点と挙動を定義します。</li>
+        <li><b>独自車種</b>は localStorage <code>rumicar.customCars</code> に保存 (このブラウザのみ・サーバー送信なし)。登録済みの独自車種は一覧から<b>個別に 編集／複製／削除</b>できます。例: <code>{"key":"light_fr","name":"軽量FR","mass":980,"accel":1.1,"brake":1.1,"maxSpeed":1.04,"us":0.06,"os":0.08,"powerOs":0.30,"drift":null}</code></li>
+        <li><b>組込6車種の上書き</b>: 組込車種もパラメータ表の「編集」でローカルに上書きできます (実験用)。上書きは localStorage <code>rumicar.carOverrides</code> に<b>差分パラメータのみ</b>保存し、出荷時の既定 (卓上の物理 byte) は変えません。「既定に戻す」(個別)・「全上書き解除」で完全に元へ戻せます。</li>
+        <li><b>GitHub 共有</b>: 作った車種は「<b>🌐 GitHubで共有</b>」で <code>RumiCar-group/RumiCar</code> の <code>cars/community/</code> へ<b>別名投稿</b> (プルリクエスト・上書きなし) できます。承認された投稿車種は起動時に GitHub から取り込まれ (<b>localStorage には保存しない</b>)、車種メニューに「🌐 名前」として並びます。</li>
+      </ul>
+
+      <h3 data-i18n="sys.prog.h">プログラム API（学習側）</h3>
+      <ul data-i18n-html="sys.prog.body">
+        <li>対応言語: <b>Arduino C++</b> と <b>Python</b> は教育用サブセットのインタープリタ、<b>JavaScript</b> はブラウザネイティブ実行 (<code>setup</code>/<code>loop</code> を定義)。</li>
+        <li><b>Arduino 系 API</b>: <code>RC_setup()</code> / <code>RC_steer(dir)</code> / <code>RC_drive(dir, pwm)</code> / <code>RC_read(dir)</code> (前方ToF距離mm) / <code>RC_wheel_speed(axle)</code> (任意装備の車輪エンコーダ・未装備 −1) / <code>Serial.print()</code>・<code>println()</code> / <code>delay(ms)</code>。<code>dir</code> は <code>LEFT</code>/<code>CENTER</code>/<code>RIGHT</code>。</li>
+        <li><b>Raspberry Pi 系 API</b>: <code>rc_steer</code>/<code>rc_drive</code>/<code>rc_wheel_speed</code>/<code>rc_clear</code>、<code>read_one_sensor()</code>、<code>read_all_sensors()</code>、センサーオブジェクト <code>sensor0..sensor3</code> (各 <code>.readRangeSingleMillimeters()</code>/<code>.get_distance()</code>。<code>sensor3</code>＝後方・任意装備)、<code>time.sleep(sec)</code>。</li>
+        <li><b>共通の数学関数</b>: <code>abs/min/max/sqrt/floor/ceil/round</code>、研究用に <code>atan2/atan/sin/cos/hypot/pi</code> (純粋数学＝物理状態の肩代わりではない)。</li>
+        <li><b>範囲外コード</b>: <code>RC_read</code> 系は範囲外で <b>−3</b>、生読取 (<code>readRangeSingleMillimeters</code> 等) は実機準拠の <b>8190</b>。計測は前方3基 (左 +65°/中央/右 −65°)・レンジ 2,000 mm。</li>
+        <li>プログラムは GitHub <code>RumiCar-group/RumiCar</code> の community へ<b>別名で投稿</b> (プルリクエスト) して共有できます。</li>
+      </ul>
+
+      <h3 data-i18n="sys.ls.h">ブラウザ保存データ（localStorage）</h3>
+      <ul data-i18n-html="sys.ls.body">
+        <li><code>rumicar.lang</code>: 言語選択 (<code>ja</code>/<code>en</code>)。</li>
+        <li><code>rumicar.theme</code>: テーマ (<code>green</code>/<code>dark</code>/<code>light</code>/<code>glass</code>/<code>neon</code>/<code>paper</code>/<code>sunset</code>/<code>ocean</code>/<code>mono</code>/<code>lavender</code>/<code>carbon</code>)。</li>
+        <li><code>rumicar.optRecover</code>: 「衝突で自動復帰(切り返し)」トグル (<code>1</code>/<code>0</code>)。</li>
+        <li><code>rumicar.customCars</code>: 独自車種 (JSON 配列・上記)。</li>
+        <li><code>rumicar.carOverrides</code>: 組込車種のローカル上書き (key→差分パラメータのマップ・上記「独自車種 JSON」参照)。</li>
+        <li><code>rumicar.courses</code>: 自作コース (<code>{コース名: コース定義}</code> のマップ)。コース定義の書式は「<b>📐 コースデータ仕様</b>」参照。</li>
+        <li><code>rumicar.best.&lt;コース名&gt;</code>: コースごとのベストラップ秒。</li>
+        <li>いずれも<b>このブラウザのみ</b>に保存され、サーバーには送信されません。</li>
+      </ul>
+      <p data-i18n="sys.backup.hint">上記のブラウザ保存データをまとめて 1 つの JSON に書き出し / 読み戻せます (端末の移行・誤消去への備え。サーバーには送信されません)。読み込み時、現在の値と異なるキーがあるときは件数を確認してから上書きします。</p>
+      <div class="lsbackup">
+        <button id="dataExport" data-i18n="sys.backup.export" data-i18n-title="sys.backup.export.title" title="このブラウザの rumicar.* 保存データをまとめて JSON ファイルに書き出します">💾 バックアップを書き出す</button>
+        <label class="filebtn" data-i18n-title="sys.backup.import.title" title="バックアップ JSON を読み込み、rumicar.* 保存データを復元します (衝突は確認後に上書き)"><span data-i18n="sys.backup.import">📥 バックアップを読み込む</span><input id="dataImport" type="file" accept=".json"></label>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- コースデータ仕様 (courses.json の書式)。同梱コースは public/data/courses.json で定義・course.js が生成 -->
+  <dialog id="dlgDoc" class="docdlg">
+    <div class="docdlg-head"><h2 data-i18n="doc.title">コースデータ仕様 (courses.json)</h2><button class="docdlg-x" data-close="dlgDoc" data-i18n-aria="modal.close">×</button></div>
+    <div class="docdlg-body">
+      <p data-i18n-html="doc.intro">同梱コースは <code>public/data/courses.json</code> (配列) で定義します。</p>
+      <h3 data-i18n="doc.common.h">共通フィールド (全 kind 共通)</h3>
+      <ul>
+        <li data-i18n-html="doc.common.name"><code>name</code> (必須): コース名。</li>
+        <li data-i18n-html="doc.common.kind"><code>kind</code> (必須): コースの生成方式。</li>
+        <li data-i18n-html="doc.common.desc"><code>desc</code> (任意): コースの説明。</li>
+        <li data-i18n-html="doc.common.i18n"><code>name_en</code>/<code>desc_en</code> (任意): 英語表示名・説明。</li>
+        <li data-i18n-html="doc.common.meta"><code>diff</code>/<code>beginner</code> (任意): 難易度・入門印。</li>
+        <li data-i18n-html="doc.common.noRace"><code>noRace</code> (任意): フルスケール設計コースの印。</li>
+        <li data-i18n-html="doc.common.grip"><code>grip</code> (任意): 路面グリップ。</li>
+      </ul>
+      <h3 data-i18n="doc.track.h">kind: "track" — 中心線＋道幅で内外2本の壁 (一定幅の周回路)</h3>
+      <ul>
+        <li data-i18n-html="doc.track.shape"><code>shape</code> (必須): 中心線の形。</li>
+        <li data-i18n-html="doc.track.fields">その他のフィールド。</li>
+      </ul>
+      <h3 data-i18n="doc.annulus.h">kind: "annulus" — 外周と内周を独立形状で定義</h3>
+      <ul>
+        <li data-i18n-html="doc.annulus.shapes"><code>outer</code>/<code>inner</code> (必須): 境界形状。</li>
+        <li data-i18n-html="doc.annulus.fields"><code>samples</code>/<code>startAngle</code>。</li>
+      </ul>
+      <h3 data-i18n="doc.touge.h">kind: "touge" — 頂上→麓の下り道 (周回でない)</h3>
+      <ul>
+        <li data-i18n-html="doc.touge.style"><code>style</code> (任意): 道の作り方。</li>
+        <li data-i18n-html="doc.touge.fields">共通フィールド。</li>
+      </ul>
+      <h3 data-i18n="doc.raw.h">kind: "raw" — 壁を直接列挙</h3>
+      <ul>
+        <li data-i18n-html="doc.raw.fields">壁を直接列挙する型。</li>
+        <li data-i18n-html="doc.loop.note">kind 省略時は矩形リング。</li>
+      </ul>
+      <h3 data-i18n="doc.sf.h">start / finish の補足</h3>
+      <ul>
+        <li data-i18n-html="doc.sf.note">スタート方位と正方向ベクトル。</li>
+      </ul>
+      <h3 data-i18n="doc.validate.h">検証とメンテナンス</h3>
+      <ul>
+        <li data-i18n-html="doc.validate.note">検証ツールと反映方法。</li>
+      </ul>
+    </div>
+  </dialog>
+
+  <!-- 物理モデル解説 (運動方程式・タイヤ/空力・領域)。数式つき・現状の挙動の根拠 -->
+  <dialog id="dlgPhysics" class="docdlg">
+    <div class="docdlg-head"><h2 data-i18n="pm.title">🔬 物理モデル — いま車に何が起きているか</h2><button class="docdlg-x" data-close="dlgPhysics" data-i18n-aria="modal.close">×</button></div>
+    <div class="docdlg-body">
+      <p class="pm-lead" data-i18n-html="pm.lead">画面の中の車は、<b>タイヤが路面に生む力</b>を毎フレーム積分して動いています。アンダーステアもドリフトもスピンも、個別の演出ではなく<b>この力学から自然に出てくる結果</b>です。以下は「なぜそう動くのか」を数式とともに辿れるように書いてあります。各見出しは後から読み返し・自分で調べた内容との対比に使ってください。</p>
+
+      <h3 id="pm-models" data-i18n="pm.s1.h">1. 解いている運動方程式 — シングルトラック(自転車)モデル</h3>
+      <ul>
+        <li data-i18n-html="pm.s1.states">前輪・後輪を左右まとめて<b>1本ずつ</b>に集約した「自転車モデル」です。重心 (CG) を基準に、<b>3つの状態量</b>を時間積分します。
+          <div class="pm-eq"><b>u</b> = 車体の前後速度 &nbsp;|&nbsp; <b>v</b><sub>lat</sub> = 車体の横速度 &nbsp;|&nbsp; <b>r</b> = ヨーレート(回頭の角速度)</div>
+        </li>
+        <li data-i18n-html="pm.s1.eom">運動方程式(質量 m・ヨー慣性 I<sub>z</sub>・前軸距離 a・後軸距離 b):
+          <div class="pm-eq">
+            m·(u̇ − v<sub>lat</sub>·r) = F<sub>x,前</sub> + F<sub>x,後</sub> &nbsp; <span class="pm-note">(前後方向)</span><br>
+            m·(v̇<sub>lat</sub> + u·r) = F<sub>y,前</sub> + F<sub>y,後</sub> &nbsp; <span class="pm-note">(横方向)</span><br>
+            I<sub>z</sub>·ṙ = a·F<sub>y,前</sub> − b·F<sub>y,後</sub> &nbsp; <span class="pm-note">(回頭モーメント)</span>
+          </div>
+          <span class="pm-note">回頭は「前輪が生む横力で頭を入れる」対「後輪が生む横力で頭を戻す」の綱引き。この差が残ると車は回り続けます(=ドリフトの自走)。</span>
+        </li>
+        <li data-i18n-html="pm.s1.models"><b>3つの物理エンジンを切替できます</b>(ツールバー下の「物理エンジン」セレクト):
+          <ul>
+            <li><b>動力学モデル(既定)</b>: 上式の通り力を積分。速度の向きが車体の向きから大きくずれられる=<b>横向き90°超のドリフトやバックエントリーが可能</b>。</li>
+            <li><b>クラシック物理</b>: キネマティックモデル。速度の向きが車体の向き ±45° に拘束されるため横滑りが構造的に出ません。動きは滑らかで初学者向け。</li>
+            <li><b>精密 v2</b>: 4輪 two-track＋インパルス接触の精密エンジン。フルスケール競技で推奨・卓上ではスリップタイヤのドリフト学習環境。詳細は <code>docs/physics_model.md</code> §13。</li>
+          </ul>
+        </li>
+      </ul>
+
+      <h3 id="pm-tire" data-i18n="pm.s2.h">2. タイヤが出せる力には上限がある — 摩擦円</h3>
+      <ul>
+        <li data-i18n-html="pm.s2.circle">各タイヤが出せる「前後の力(駆動/制動)」と「横の力(曲げる力)」は、合計が円(楕円)の内側に制限されます。これが<b>摩擦円</b>です。
+          <div class="pm-eq">(F<sub>x</sub> / (μ<sub>x</sub>·n))² + (F<sub>y</sub> / (μ<sub>y</sub>·n))² ≤ 1 &nbsp; <span class="pm-note">(n = そのタイヤの荷重, μ = 摩擦係数)</span></div>
+        </li>
+        <li data-i18n-html="pm.s2.tradeoff"><b>「曲げながら全開」はできない</b>のはこのため。前後に使い切ると横が残らず膨らみ(アンダー)、横で使い切ったところへ駆動を足すと滑り出します(オーバー/スピン)。</li>
+        <li class="pm-real" data-i18n-html="pm.s2.real"><b>現実との違い・モデル上の工夫:</b> 卓上スケール(13cm・0.7m/s)では実際の μ≈1 だと横加速度が小さすぎて<b>絶対に滑りません</b>。そこで卓上では円をわざと<b>縦長の楕円</b>にしています(横 μ<sub>y</sub>=0.19 ≪ 縦 μ<sub>x</sub>=0.75)。「滑り出しが目で見える」ようにするための意図的な異方性で、実車のタイヤとは異なります。フルスケール領域では本物どおり<b>等方の真円</b>(μ<sub>y</sub>=μ<sub>x</sub>=1.4)になります。</li>
+      </ul>
+
+      <h3 id="pm-slip" data-i18n="pm.s3.h">3. 横の力はどこから出るか — スリップ角とタイヤ曲線</h3>
+      <ul>
+        <li data-i18n-html="pm.s3.linear">タイヤは「向いている方向」と「実際に進む方向」がズレると、その差(<b>スリップ角 α</b>)に応じて横力を生みます。
+          <div class="pm-eq">小さいズレ: F<sub>y</sub> ≈ C·α &nbsp; <span class="pm-note">(C = コーナリング剛性。タイヤの“踏ん張り”の強さ)</span></div>
+        </li>
+        <li data-i18n-html="pm.s3.peak">ズレが大きくなると横力は無限には増えず、<b>あるピーク(α<sub>peak</sub>)で頭打ちし、超えると緩やかに減衰</b>します(簡易 Pacejka 曲線)。
+          <div class="pm-eq">|α| &gt; α<sub>peak</sub> で F<sub>y</sub> = F<sub>y,max</sub> / (1 + k<sub>decay</sub>·(|α| − α<sub>peak</sub>))</div>
+          <span class="pm-note">卓上は α<sub>peak</sub>≈1.35rad と粘り、フルスケールは実タイヤ同様 α<sub>peak</sub>≈0.25rad(≈14°)で早めにピークし限界後はやや深く落ちます。</span>
+        </li>
+        <li data-i18n-html="pm.s3.uos"><b>アンダー/オーバーの正体:</b> 前後の踏ん張り(コーナリング剛性)の<b>比</b>で決まります。前が先に限界=アンダーステア、後が先に限界=オーバーステア。車種ごとの <code>us / os</code> や前後剛性比がこれを決めています。</li>
+      </ul>
+
+      <h3 id="pm-long" data-i18n="pm.s4.h">4. 前後の力 — 駆動・制動・荷重移動</h3>
+      <ul>
+        <li data-i18n-html="pm.s4.drive">駆動力と制動力は<b>駆動輪</b>へ配分されます(FF=前のみ / FR=後のみ / 4WD=前後)。</li>
+        <li class="pm-real" data-i18n-html="pm.s4.brake"><b>RumiCar 実機の特性そのまま:</b> ブレーキは摩擦ブレーキではなく<b>モーターブレーキ</b>なので、駆動輪にしか効きません。だから <b>FR は制動でリアがロック気味になり回頭(ブレーキドリフト)</b>、FF は前だけ効いて直進安定、という挙動が構造から出ます。</li>
+        <li data-i18n-html="pm.s4.transfer"><b>荷重移動:</b> 加速すると荷重は後ろへ、制動すると前へ移ります。
+          <div class="pm-eq">Δn = m·a<sub>x</sub>·(h/L) &nbsp; <span class="pm-note">(h=重心高, L=ホイールベース。本モデルは h/L=0.35)</span></div>
+          荷重 n が動くと摩擦円の半径 μ·n も前後で変わる → 「制動中はリアが軽い=滑りやすい」が出ます。</li>
+      </ul>
+
+      <h3 id="pm-wheel" data-i18n="pm.s5.h">5. 車輪のスリップ率(フルスケール領域)</h3>
+      <ul>
+        <li data-i18n-html="pm.s5.slipratio">フルスケールでは車輪の回転そのものを状態にします。車輪表面の速度 v<sub>w</sub>=ω·R と路面速度 u の差から<b>スリップ率 s</b>を出し、縦力を縦版 Pacejka で決めます。
+          <div class="pm-eq">s = (v<sub>w</sub> − u) / |u| &nbsp;,&nbsp; F<sub>x</sub> = μ<sub>x</sub>·n·sin(C·atan(B·s)) / g<sub>norm</sub> &nbsp; <span class="pm-note">(g<sub>norm</sub> はピーク s<sub>peak</sub> で 1 になる正規化)</span></div>
+        </li>
+        <li data-i18n-html="pm.s5.emerge">これで<b>発進の空転(ホイールスピン)</b>と<b>急制動のロック</b>が創発します。どちらも縦に使い切るので摩擦円から横力が消え、グリップを失います。「車輪エンコーダ(任意)」を使えば前後の車輪速度差から s を読み、トラクション制御や ABS を自作できます。</li>
+      </ul>
+
+      <h3 id="pm-aero" data-i18n="pm.s6.h">6. 空力 — 抗力とダウンフォース(フルスケール領域)</h3>
+      <ul>
+        <li data-i18n-html="pm.s6.forces">速度の2乗に比例する2つの空気の力が効きます。
+          <div class="pm-eq">
+            抗力 F<sub>d</sub> = ½·ρ·C<sub>d</sub>·A·u² &nbsp; <span class="pm-note">(常に減速側)</span><br>
+            ダウンフォース F<sub>l</sub> = ½·ρ·C<sub>l</sub>·A·u² &nbsp; <span class="pm-note">(荷重 n を増やす)</span>
+          </div>
+        </li>
+        <li data-i18n-html="pm.s6.fast"><b>「速いほど曲がれる」:</b> ダウンフォースが荷重 n を増やし、摩擦円の半径 μ·n が速度とともに大きくなるためです(卓上には無い感覚)。</li>
+        <li data-i18n-html="pm.s6.vmax"><b>最高速は自然に決まる:</b> 駆動力 = 抗力 で釣り合った速度が頭打ちになります(設定値ではなく結果。約347km/h)。</li>
+      </ul>
+
+      <h3 id="pm-regime" data-i18n="pm.s7.h">7. 領域(スケール) — 同じエンジンで卓上から実車まで</h3>
+      <ul>
+        <li data-i18n-html="pm.s7.scales">同じ動力学エンジンを<b>卓上 / 中スケール(屋外RC) / フルスケール(実車350km/h)</b>の3スケールで動かせます(ツールバー下の「領域」)。挙動の鍵は次の<b>支配比</b>:
+          <div class="pm-eq">A<sub>y</sub>* = (v² / R) / (μ·g) &nbsp; <span class="pm-note">(必要な横加速度 ÷ 路面が出せる横加速度。1 を超えると滑る)</span></div>
+        </li>
+        <li data-i18n-html="pm.s7.similar"><b>卓上 ↔ 中スケール</b>は<b>動的相似</b>で繋がっています。長さを k<sub>L</sub> 倍するとき速度を Froude 相似 k<sub>V</sub>=√(k<sub>L</sub>·k<sub>G</sub>·k<sub>μ</sub>) 倍すると A<sub>y</sub>* が不変 → <b>同じプログラムが、大きく速い世界でも同じ操作で同じように滑り出します</b>。</li>
+        <li class="pm-real" data-i18n-html="pm.s7.fullscale"><b>フルスケールは相似を意図的に破った</b>領域です。卓上の異方性ハック(μ<sub>y</sub>≪μ<sub>x</sub>)をやめて<b>等方の実 μ</b>にし、<b>空力</b>を効かせます。だから卓上では届かない A<sub>y</sub>*→1 が「速度を上げるだけ」で本物どおり起き、ドリフト車も“攻めて限界を超える”必要が出ます。</li>
+      </ul>
+
+      <h3 id="pm-cars" data-i18n="pm.s8.h">8. 駆動方式が挙動を決める(動力学パラメータ)</h3>
+      <p data-i18n="pm.s8.intro">FF/FR/4WD の差は、次の数値だけで表現しています(残りは全部共通の力学から創発)。</p>
+      <table class="ptable">
+        <tr><th data-i18n="pm.s8.th.drive">駆動</th><th data-i18n="pm.s8.th.cg">重心位置 a/L</th><th data-i18n="pm.s8.th.split">駆動配分 前:後</th><th data-i18n="pm.s8.th.rearmu">後輪横μ倍率</th><th data-i18n="pm.s8.th.character">性格</th></tr>
+        <tr><td class="pname">FF</td><td data-i18n="pm.s8.ff.cg">0.42(前寄り)</td><td>1.0 : 0.0</td><td>1.05</td><td data-i18n="pm.s8.ff.char">強アンダー・発進空転大・制動安定</td></tr>
+        <tr><td class="pname">FR</td><td data-i18n="pm.s8.fr.cg">0.55(後寄り)</td><td>0.0 : 1.0</td><td data-i18n="pm.s8.fr.rearmu">0.80(先に流れる)</td><td data-i18n="pm.s8.fr.char">よく曲がる・パワーオーバー・制動でリア軽い</td></tr>
+        <tr><td class="pname">4WD</td><td data-i18n="pm.s8.awd.cg">0.50(中央)</td><td>0.4 : 0.6</td><td>0.95</td><td data-i18n="pm.s8.awd.char">発進最速・安定・流れても回復速い</td></tr>
+      </table>
+      <p class="pm-note" data-i18n="pm.s8.note">数値ごとの意味と全車種の一覧は「🚗 車種」ダイアログに。独自車種も追加できます。</p>
+
+      <h3 id="pm-caveat" data-i18n="pm.s9.h">9. 現実と違う点・利用上の注意(まとめ)</h3>
+      <ul>
+        <li data-i18n-html="pm.s9.speed"><b>速度表示は相対補正</b>。卓上の実速度は遅すぎて体感と合わないため、全開を サーキット≒350 / 峠≒180 km/h へ写像しています。<b>物理計算・判定・タイムには一切影響しません</b>(フルスケールのみ実速度を直接表示)。</li>
+        <li data-i18n-html="pm.s9.steer"><b>操舵は左・中央・右の3値のみ</b>(実機 RumiCar と同じ)。連続可変ではありません。</li>
+        <li data-i18n-html="pm.s9.bicycle"><b>左右輪の区別なし</b>(自転車モデル)。デフ・LSD・片輪の空転といった左右差は表現しません。</li>
+        <li data-i18n-html="pm.s9.aniso"><b>卓上の摩擦の異方性は便宜的</b>な工夫(上記2)。実タイヤの物理ではありません。</li>
+        <li data-i18n-html="pm.s9.pacejka">タイヤ曲線は<b>簡易 Pacejka</b>。温度・摩耗・荷重感度・路面の細かな差は持ちません。</li>
+        <li data-i18n-html="pm.s9.rates">ユーザープログラムの <code>loop()</code> は 20Hz、物理積分は 60Hz。ToF センサーは ±65°・3基、計測レンジは卓上2,000mm / フルスケール150m。</li>
+        <li data-i18n-html="pm.s9.cone"><b>ToF は 25° の視野コーン</b>で扇内の最近反射面を測ります (実機 VL53L0X 準拠・v3.50.0)。中心1本の直線ではないので、コーナーの角を掠めて壁の外へ抜けません (#27 の根治)。各サンプルは<b>信頼区間 (CONF)</b> を持ち、これを超える/範囲外の測距を「遠い/開放」とみなします (卓上は実スケール換算で約640mm、実機移行時は搭載高に合わせ約250mmへ下げ速度も落とす)。詳細は <code>docs/physics_model.md</code> §12。</li>
+      </ul>
+
+      <h3 id="pm-learn" data-i18n="pm.s10.h">10. もっと深く調べる人へ(索引)</h3>
+      <ul>
+        <li data-i18n-html="pm.s10.keywords"><b>検索キーワード:</b> single-track / bicycle model, slip angle, Pacejka "Magic Formula", friction circle (traction circle), longitudinal slip ratio, weight transfer, understeer gradient, Froude number, dynamic similarity, downforce。</li>
+        <li data-i18n-html="pm.s10.impl"><b>実装を読む:</b> <code>public/js/physics_dyn.js</code>(運動方程式・摩擦円・タイヤ/車輪/空力)、<code>public/js/config.js</code> の <code>REGIMES</code>(領域ごとの定数)と <code>DYN_DRIVE</code>(駆動方式パラメータ)。精密 v2 は <code>public/js/physics_v2.js</code>＋<code>public/js/contact_v2.js</code>(4輪 two-track＋インパルス接触・詳細は §13)。</li>
+        <li data-i18n-html="pm.s10.mdfile"><b>数式と較正の詳細版:</b> リポジトリの <code>Simulator/docs/physics_model.md</code>(この解説の長文版・各定数の実数値と導出)。</li>
+        <li data-i18n-html="pm.s10.logic"><b>走行ロジック側:</b> 各定数を「どう使って速く走らせるか」は GitHub の <code>programs/README.md</code> と各プログラム冒頭コメント。</li>
+      </ul>
+
+      <h3 id="pm-qa" data-i18n="pm.s11.h">11. 設計のQ&A — 開発中に実際に検証した「なぜ」</h3>
+      <ul>
+        <li data-i18n-html="pm.s11.drift"><b>Q. ドリフト走行はグリップ走行より速くなりませんか?</b> A. このシミュレータでは、ヘアピン〜高速コーナー・乾燥/低μ・複数車種の組合せで実測した結果、いずれもグリップ走行の方が速く走り抜けます。回頭自体はドリフトの方が速い場面もありますが、コーナー出口で再グリップして加速に転じるタイミングが遅れるため、トータルでは追いつきません。実車のプロドライバーが行う限界域ドリフトとは条件が異なります。</li>
+        <li data-i18n-html="pm.s11.beta"><b>Q. ToFセンサーだけで車の横滑り角(スリップ角β)を正確に推定できますか?</b> A. 開発時に検証しましたが、方向誤差(MAE)10〜12°・符号一致率70〜72%程度に留まり、実用の目安である80%には届きませんでした(壁までの距離だけでは、車がどちらを向いて滑っているかの情報が本質的に不足するためです)。またステア入力が左/中央/右の3値しかないため、ドリフトを一定角度で「保持」し続ける制御も構造上できません。上級者向けサンプルの「Recon Racer」「Self-Locator」はこの限界の中で工夫した実例です。</li>
+        <li data-i18n-html="pm.s11.fullscale_wall"><b>Q. フルスケール(実車換算350km/h級)でコースの壁にぶつかるのはバグですか?</b> A. 仕様です。この速度域では停止に必要な距離(約115m)がToFセンサーのレンジ(150m)よりかなり長く、壁が見えてからではブレーキが間に合いません。フルスケールのレース/練習コースは意図的に壁の少ない開けたレイアウトにしてあり、加減速・トラクション制御そのものを試す領域として設計されています。壁での判定を試したい場合は卓上/中スケールをお使いください。</li>
+        <li data-i18n-html="pm.s11.footprint"><b>Q. なぜ車が壁にめり込んで見えることがないのですか?</b> A. 描画用のスプライト(車の絵)は、常に「当たり判定に使っている矩形」の内側に収まるよう自動調整して描いています。どんな車種・スケール・向きでも、目に見える車体が判定矩形からはみ出ないという不変条件を守っているため、見た目と当たり判定が食い違うことがありません。</li>
+        <li data-i18n-html="pm.s11.wear"><b>Q. タイヤ摩耗(オプション)をONにするとどう変わりますか?</b> A. ドリフト走行時の後輪摩耗速度は、グリップ走行時のおよそ8万倍という大きな差になるよう調整されています。常時ドリフトし続けると15〜20秒ほどで摩擦円(タイヤが出せる力の上限)が縮み始め、後半にペースが落ちます。ただし摩耗による性能低下は最大10%までにクランプしてあり、「摩耗が勝敗を支配しすぎない」設計です。ドリフトを使う場面を選ぶ戦略性の材料として使えます。</li>
+        <li data-i18n-html="pm.s11.localize"><b>Q. 自己位置推定(上級者向け)は、ToFで壁を照合した方が正確になりますか?</b> A. 意外かもしれませんが、1周内の相対位置ではホイールエンコーダ単独の推定の方が、ToFで壁形状と照合するフィルタより誤差が小さいという実測結果が出ています(ToFのノイズが逆に誤差を増やすため)。コース一周にわたる絶対位置(いわゆるループクロージャ)はToFのノイズが支配的になり、40m前後のブレが残ります。</li>
+        <li data-i18n-html="pm.s11.scalefeel"><b>Q. 同じ「アンダーステア/オーバーステア」でも、卓上とフルスケールで感触が違うのはなぜですか?</b> A. 卓上スケールでは実際の摩擦係数のままだと横加速度が小さすぎて絶対に滑らないため、意図的に摩擦円を縦長の楕円にして「滑り出しが目に見える」ようにしています(§2参照)。フルスケールでは本物の等方な摩擦円に戻るため、アンダー/オーバーステアはタイヤのコーナリング剛性比から自然に立ち上がる、より現実に近い感触になります。</li>
+        <li data-i18n-html="pm.s11.hitbox"><b>Q. 車種(スポーツカー風など)の見た目を変えると当たり判定も変わりますか?</b> A. 変わりません。衝突・配置判定は常にその車種の <code>length</code>/<code>width</code> で決まる矩形だけで行われ、外観スプライトの形状は判定に一切関与しません。複数台を見分けやすくするための色分け・形状差は、あくまで表示上の演出です。</li>
+        <li data-i18n-html="pm.s11.official"><b>Q. 自分のブラウザで走らせたタイムと、GitHub上の公式レース記録が微妙に違うのはなぜですか?</b> A. 浮動小数点演算(<code>Math.sin</code>等)はブラウザ・Node.js・OSの組合せでビット単位の極小差が出ることがあり、僅差の勝負ではその差が結果に響く場合があります。そのため公式記録は特定のNode.js環境で固定実行する「正準エンジン」の結果だけを採用しています。ご自分のブラウザでの結果はあくまで手元の参考タイムとしてご覧ください。</li>
+      </ul>
+
+      <p class="pm-credit" data-i18n-html="pm.credit">車両物理モデル — 設計: <b>Fable 5</b>(初代キネマティクス・Racing Line)/ 動力学化・タイヤ/空力/領域モデル・精密動力学 v2 エンジン(4輪 two-track・インパルス接触・Stage AO)・本解説: <b>Opus 4.8</b>。RumiCar 実機の特性を土台に、教育目的で「なぜそう動くか」を辿れるよう構成しています。</p>
+    </div>
+  </dialog>
+
+  <!-- 車種パラメータ + 独自車種の追加 -->
+  <dialog id="dlgCars" class="docdlg">
+    <div class="docdlg-head"><h2 data-i18n="cars.title">車種パラメータ</h2><button class="docdlg-x" data-close="dlgCars" data-i18n-aria="modal.close">×</button></div>
+    <div class="docdlg-body">
+      <p data-i18n-html="cars.intro">各車の物理パラメータ(<code>config.js</code> の DRIVE)です。これが挙動の正体。数値の意味は下の表で。</p>
+      <p data-i18n="cars.ovr.hint">組込の6車種も「編集」でローカルに上書きできます (実験用・このブラウザに保存)。出荷時の既定は変わらず、「既定に戻す」でいつでも完全に元へ戻せます。</p>
+      <div id="carParamTable"></div>
+      <div id="carOvrBar" class="carovr-bar"></div>
+      <h3 data-i18n="cars.paramMeaning">パラメータの意味</h3>
+      <div id="carParamDoc"></div>
+      <h3 data-i18n="cars.addOwn">独自の車種を追加する</h3>
+      <ul>
+        <li data-i18n="cars.add.li1">下に車種定義(JSON)を貼って「追加」するか、「フォームで作る」エディタを使うと、車種メニューに加わり走らせられます(このブラウザに保存)。</li>
+        <li data-i18n-html="cars.add.li2">一部の項目だけ指定すれば、残りはノーマルFRの既定値で埋まります。<code>key</code> と <code>name</code> は必須。</li>
+        <li data-i18n="cars.add.li3">例(軽量ハイグリップFRを定義):</li>
+      </ul>
+      <pre id="carJsonExample" class="carjson-ex"></pre>
+      <h3 data-i18n="cars.form.title">フォームで作る</h3>
+      <p data-i18n="cars.form.hint">スライダーや数値で各パラメータを設定できます。下の JSON とリアルタイムに双方向同期します。</p>
+      <div id="carForm"></div>
+      <div class="row" style="margin:4px 0 8px">
+        <button id="carFormFromJson" data-i18n="cars.form.fromJson">下の JSON をフォームに反映</button>
+      </div>
+      <textarea id="carJsonInput" class="carjson-in" spellcheck="false" data-i18n-placeholder="cars.add.placeholder" placeholder='{"key":"my_car","name":"マイ車","mass":1000,...}'></textarea>
+      <div class="row" style="margin-top:8px">
+        <button id="carAddBtn" class="primary" data-i18n="cars.add.btn">この車種を追加</button>
+        <button id="carShareBtn" data-i18n="cars.share.btn" title="" data-i18n-title="cars.share.title">🌐 GitHubで共有</button>
+        <button id="carClearBtn" data-i18n="cars.add.clear">独自車種をすべて削除</button>
+        <button id="carOvrSaveBtn" class="primary" hidden data-i18n="cars.ovr.save">組込に上書き保存</button>
+        <button id="carOvrCancelBtn" hidden data-i18n="cars.ovr.cancel">編集をやめる</button>
+        <span id="carAddMsg" class="carjson-msg"></span>
+      </div>
+      <h3 data-i18n="cars.list.title">登録済みの独自車種</h3>
+      <p data-i18n="cars.list.hint">各車種を個別に編集 (上の欄へ読込)・複製・削除できます。組込の6車種はこの一覧には出ません (上の車種パラメータ表「編集」で上書きできます)。</p>
+      <div id="customCarList"></div>
+      <p style="margin-top:10px;color:var(--text-faint);font-size:12px" data-i18n="cars.future">作った車種は「🌐 GitHubで共有」ボタンで投稿でき (プルリクエスト方式)、承認後は全利用者の車種メニューに「🌐 名前」として並びます。まずは自分のブラウザで自由に試せます。</p>
+    </div>
+  </dialog>
+
+  <!-- コミュニティ Q&A: 技術・ロジック・改良アイデアの質問/提案 -->
+  <dialog id="dlgAsk" class="docdlg">
+    <div class="docdlg-head"><h2 data-i18n="ask.title">質問・アイデアを投稿 (コミュニティ)</h2><button class="docdlg-x" data-close="dlgAsk" data-i18n-aria="modal.close">×</button></div>
+    <div class="docdlg-body">
+      <p data-i18n-html="ask.intro">走行ロジック・物理・プログラムの書き方・改良アイデアなど、<b>技術的な質問や提案</b>を投稿できます。
+        投稿は GitHub のディスカッション(Issue)に送られ、Fable 5 や他の利用者が読んで回答します。
+        みんなでアイデアを出し合って成長するのが目的です。</p>
+      <ul>
+        <li data-i18n-html="ask.li.example">例:「ヘアピンで膨らむFFを速くするには?」「逆ハンを実車で活かすには?」「この定数を変えたら速くなった」</li>
+        <li data-i18n-html="ask.li.account">投稿には GitHub アカウントが必要です(送信ボタンで GitHub の投稿画面が開きます)。</li>
+        <li data-i18n-html="ask.li.attach">📷 <b>画像・動画も添付できます。</b>送信後に開く GitHub の本文欄へ<b>ドラッグ&ドロップ</b>するだけ。状況が伝わりやすくなります。動きを見せたいときは<b>数枚のスクリーンショット</b>か、コース名・プログラム・設定など<b>再現手順</b>を文章で添えると確実です。</li>
+        <li data-i18n-html="ask.li.scope">⚠ <b>技術・ロジック・アイデアに限ります。</b>猥褻・誹謗中傷・個人攻撃・無関係な内容は自動チェックで弾かれ、GitHub 上でも削除されます。</li>
+      </ul>
+      <label class="ask-label" data-i18n="ask.label.title">タイトル(短く要点)</label>
+      <input id="askTitle" class="ask-title" type="text" maxlength="80" data-i18n-placeholder="ask.ph.title" placeholder="例: 下りヘアピンでFFが膨らむ対策は?">
+      <label class="ask-label" data-i18n="ask.label.body">内容(質問・提案・気づき)</label>
+      <textarea id="askBody" class="ask-body" spellcheck="false" data-i18n-placeholder="ask.ph.body" placeholder="状況・試したこと・知りたいこと・アイデアを具体的に。コードを貼ってもOK。"></textarea>
+      <div class="row" style="margin-top:8px">
+        <button id="askSendBtn" class="primary" data-i18n="ask.send">GitHub に投稿する</button>
+        <a id="askBrowse" href="https://github.com/RumiCar-group/RumiCar/issues" target="_blank" rel="noopener" data-i18n="ask.browse">みんなの質問・回答を見る ↗</a>
+        <span id="askMsg" class="carjson-msg"></span>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- ローカル開催 (Stage W / W4): クラス＋エントリー＋フィールド成立(補充≥3) → 公式レース。 -->
+  <dialog id="dlgEvent" class="docdlg">
+    <div class="docdlg-head"><h2 data-i18n="event.title">🏁 開催 (ローカル)</h2><button class="docdlg-x" data-close="dlgEvent" data-i18n-aria="modal.close">×</button></div>
+    <div class="docdlg-body">
+      <p class="event-intro" data-i18n-html="event.intro">クラス (ワンメイク/バランス/無制限) を決めてエントリーを集め、3台未満は補充車で成立させて公式レースとして走らせます。先回り警告はせず「走った結果」で適不適が分かります。</p>
+      <div class="event-config">
+        <label><span data-i18n="event.class">クラス</span>
+          <select id="evClass">
+            <option value="open" data-i18n="event.class.open">無制限 (Open)</option>
+            <option value="budget" data-i18n="event.class.budget">バランス (Budget)</option>
+            <option value="spec" data-i18n="event.class.spec">ワンメイク (Spec)</option>
+          </select></label>
+        <label id="evBudgetWrap" hidden data-i18n-title="event.budget.title" title="この予算ポイント以下のコストの車だけがエントリーできます (高性能ほど高コスト)"><span data-i18n="event.budget">予算</span> <input id="evBudget" type="number" min="20" max="200" step="5" value="60"></label>
+        <label id="evSpecWrap" hidden data-i18n-title="event.specCar.title" title="全車この規定車に固定して純粋にロジックで競います"><span data-i18n="event.specCar">規定車</span> <select id="evSpecCar"></select></label>
+        <label><span data-i18n="event.laps">周回</span> <input id="evLaps" type="number" min="1" max="30" step="1" value="3"></label>
+        <label data-i18n-title="event.recon.title" title="本番前に各車が単独でコースを試走する周回数 (0=試走なし)。開催記録に凍結され再現・検証されます"><span data-i18n="event.recon">試走</span> <select id="evRecon"><option value="0" selected>0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label>
+        <label class="chk"><input type="checkbox" id="evRejoin"> <span data-i18n="event.rejoin">クラッシュで復帰(+3秒)</span></label>
+      </div>
+      <div class="event-actions">
+        <button id="evAddFleet" data-i18n="event.addFleet" data-i18n-title="event.addFleet.title" title="今の車両編成 (各列のプログラム+車種) をエントリーに追加。クラス規定を満たさない車は弾かれます">＋ 現在の編成をエントリー</button>
+        <button id="evClear" data-i18n="event.clear">エントリー全消去</button>
+        <button id="evRace" class="primary" data-i18n="event.race" data-i18n-title="event.race.title" title="エントリーを締め切り、3台未満なら補充車で成立させて決定論レースを実行します">締切してレース 🏁</button>
+        <button id="evShare" data-i18n="event.share" data-i18n-title="event.share.title" title="今の設定で GitHub の races/ にイベント定義 (event.json) を新規作成する画面を開きます。コミットでプルリクエストになり全世界の公式大会になります">🌐 GitHubで公式開催</button>
+      </div>
+      <div id="evMsg" class="event-msg"></div>
+      <div id="evEntries" class="event-entries"></div>
+    </div>
+  </dialog>
+
+  <!-- 本番レース結果 + レースレポート (Stage W / W3)。内容は main.js が runRace の結果から生成する。 -->
+  <dialog id="dlgRace" class="docdlg">
+    <div class="docdlg-head"><h2 data-i18n="race.title">🏁 レース結果</h2><button class="docdlg-x" data-close="dlgRace" data-i18n-aria="modal.close">×</button></div>
+    <div class="docdlg-body">
+      <div id="raceMeta" class="race-meta"></div>
+      <canvas id="raceMap" class="race-map" width="520" height="300" role="img" data-i18n-aria="aria.canvas.raceMap"></canvas>
+      <div class="race-ghostbar"><button id="raceGhost" data-i18n="race.ghost" data-i18n-title="race.ghost.title" title="いまのレースをコース上で決定論リプレイします" hidden>👻 ゴースト再生</button></div>
+      <div id="raceResults" class="race-results"></div>
+    </div>
+  </dialog>
+
+  <!-- 公式レース (Stage W / W5): GitHub の races/ を一覧・閲覧、確定結果の表示、ローカル再実行検証、
+       エントリー (PR)。一覧/詳細/エントリー欄は main.js が fetchRace の結果から生成する。 -->
+  <dialog id="dlgOfficial" class="docdlg">
+    <div class="docdlg-head"><h2 data-i18n="official.title">🏆 公式レース (GitHub)</h2><button class="docdlg-x" data-close="dlgOfficial" data-i18n-aria="modal.close">×</button></div>
+    <div class="docdlg-body">
+      <p class="event-intro" data-i18n="official.intro">GitHub の races/ で開かれている公式レースです。締切で確定したエントリー列を決定論エンジンで再実行すれば、誰でも結果を検証できます。</p>
+      <div class="official-bar">
+        <label><span data-i18n="official.raceLabel">大会</span> <select id="ofRace"></select></label>
+        <button id="ofReload" data-i18n="official.reload">再読込</button>
+      </div>
+      <div id="ofMsg" class="event-msg"></div>
+      <div id="ofDetail" class="official-detail"></div>
+      <div id="ofEntry" class="official-entry" hidden>
+        <h3 data-i18n="official.entry.heading">この大会にエントリー (PR)</h3>
+        <p class="hint" data-i18n="official.entry.hint">現在の車 (アクティブな列のプログラム+車種) をエントリーします。車種定義 (carDef) を同梱するので独自車種でも参加できます。</p>
+        <div class="official-entryform">
+          <label><span data-i18n="official.entry.name">車両名</span> <input id="ofName" type="text" maxlength="40"></label>
+          <label><span data-i18n="official.entry.author">GitHub アカウント</span> <input id="ofAuthor" type="text" maxlength="40" placeholder="octocat"></label>
+          <label class="official-introlbl"><span data-i18n="official.entry.intro">解説 (任意・締切後に公開)</span> <textarea id="ofIntro" rows="2" maxlength="400" data-i18n-placeholder="official.entry.intro.ph" placeholder="あなたのロジックの工夫や狙いを書けます (締切後に公開されます)"></textarea></label>
+          <button id="ofSubmit" class="primary" data-i18n="official.entry.submit" data-i18n-title="official.entry.submit.title" title="エントリーを GitHub の races/<大会>/entries/ に新規ファイルとして作成する画面を開きます。コミットでプルリクエストになります">🌐 この大会にエントリー (PR)</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <!-- ランキング (Stage W / W6): クラス別ラダー＋ドライバープロフィール／称号。検証済の公式記録のみ。
+       本体 (ラダー表・プロフィール) は main.js が race_ladder の集計から生成する。 -->
+  <dialog id="dlgRankings" class="docdlg">
+    <div class="docdlg-head"><h2 data-i18n="rank.title">🏅 ランキング (公式記録)</h2><button class="docdlg-x" data-close="dlgRankings" data-i18n-aria="modal.close">×</button></div>
+    <div class="docdlg-body">
+      <p class="event-intro" data-i18n="rank.intro">GitHub の公式レース結果から集計したリーダーボードとドライバー称号です。検証済記録のみを反映します。</p>
+      <div class="official-bar">
+        <label><span data-i18n="rank.you.label">あなたの GitHub</span> <input id="rankYou" type="text" maxlength="40" data-i18n-placeholder="rank.you.ph" placeholder="octocat"></label>
+        <button id="rankYouSave" data-i18n="rank.you.save">記憶</button>
+        <button id="rankReload" data-i18n="rank.reload">再読込</button>
+      </div>
+      <div id="rankMsg" class="event-msg"></div>
+      <div id="rankBody" class="rank-body"></div>
+    </div>
+  </dialog>
+
+  <!-- ゴースト再生 (Stage W / W6): 記録の決定論リプレイをコース上に重ねる。trajectory は race_engine の
+       ghost オプション (観測のみ・byte 不変) で得る。アニメは UI のみ (物理非参加)。 -->
+  <dialog id="dlgGhost" class="docdlg">
+    <div class="docdlg-head"><h2 data-i18n="ghost.title">👻 ゴースト再生</h2><button class="docdlg-x" data-close="dlgGhost" data-i18n-aria="modal.close">×</button></div>
+    <div class="docdlg-body">
+      <p class="event-intro" data-i18n="ghost.intro">記録の決定論リプレイをコース上に重ねて表示します。複数の車を同じ時間軸で走らせ差を体感できます。</p>
+      <div id="ghostMeta" class="race-meta"></div>
+      <canvas id="ghostMap" class="race-map" width="520" height="300" role="img" data-i18n-aria="aria.canvas.ghostMap"></canvas>
+      <div class="ghost-bar">
+        <button id="ghostPlay" class="primary" data-i18n="ghost.pause">⏸ 一時停止</button>
+        <button id="ghostRestart" data-i18n="ghost.restart">↺ 最初から</button>
+        <span id="ghostClock" class="ghost-clock">0.0s</span>
+      </div>
+      <!-- AB11 (PX-004): オーバーテイク告知 (一時表示) ＋ 順位/車間(gap) リアルタイム表 -->
+      <div id="ghostFlash" class="ghost-flash" aria-live="polite"></div>
+      <div id="ghostStandings" class="ghost-standings"></div>
+      <div id="ghostLegend" class="ghost-legend"></div>
+    </div>
+  </dialog>
+
+  <!-- 大きなプログラムエディタ (車カードの「⤢ 拡大」から開く。行番号つき・カードと双方向同期) -->
+  <dialog id="dlgEditor" class="dlg-editor">
+    <div class="le-head">
+      <span id="leDot" class="le-dot"></span>
+      <b id="leTitle">プログラム編集</b>
+      <span id="leLang" class="le-lang"></span>
+      <span id="leState" class="le-state"></span>
+      <button id="leSave" class="le-btn" data-i18n="cc.share" data-i18n-title="cc.share.title" title="今のプログラムを別名で GitHub に保存 (プルリクエスト)。承認されると全利用者が選べます">🌐保存</button>
+      <button id="leCopy" class="le-btn" data-i18n="editor.copy" data-i18n-title="editor.copy.title" title="全文をクリップボードへコピー">コピー</button>
+      <button id="leClose" class="le-btn" data-i18n="editor.close" data-i18n-title="editor.close.title" title="閉じる">閉じる ✕</button>
+    </div>
+    <div class="le-body">
+      <div id="leGutter" class="le-gutter" aria-hidden="true"></div>
+      <textarea id="leText" class="le-text" spellcheck="false" wrap="off"></textarea>
+    </div>
+    <div class="le-foot"><span id="leMsg" class="le-msg">編集はこの場で即反映されます（カード側と同期）。</span></div>
+  </dialog>
+
+  <main>
+    <section class="stage loading">
+      <canvas id="course" role="img" data-i18n-aria="aria.canvas.course"></canvas>
+      <!-- 走行状態 (周回/速度/状態) のスクリーンリーダー向け polite live region (AF3)。視覚的には非表示。 -->
+      <div id="driveStatus" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+      <!-- 起動ローダー (案C: コースが描かれ車が1周)。静的HTML/CSS＝FCPで即表示。初回コース描画で JS が .hidden を付与してフェード退場。 -->
+      <div id="courseLoader" aria-hidden="true">
+        <div class="cl-trackwrap">
+          <svg class="cl-track" viewBox="0 0 200 120" aria-hidden="true">
+            <path class="cl-lane" d="M40,20 H160 A40,40 0 0 1 160,100 H40 A40,40 0 0 1 40,20 Z"/>
+            <path class="cl-draw" d="M40,20 H160 A40,40 0 0 1 160,100 H40 A40,40 0 0 1 40,20 Z"/>
+          </svg>
+          <svg class="cl-car" width="18" height="10" viewBox="0 0 18 10" aria-hidden="true">
+            <rect x="1" y="2" width="16" height="6" rx="2" fill="#22d3ee"/>
+            <circle cx="5" cy="8" r="2" fill="#e7e9ee"/><circle cx="13" cy="8" r="2" fill="#e7e9ee"/>
+          </svg>
+        </div>
+        <div class="cl-word">RumiCar</div>
+      </div>
+      <div class="viewbar">
+        <span class="hint" data-i18n="view.hint">🔍 ＋／－ ボタンで拡大縮小・拡大時はドラッグで移動</span>
+        <span class="spacer"></span>
+        <button id="viewOut" class="viewstep" data-i18n-title="view.out.title" title="コースを縮小">－</button>
+        <span class="viewzoom" id="viewZoom" data-i18n-title="view.zoom.title" title="現在の表示倍率">1.0×</span>
+        <button id="viewIn" class="viewstep" data-i18n-title="view.in.title" title="コースを拡大">＋</button>
+        <button id="viewReset" data-i18n="view.reset" data-i18n-title="view.reset.title" title="表示倍率と位置を全体表示（等倍）に戻す">全体表示 ⤢</button>
+      </div>
+      <div class="controls">
+        <button id="run" class="primary" data-i18n="ctl.run">自動 ▶</button>
+        <button id="pause" data-i18n="ctl.pause">一時停止 ⏸</button>
+        <button id="step" data-i18n="ctl.step">ステップ ⏭</button>
+        <button id="stop" data-i18n="ctl.stop">停止 ■</button>
+        <button id="reset" data-i18n="ctl.reset">初期化 ↺</button>
+        <span class="ctl-status" data-i18n-title="ctl.status.title" title="選択中の車両の状態と速度。速度は体感に合わせた相対補正表示 (サーキット≒350 / 峠≒180 km/h を全開の目安)"><span data-i18n="ctl.state">状態:</span><b id="state">停止</b><span class="ctl-spd"><span data-i18n="ctl.speed">速度:</span><b id="spd">0</b></span></span>
+        <span id="practiceFlag" class="practice-flag" hidden data-i18n="ctl.practice" data-i18n-title="ctl.practice.title" title="自動走行は周回上限で止まらない無限の練習走行です。順位確定・チェッカー・勝者演出のある「終わる競争」は「🏁 レース」を使ってください。">🏃 練習走行（無限）</span>
+        <label class="speedctl"><span data-i18n="ctl.speedScale">速度</span> <input id="speed" type="range" min="0.1" max="3" step="0.1" value="3"><b id="speedv">3.0×</b></label>
+        <span class="manual">
+          <span data-i18n="ctl.manual">手動:</span>
+          <button id="mLeft">←</button>
+          <button id="mFwd">↑</button>
+          <button id="mBack">↓</button>
+          <button id="mRight">→</button>
+          PWM <input id="pwm" type="range" min="0" max="255" value="200"><b id="pwmv">200</b>
+        </span>
+      </div>
+      <!-- 本番レース (Stage W / W3): 現在の車両編成で決定論レース (race_engine) を実行し結果+レポートを表示 -->
+      <div class="controls racebar">
+        <button id="raceRun" class="primary" data-i18n="race.run" data-i18n-title="race.run.title" title="現在の車両編成 (各車のプログラム+車種) で決定論レースを実行し、順位・タイムとレースレポートを表示します。固定60Hz・ノイズOFF・処理順固定で同じ結果を再現できます (公式記録の土台)">🏁 レース</button>
+        <button id="eventOpen" data-i18n="event.open" data-i18n-title="event.open.title" title="開催 (ローカル): クラス (ワンメイク/バランス/無制限) を決めてエントリーを集め、3台未満は補充車で成立させて公式レースとして走らせます">📋 開催</button>
+        <button id="officialOpen" data-i18n="official.open" data-i18n-title="official.open.title" title="GitHub で開かれている公式レースを一覧・閲覧し、エントリーや確定結果 (公式記録) を見ます。結果はローカルで再実行して検証できます">🏆 公式レース</button>
+        <button id="rankOpen" data-i18n="rank.open" data-i18n-title="rank.open.title" title="クラス別・コース別のリーダーボード (コースレコード・表彰台) とドライバープロフィール・称号を表示します。検証済の公式記録のみを反映します">🏅 ランキング</button>
+        <label class="racelaps" data-i18n-title="race.laps.title" title="完走に要する周回数"><span data-i18n="race.laps">周回</span> <input id="raceLaps" type="number" min="1" max="30" step="1" value="3"></label>
+        <label class="racelaps" data-i18n-title="race.recon.title" title="レース前に各車が単独でコースを試走(recon)する周回数。0=従来(試走なし)。試走で覚えた地図を持って本番へ入るため、コースを学習するプログラム(Recon Racer 等)は本番1周目から先読み走行できます。試走は計時外・他車なし・決定論的に再現されます"><span data-i18n="race.recon">試走</span> <select id="raceRecon"><option value="0" selected>0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label>
+        <label class="chk" data-i18n-title="race.rejoin.title" title="ON=クラッシュしても3秒ペナルティを課して自動復帰し走り続ける / OFF=クラッシュでリタイア(DNF)。どちらでも結果は決定論的に再現できます"><input type="checkbox" id="raceRejoin"> <span data-i18n="race.rejoin">クラッシュで復帰(+3秒)</span></label>
+        <label class="chk" data-i18n-title="race.watch.title" title="ON=🏁レース後に自動で観戦リプレイ(決定論結果をコース上で再生)を始める / OFF=結果のみ(👻ボタンで手動再生)"><input type="checkbox" id="raceWatch" checked> <span data-i18n="race.watch">観戦リプレイ(自動)</span></label>
+        <label class="chk" data-i18n-title="race.sfx.title" title="ON=発走(3-2-1)・周回・ゴール・クラッシュの最小限の効果音を鳴らす / OFF=完全無音。レース計算には影響しません"><input type="checkbox" id="sfxOn"> <span data-i18n="race.sfx">効果音</span></label>
+        <label class="chk" data-i18n-title="ctl.refline.title" title="ON=走行の軌跡をなめらか化した「お手本ライン」(破線)を重ねて表示。3値(左右中央)操舵で生じる蛇行に対する、理想のなめらかなラインの目安です(表示のみ・走りには影響しません)"><input type="checkbox" id="refLine"> <span data-i18n="ctl.refline">お手本ライン</span></label>
+        <span class="hint race-hint" data-i18n="race.hint">決定論レース。先回り警告はしません — コースへの適不適は「走った結果」(クラッシュ地点・周回数・μ円使用率・β) で分かります。</span>
+      </div>
+      <div class="controls">
+        <label class="chk"><input type="checkbox" id="optRays" checked> <span data-i18n="opt.rays">センサーレイ</span></label>
+        <label class="chk"><input type="checkbox" id="optLabels"> <span data-i18n="opt.labels">距離ラベル</span></label>
+        <label class="chk"><input type="checkbox" id="optGrid"> <span data-i18n="opt.grid">グリッド</span></label>
+        <label class="chk"><input type="checkbox" id="optTimestamp"> <span data-i18n="opt.timestamp">ログ時刻</span></label>
+        <label class="chk"><input type="checkbox" id="optDepth" checked> <span data-i18n="opt.depth">一人称ビュー</span></label>
+        <label class="speedctl" data-i18n-title="opt.carScale.title" title="コースに対する車体の大きさ (大きいほど狭く感じる)。大きいコース (フルスケール競技グラウンド等) で車体が小さすぎて見えにくいときは値を上げる"><span data-i18n="opt.carScale">車体スケール</span> <input id="carScale" type="range" min="0.5" max="4" step="0.1" value="0.8"><b id="carScalev">0.8×</b></label>
+        <label class="speedctl" data-i18n-title="opt.trail.title" title="走行軌跡の保持量 (点数。点間隔 約1cm)"><span data-i18n="opt.trail">軌跡</span> <input id="trailLen" type="range" min="200" max="20000" step="200" value="4000"><b id="trailLenv">~40m</b></label>
+      </div>
+
+      <!-- コース関係 (選択・説明・編集) は一人称ビューの上にまとめる -->
+      <div class="coursebar">
+        <div class="row">
+          <label><span data-i18n="course.label">コース:</span> <select id="courseSel"></select></label>
+          <button id="editToggle" data-i18n="course.edit">コース編集 ✎</button>
+          <span id="courseBadge" class="course-badge" hidden></span>
+          <span id="elevBadge" class="elev-badge" hidden></span>
+        </div>
+        <div id="courseDesc" class="course-desc"></div>
+
+        <div id="editorPanel" class="editor hidden">
+          <div class="row">
+            <span class="etitle" data-i18n="ed.mode">編集モード:</span>
+            <label class="chk" data-i18n-title="ed.wall.title" title="2 点クリックで 1 本の直線の壁を引く (グリッドにスナップ)"><input type="radio" name="emode" value="wall" checked> <span data-i18n="ed.wall">壁</span></label>
+            <label class="chk" data-i18n-title="ed.draw.title" title="ドラッグした軌跡を、点を直線でつないだ壁列にする (カクカク・スナップなし)"><input type="radio" name="emode" value="draw"> <span data-i18n="ed.draw">連続描画(直線つなぎ)</span></label>
+            <label class="chk" data-i18n-title="ed.curve.title" title="ドラッグした軌跡をスプライン(Catmull-Rom)でなめらかな曲線に整えてから壁にする"><input type="radio" name="emode" value="curve"> <span data-i18n="ed.curve">曲線(なめらか)</span></label>
+            <label class="chk" data-i18n-title="ed.poly.title" title="クリックで点を 1 つずつ置き、点間を直線で自動連結。ダブルクリックで確定して壁列にする (グリッドにスナップ)"><input type="radio" name="emode" value="poly"> <span data-i18n="ed.poly">折れ線(クリック)</span></label>
+            <label class="chk" data-i18n-title="ed.start.title" title="位置→向きの 2 点クリックでスタート地点と進行方向を決める"><input type="radio" name="emode" value="start"> <span data-i18n="ed.start">スタート</span></label>
+            <label class="chk" data-i18n-title="ed.finish.title" title="2 点クリックでフィニッシュライン(ゴール)を引く"><input type="radio" name="emode" value="finish"> <span data-i18n="ed.finish">フィニッシュ</span></label>
+            <label class="chk" data-i18n-title="ed.erase.title" title="壁をクリックすると、その 1 本を消す"><input type="radio" name="emode" value="erase"> <span data-i18n="ed.erase">消去</span></label>
+            <label class="chk" data-i18n-title="ed.rect.title" title="ドラッグで矩形範囲を囲み、範囲に交差する壁をまとめて消す (元に戻すで一括復元)"><input type="radio" name="emode" value="rect"> <span data-i18n="ed.rect">範囲消去(矩形)</span></label>
+          </div>
+          <div class="hint" data-i18n-html="ed.hint.modes"><b>連続描画(直線つなぎ)</b> と <b>曲線(なめらか)</b> はどちらもドラッグで線を描く点は同じで、違いは仕上がりだけ: <b>連続描画</b>=描いた点をそのまま直線でつなぐ(角ばる) / <b>曲線</b>=描いた線をスプラインでなめらかな曲線に整える。<br><b>折れ線(クリック)</b>=ドラッグせず、クリックで点を 1 つずつ置いていき、<b>ダブルクリックで確定</b>(直前の点列を直線でつないだ壁列になる)。<br>壁/フィニッシュ=2 点クリック / スタート=位置→向きの 2 点 / 消去=壁をクリック / <b>範囲消去(矩形)</b>=ドラッグで囲んだ矩形に重なる壁を一括で消す(<b>元に戻す</b>で一括復元)。壁・スタート・フィニッシュ・折れ線はグリッドにスナップ、連続描画・曲線・範囲消去はスナップなし。</div>
+          <div class="row">
+            <span class="etitle" data-i18n="ed.size">寸法を決める:</span>
+            <input id="edW" type="number" class="dimin" min="1" max="60" step="0.1" data-i18n-title="ed.size.title" title="枠の大きさ (メートル・1〜60)。先に決めてから描けます">
+            <span aria-hidden="true">×</span>
+            <input id="edH" type="number" class="dimin" min="1" max="60" step="0.1" data-i18n-title="ed.size.title" title="枠の大きさ (メートル・1〜60)。先に決めてから描けます">
+            <span>m</span>
+            <button id="edSize" data-i18n="ed.size.apply">この大きさにする</button>
+            <span class="hint" style="margin:0" data-i18n="ed.size.hint">先に枠の大きさを決めてから描けます (1 マス = 5 cm)</span>
+          </div>
+          <div class="row"><span class="etitle" data-i18n="ed.dims">コース寸法:</span> <b id="edDims">—</b> <span class="hint" style="margin:0" data-i18n="ed.dims.hint">(横 W × 縦 H メートル。車体は約 0.19×0.08 m)</span></div>
+          <div class="row">
+            <button id="edUndo" data-i18n="ed.undo">元に戻す</button>
+            <button id="edClear" data-i18n="ed.clear">壁を全消去</button>
+            <input id="edName" type="text" data-i18n-placeholder="ed.name.ph" placeholder="コース名">
+            <button id="edSave" data-i18n="ed.save">保存</button>
+          </div>
+          <div class="row">
+            <button id="edExport" data-i18n="ed.export">JSON 書出</button>
+            <label class="filebtn"><span data-i18n="ed.import">JSON 読込</span><input id="edImport" type="file" accept=".json"></label>
+            <button id="edShare" data-i18n="ed.share" data-i18n-title="ed.share.title" title="このコースを GitHub に投稿 (プルリクエスト)。承認されると全利用者が選べます">🌐 GitHubで共有</button>
+            <button id="edDelete" data-i18n="ed.delete">保存コース削除</button>
+            <button id="edApply" class="primary" data-i18n="ed.apply">適用して走行へ</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="depthwrap" id="depthWrap">
+        <div class="depthtitle"><span data-i18n="depth.title">DEPTH VIEW (一人称)</span> — <b id="depthCar">A</b> <span data-i18n="depth.pov">の視点</span>
+          <span class="depth-sensors" data-i18n-title="depth.sensors.title" title="選択車の測距 (左/中央/右、後方は任意装備時) と位置。なぜこの挙動かを読み解く手がかり">
+            L:<b id="sL">-</b> C:<b id="sC">-</b> R:<b id="sR">-</b> <b id="sB" class="rear-read"></b> <b id="sRange" class="depth-range"></b> <span id="pos">x=0 y=0</span></span>
+        </div>
+        <canvas id="depth" width="560" height="220" role="img" data-i18n-aria="aria.canvas.depth"></canvas>
+        <!-- 峠(高低差)コース用の立体プレビュー。高低差を斜め投影で表現する。 -->
+        <canvas id="elev3d" class="elev3d" width="560" height="150" hidden role="img" data-i18n-aria="aria.canvas.elev3d"></canvas>
+      </div>
+    </section>
+
+    <section class="side">
+      <!-- 車両: 列を横に並べて同時比較。各列に 色・測距・プログラム・シリアル を縦に表示 -->
+      <div class="fleet">
+        <div class="fleet-head">
+          <span class="fleet-title" data-i18n="fleet.title">車両 (横に並べて同時比較)</span>
+          <label class="chk"><input type="checkbox" id="optInteract" checked> <span data-i18n="fleet.interact">他車を障害物にする</span></label>
+          <label class="chk" data-i18n-title="fleet.recover.title" title="壁に当たっても恒久停止せず、後退して切り返し自動復帰します。既定ON=クラッシュしても走り続けるので同じ時間で多く走れ、失敗は走行軌跡で分かります。OFF(恒久停止=ラップタイム計測向け)にすると保存され次回も維持されます"><input type="checkbox" id="optRecover" checked> <span data-i18n="fleet.recover">衝突で自動復帰(切り返し)</span></label>
+          <label class="chk" data-i18n-title="fleet.rear.title" title="任意装備の後方センサーを有効化(実機はI2Cアドレス確保済で追加可能)。RC_read(BACK)/sensor3 が使え、追走車の察知などに使えます"><input type="checkbox" id="optRear"> <span data-i18n="fleet.rear">後方センサー(任意)</span></label>
+          <label class="chk" data-i18n-title="fleet.encoder.title" title="任意装備の車輪エンコーダを有効化(実機は車輪に追加可能)。RC_wheel_speed(FRONT/REAR) で前/後軸の車輪面速度[m/s]が読め、前後の差からスリップ率が分かる。競技(フルスケール)のトラクション制御/ABS に使う"><input type="checkbox" id="optEncoder"> <span data-i18n="fleet.encoder">車輪エンコーダ(任意)</span></label>
+          <label class="chk" data-i18n-title="fleet.noise.title" title="実機(VL53L0X)相当の測距ノイズと時々の欠測(タイムアウト)を ToF に注入する。ONにすると前方3センサー(後方有効時は後方も)の値が距離に応じて揺れ、時々無効値(範囲外)になる。学習プログラムが読む値にも効くので『simで動く=実機でも頑健か』を試せる。既定OFF=理想値"><input type="checkbox" id="optNoise"> <span data-i18n="fleet.noise">センサーノイズ(実機相当)</span></label>
+          <label class="chk" data-i18n-title="fleet.hold.title" title="実機(VL53L0X)相当の測距の『遅さ』を再現する(sample-and-hold・既定OFF)。実機ToFは1計測に20〜33ms(約30Hz)かかり、理想センサー(遅延0・無制限更新)と違う。ONにすると1/30秒が経つまで前回の測距値を保持する=画面のコーンが実機の更新レートでカクつき、学習プログラムの見え方と一致する。多数回読んで平均するとノイズを人工的に消せる裏技も同時に塞ぐ(保持中は同じ値=平均しても縮まらない)。既定OFF=理想の即時更新"><input type="checkbox" id="optHold"> <span data-i18n="fleet.hold">センサー更新遅延(実機相当)</span></label>
+          <label class="chk" data-i18n-title="fleet.cvd.title" title="ON=赤緑が見分けにくい色覚特性に配慮した配色に切り替え、センサーレイを破線・ヒット点を四角にして色だけに頼らず形状でも区別できるようにします(表示のみ・走りや物理には影響しません)。既定OFF=従来配色"><input type="checkbox" id="optCvd"> <span data-i18n="fleet.cvd">色覚セーフ配色</span></label>
+          <label class="chk" data-i18n-title="fleet.eng.title" title="物理エンジンを選ぶ。動力学モデル (既定)=横向き90°超のドリフト/バックエントリーが可能なシングルトラック。クラシック=キネマティック自転車モデル (従来挙動)。精密 v2=4輪 two-track の精密動力学 (Stage AO・フルスケール推奨)。切替で車は一度リセットされます"><span data-i18n="fleet.eng">物理エンジン</span> <select id="optPhysMode"><option value="standard" data-i18n="fleet.eng.std">クラシック (キネマティック)</option><option value="dynamic" selected data-i18n="fleet.eng.dyn">動力学モデル (既定)</option><option value="v2" data-i18n="fleet.eng.v2">精密 v2</option></select></label><button type="button" class="infohint" data-pm="models" data-i18n-title="fleet.eng.info" title="このモデルの解説を開く (運動方程式)">ⓘ</button>
+          <label class="chk" data-i18n-title="fleet.tire.title" title="装着タイヤを選ぶ。ノーマル=ゴム/スリック (グリップ・通常は滑らない)。スリップ=硬質プラ/ハードコンパウンドの疑似ドリフトタイヤ (グリップが低く、全開で後輪が空転して滑り出す=卓上でもドリフト練習ができる)。精密 v2 エンジンでのみ効きます (他のエンジンは無視)。実機の『タイヤ交換』に相当します。切替で車は一度リセットされます"><span data-i18n="fleet.tire">タイヤ</span> <select id="optTire"><option value="normal" selected data-i18n="fleet.tire.normal">ノーマル (グリップ)</option><option value="slip" data-i18n="fleet.tire.slip">スリップ (ドリフト)</option></select></label>
+          <label class="chk" data-i18n-title="fleet.wear.title" title="タイヤの熱・摩耗をシミュレートする(opt-in・既定OFF)。ONにすると激しい滑り(ドリフト/スピン/急制動)ほど接地タイヤが発熱・摩耗し、限界グリップが徐々に目減りする(合計効果は10%以内=支配しない設計)。とくに『ドリフトは後輪を消耗する』ため、常時ドリフト戦略は長丁場で自滅しうる=タイヤは『使いどころを選ぶ戦略資源』になります。HUDに輪ごとの温度/摩耗/摩擦円利用率が出ます。精密 v2 エンジンでのみ効きます(他は無視)。切替で新品タイヤへリセット"><input type="checkbox" id="optWear"> <span data-i18n="fleet.wear">タイヤ摩耗</span></label>
+          <label class="chk" data-i18n-title="fleet.regime.title" title="物理スケールの領域。同じ動力学エンジンで卓上(実機相当)〜フルスケール・レース(実車350km/h)まで扱う。卓上/中スケールは動的相似で支配比 Ay*=(v²/R)/(μg) を不変に保つ(同じプログラムが同じ操作で滑り出す)。フルスケールは等方実μ+空力ダウンフォースで「速度=グリップ」(速いほど曲がれる)。車サイズ・ToFレンジが連動。車は一度リセットされます"><span data-i18n="fleet.regime">領域</span> <select id="regimeSel"><option value="tabletop" data-i18n="fleet.regime.tabletop">卓上 (実機相当)</option><option value="midscale" data-i18n="fleet.regime.midscale">中スケール (屋外RC)</option><option value="fullscale" data-i18n="fleet.regime.fullscale">フルスケール・レース (350km/h)</option></select></label><button type="button" class="infohint" data-pm="regime" data-i18n-title="fleet.regime.info" title="領域(スケール)と動的相似の解説を開く">ⓘ</button>
+          <button id="carAdd" data-i18n="fleet.add">＋ 車両追加</button>
+        </div>
+        <div id="fleetCols" class="fleet-cols"></div>
+        <!-- RumiCar サンプル ファイラー (列の「参照」で開き、その車へ取込) -->
+        <div id="repoFiler" class="filer" hidden>
+          <div class="filer-head">
+            <span class="filer-title"><span data-i18n="filer.title.pre">RumiCar サンプル参照 →</span> <b id="repoTarget">A</b> <span data-i18n="filer.title.post">へ取込 (GitHub: RumiCar-group/RumiCar)</span></span>
+            <button id="repoClose" class="filer-x" data-i18n-title="filer.close.title" data-i18n-aria="modal.close" title="閉じる">×</button>
+          </div>
+          <div id="repoPath" class="filer-path"></div>
+          <ul id="repoList" class="filer-list"></ul>
+        </div>
+      </div>
+
+      <div class="logwrap">
+        <div class="logtitle" data-i18n="log.title">システムログ</div>
+        <pre id="log"></pre>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>

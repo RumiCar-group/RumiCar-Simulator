@@ -1,0 +1,69 @@
+# RumiCar Simulator — スタンドアロン構成 (WordPress 不要・新規サーバー用)。
+#
+# 使い方:
+#   cd deploy/standalone
+#   docker compose up -d --build
+#   → http://<ホスト>:8090/simulator/
+#
+# 公開ポートは SIM_PORT で変更できる:
+#   SIM_PORT=80 docker compose up -d --build
+#
+# 設計上の注意:
+#  ・container_name / image タグを固定していない。固定すると同一ホスト上の
+#    既存 rumicar-simulator (本番統合構成) と衝突するため、compose の
+#    プロジェクト名前空間に委ねる。同一ホストで両方を並走させても衝突しない。
+#  ・ネットワークも本構成専用を compose に作らせる (本番の外部 rumicar-net には
+#    参加しない)。単体で完結させ、他構成へ影響させないため。
+name: rumicar-sim-standalone
+
+services:
+  # 静的配信本体。Simulator/Dockerfile をそのままビルドする (正本と同一イメージ)。
+  simulator:
+    build:
+      context: ../../Simulator
+      dockerfile: Dockerfile
+    # public/ をマウントして編集を即反映させる (ページ再読込のみで反映・再ビルド不要)。
+    # イメージにも COPY 済みなので、マウントを外しても動作する (フォールバック)。
+    volumes:
+      - ../../Simulator/public:/usr/share/nginx/html:ro
+    networks:
+      - sim
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # /simulator/ プレフィックスを本番と同じ形で提供するリバースプロキシ。
+  proxy:
+    image: nginx:1.27-alpine
+    ports:
+      - "${SIM_PORT:-8090}:80"
+    volumes:
+      - ./nginx-simulator.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - sim
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "-T", "3", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    depends_on:
+      simulator:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  sim:

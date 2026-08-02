@@ -1,0 +1,26 @@
+# RumiCar Simulator サービス。RumiCar プラットフォームの rumicar-net に参加する。
+# 明示的プロジェクト名で他プロジェクトと衝突させない。
+name: rumicar-sim
+services:
+  simulator:
+    build: .
+    image: rumicar-simulator
+    container_name: rumicar-simulator
+    # public/ 全体をボリュームマウントで外出し。CSS/JS/HTML/courses.json を編集→
+    # ページ再読込で即反映 (再ビルド・再起動不要)。イメージにも COPY 済みなので
+    # 未マウントでも動作する (フォールバック)。
+    volumes:
+      - ./public:/usr/share/nginx/html:ro
+    networks:
+      - rumicar-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+
+networks:
+  rumicar-net:
+    external: true

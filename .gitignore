@@ -1,0 +1,34 @@
+# Python ツール用 venv (再生成可能・大容量)
+.venv-tools/
+**/__pycache__/
+*.pyc
+
+# 依存
+node_modules/
+
+# 検証用スクリーンショット・動画・Playwright 出力
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.mp4
+*.webm
+videos/
+**/.playwright-mcp/
+
+# ローカルエージェント設定・一時物
+**/.claude/
+.DS_Store
+*.log
+*.tmp
+
+# 私とエージェントの情報交換用ファイル (システム用ではない・追跡しない)
+/docs/共有メッセージ.txt
+/docs/block_workflow_setup_brief_1.md
+/docs/wf_setup_instruction.md
+
+# GitHub PAT の平文ファイル (絶対に追跡・push しない。push すると GitHub がトークンを即失効させる)
+**/PAT*.docx
+
+# GitHub PAT の平文ファイル (RumiCar-group Issues 投稿用・絶対に追跡・push しない)
+**/aaa
