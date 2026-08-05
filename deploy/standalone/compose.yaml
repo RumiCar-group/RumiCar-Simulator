@@ -17,15 +17,15 @@
 name: rumicar-sim-standalone
 
 services:
-  # 静的配信本体。Simulator/Dockerfile をそのままビルドする (正本と同一イメージ)。
+  # 静的配信本体。リポジトリ直下の Dockerfile をそのままビルドする (正本と同一イメージ)。
   simulator:
     build:
-      context: ../../Simulator
+      context: ../..
       dockerfile: Dockerfile
     # public/ をマウントして編集を即反映させる (ページ再読込のみで反映・再ビルド不要)。
     # イメージにも COPY 済みなので、マウントを外しても動作する (フォールバック)。
     volumes:
-      - ../../Simulator/public:/usr/share/nginx/html:ro
+      - ../../public:/usr/share/nginx/html:ro
     networks:
       - sim
     healthcheck:

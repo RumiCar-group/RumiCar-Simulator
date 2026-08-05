@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# .githooks/pre-commit — 公開リポジトリ RumiCar-group/RumiCar-Simulator の公開ガード。
+#
+# ══════════════════════════════════════════════════════════════════════════════
+# なぜこれが要るのか（構成 C の設計上の要）
+#   以前は「作業ツリー(非公開) → export_public.sh → 公開リポジトリ」という形で、
+#   公開されるものは **公開側 git ls-files（許可リスト）** だけだった。何を置こうと
+#   許可リストに無ければ原理的に出ない ＝ 既定は deny。
+#
+#   構成 C では作業ツリーそのものが公開リポジトリになり、その門番が消える。
+#   放っておくと既定が allow に裏返り、内部メモを置いて commit しただけで公開されうる。
+#
+#   このフックは **許可リストを commit 時に復活させる**。
+#     ① 新規追加ファイル(A) のパスが公開許可パターンに合致しなければ拒否（= 新規は deny by default）
+#     ② 追加行に機微パターンがあれば拒否（旧 export_public.sh の監査を引き継ぐ）
+#   既存ファイルの編集(M) は自由に通す。日々の開発を邪魔しない。
+#
+# 有効化（clone 直後に1回。.git/hooks は追跡外なので再クローンで消えるため）:
+#   git config core.hooksPath .githooks
+#
+# 意図的に例外を通したいとき（新しい種類のファイルを公開対象に加えるとき）:
+#   1. まず ALLOW に行を足して commit する（＝方針の変更が履歴に残る）
+#   2. その上で対象ファイルを commit する
+#   環境変数での一時無効化は用意しない。「今回だけ」は事故の入口になる。
+# ══════════════════════════════════════════════════════════════════════════════
+set -euo pipefail
+export LC_ALL=C
+
+# ── 公開してよいパス（新規追加ファイルに適用）───────────────────────────────
+# ここに無いパスの **新規追加** は拒否される。編集・削除は対象外。
+ALLOW='^(README\.md|LICENSE|REBUILD\.md)$
+(^|/)\.gitignore$
+(^|/)\.githooks/
+^deploy/
+^public/
+^browser/
+^wf_[A-Za-z0-9_]+\.(mjs|json)$
+^(Dockerfile|compose\.yaml|nginx-default\.conf)$
+^(gen_[a-z]+_files|validate_courses)\.mjs$
+^docs/physics_model(\.en)?\.md$
+^docs/(stage_ao/bench_courses|phase_w/official_sample_event)\.json$'
+
+# ── 公開してはいけない内容（追加行に適用）────────────────────────────────────
+# 旧 export_public.sh:47 と同じ観点。ホスト固有パス・非公開リポジトリ名・資格情報。
+SENSITIVE='cpo\.tokyo|/home/y-chiba|@chibaplanningoffice|chibaplanningoffice|ghp_|github_pat_|-internal|BEGIN [A-Z ]*PRIVATE KEY|Authorization: *token'
+
+fail=0
+note() { printf '%s\n' "$*" >&2; }
+
+# ── ① 新規追加ファイルのパス検査（deny by default）──────────────────────────
+# ALLOW は 1 行 1 パターン。どれか 1 つに合致すれば公開してよいパスとみなす。
+allowed_path() {
+  local f="$1" pat
+  while IFS= read -r pat; do
+    [ -z "$pat" ] && continue
+    printf '%s' "$f" | grep -qE "$pat" && return 0
+  done <<< "$ALLOW"
+  return 1
+}
+
+while IFS= read -r f; do
+  [ -z "$f" ] && continue
+  allowed_path "$f" || { note "✗ 公開対象外のパスを新規追加しようとしています: $f"; fail=1; }
+done < <(git diff --cached --name-only --diff-filter=A)
+
+# ── ② 追加行の機微パターン検査 ──────────────────────────────────────────────
+# `.githooks/` 自身は検査対象から外す。**このファイルが機微パターンの定義そのものを含む**ため、
+# 素直に走らせると自分自身を拒否して設置できない（実際に一度そうなった）。
+# 例外はこの1ディレクトリだけに閉じてある: 中身はガードの実装だけで、常に人の目を通る場所である。
+hits="$(git diff --cached -U0 -- . ':(exclude).githooks/' ':(exclude)*/.githooks/' \
+        | grep '^+' | grep -vE '^\+\+\+' | grep -inE "$SENSITIVE" || true)"
+if [ -n "$hits" ]; then
+  note "✗ 追加行に機微パターンがあります（先頭20件）:"
+  printf '%s\n' "$hits" | head -20 | sed 's/^/    /' >&2
+  fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+  note ""
+  note "── commit を中止しました（公開リポジトリのガード: .githooks/pre-commit）──"
+  note "  内部メモ・運用スクリプト・資格情報の類は、この作業ツリーではなく"
+  note "  1 つ上の非公開リポジトリ側に置いてください。"
+  note "  公開対象を意図的に増やすときは .githooks/pre-commit の ALLOW を先に更新すること。"
+  exit 1
+fi
+exit 0

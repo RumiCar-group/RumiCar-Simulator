@@ -16,7 +16,7 @@
 
 再構築を難しくする要素が無いことを確認済みです。
 
-- **バイナリ資産ゼロ** — `Simulator/public/` は JS 40件 + `index.html` + `style.css` + `data/courses.json` のみ。画像は1枚も使っておらず、車体・コース・エフェクトはすべて実行時に手続き的に描画されます
+- **バイナリ資産ゼロ** — `public/` は JS 40件 + `index.html` + `style.css` + `data/courses.json` のみ。画像は1枚も使っておらず、車体・コース・エフェクトはすべて実行時に手続き的に描画されます
 - **外部ライブラリ・CDN 依存ゼロ** — npm パッケージも CDN 参照もありません。`node_modules` は配信・実行のどちらにも不要です
 - **ビルドが単純** — `nginx:alpine` に `public/` を `COPY` するだけです
 
@@ -42,8 +42,8 @@
 
 | 機能 | 変更箇所 |
 |---|---|
-| コース/プログラム/車種の一覧取得・共有 (🌐) | `Simulator/public/js/loader.js` の `SAMPLE_REPO`(`{owner, repo, branch}`) |
-| 質問・提案 (💬) | `Simulator/public/js/main.js` の `helpAsk` クリックハンドラ内の GitHub Issue URL (`RumiCar-group/RumiCar/issues/new`) |
+| コース/プログラム/車種の一覧取得・共有 (🌐) | `public/js/loader.js` の `SAMPLE_REPO`(`{owner, repo, branch}`) |
+| 質問・提案 (💬) | `public/js/main.js` の `helpAsk` クリックハンドラ内の GitHub Issue URL (`RumiCar-group/RumiCar/issues/new`) |
 
 投稿先を変更する場合は、投稿先リポジトリ側に `courses/community/` `programs/community/` `cars/community/` の3ディレクトリを用意しておく必要があります (無くても動きますが、共有機能はエラーになります)。
 
@@ -100,11 +100,11 @@ docker network create rumicar-net
 ### B-2. シミュレータを起動する
 
 ```bash
-cd RumiCar-Simulator/Simulator
+cd RumiCar-Simulator
 docker compose up -d --build
 ```
 
-`Simulator/compose.yaml` は `rumicar-net` に参加し、ポートを公開しません。到達経路は既存 nginx 経由のみになります。
+`compose.yaml` は `rumicar-net` に参加し、ポートを公開しません。到達経路は既存 nginx 経由のみになります。
 
 ### B-3. 既存 nginx を rumicar-net に参加させる
 
@@ -136,16 +136,16 @@ docker compose up -d        # nginx をネットワーク追加ぶん再作成
 - **`proxy_pass` は変数経由にしてください。** `proxy_pass http://simulator:80` と直接書くと起動時に1度だけ名前解決され、コンテナ再作成後に到達不能になります。同梱の設定は `set $rumicar_sim simulator;` を経由させて回避しています
 - 既存 nginx が `fastcgi_pass wordpress:9000` のように**静的名**を使っている場合、その解決も起動時固定です。WordPress 側コンテナを再作成したときは nginx も restart が必要です
 
-実際の本番設定は `docs/archive/deploy_reference_2026-07-30/`（本番構成の時点記録・機微情報を含むため再構築には使わないこと）に参考保存してあります。再構築に必要なのは本節までの内容のみです。
+再構築に必要なのは本節までの内容のみです。（本番サイトの実設定は機微情報を含むため公開していません。本節の手順だけで同等の構成を再現できます。）
 
 ---
 
 ## 検証ゲートの実行
 
-46本の常設ゲートが同梱されています。改変後の回帰確認に使ってください。
+52本の常設ゲートが同梱されています。改変後の回帰確認に使ってください。
 
 ```bash
-cd RumiCar-Simulator/Simulator
+cd RumiCar-Simulator
 node wf_run_all.mjs                    # 全ゲート実行
 WF_SKIP_TIMING=1 node wf_run_all.mjs   # 壁時計依存の1本を隔離した安定実行
 node wf_run_all.mjs --list             # 実行対象/除外の一覧のみ
@@ -161,14 +161,14 @@ node wf_run_all.mjs --list             # 実行対象/除外の一覧のみ
 
 | やりたいこと | 触る場所 | 反映方法 |
 |---|---|---|
-| コース追加・調整 | `Simulator/public/data/courses.json` | ページ再読込のみ (マウント済み) |
-| UI・物理・描画 | `Simulator/public/js/*.js` | ページ再読込のみ |
-| 見た目 | `Simulator/public/css/style.css` | ページ再読込のみ |
-| 配信設定 (gzip 等) | `Simulator/nginx-default.conf` | `docker compose up -d --build` |
+| コース追加・調整 | `public/data/courses.json` | ページ再読込のみ (マウント済み) |
+| UI・物理・描画 | `public/js/*.js` | ページ再読込のみ |
+| 見た目 | `public/css/style.css` | ページ再読込のみ |
+| 配信設定 (gzip 等) | `nginx-default.conf` | `docker compose up -d --build` |
 
 `public/` は read-only マウントされているため、**JS/CSS/JSON/HTML の変更は再ビルド不要**でページ再読込だけで反映されます。イメージにも `COPY` 済みなので、マウントを外しても動作します (フォールバック)。
 
-仕様・物理モデルの解説は `Simulator/docs/` と `docs/` にあります (`physics_model.md` は日英併記)。
+走行物理モデルの解説は `docs/physics_model.md` (日本語) と `docs/physics_model.en.md` (英語) にあります。
 
 ---
 
@@ -177,7 +177,7 @@ node wf_run_all.mjs --list             # 実行対象/除外の一覧のみ
 統合構成 (手順B) で simulator コンテナが消えて 502 になった場合は、復旧スクリプトが使えます。
 
 ```bash
-cd RumiCar-Simulator/Simulator
+cd RumiCar-Simulator
 bash restore_simulator.sh              # 既存イメージから起動
 bash restore_simulator.sh --build      # 配信設定を変えたときは再ビルド
 ```
@@ -197,7 +197,7 @@ CHECK_URL=http://127.0.0.1:8090/simulator/ bash restore_simulator.sh
 `RumiCar-group/RumiCar` へ公開するコース・プログラムのカタログは、正本から生成します。
 
 ```bash
-cd RumiCar-Simulator/Simulator
+cd RumiCar-Simulator
 node gen_course_files.mjs      # → /tmp/rc_courses  (1コース1ファイル + index.json + README)
 node gen_program_files.mjs     # → /tmp/rc_programs (.ino + index.json + README)
 ```
