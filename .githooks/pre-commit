@@ -37,6 +37,7 @@ ALLOW='^(README\.md|LICENSE|REBUILD\.md)$
 ^wf_[A-Za-z0-9_]+\.(mjs|json)$
 ^(Dockerfile|compose\.yaml|nginx-default\.conf)$
 ^(gen_[a-z]+_files|validate_courses)\.mjs$
+^restore_simulator\.sh$
 ^docs/physics_model(\.en)?\.md$
 ^docs/(stage_ao/bench_courses|phase_w/official_sample_event)\.json$'
 

@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# 宛先ガード — 公開クローン側 (2026-08-05 設置・構成 C 移行 AT5)。
+#
+# このディレクトリ (/home/y-chiba/RumiCar/Simulator) は
+#   RumiCar-group/RumiCar-Simulator = **公開** リポジトリのクローンである。
+# 1 つ上の /home/y-chiba/RumiCar は
+#   RumiCar-group/RumiCar-Simulator-internal = **非公開** リポジトリ（別の .git）。
+# 名前が似ていて「同名で別物」を踏みやすいので、それぞれに逆向きのガードを置いてある。
+#
+# ここから internal や別組織へ push すると、公開用の履歴が非公開側へ混ざる／
+# 意図しない宛先へ出る事故になる。そのため push 先 URL が公開リポジトリ以外なら git 自身が拒否する。
+#
+# なぜ .git/hooks/ ではなく .githooks/ に置くのか
+#   ① `core.hooksPath .githooks` を設定すると **git は .git/hooks/ を一切読まなくなる**。
+#      最初 .git/hooks/pre-push に置いたところ、commit ガード用に hooksPath を切り替えていたため
+#      **このガードが呼ばれず、誤った宛先への push が素通りした**（実測で判明）。
+#   ② .githooks/ は追跡対象なので **再クローンしても消えない**。有効化は clone 直後の1回だけ:
+#        git config core.hooksPath .githooks
+#      （.git/hooks/ 配下は追跡外で、移設・再クローンのたびに失われていた。）
+#
+# 引数: $1 = remote 名 / $2 = remote URL (git が渡す)。
+REMOTE_NAME="${1:-}"
+REMOTE_URL="${2:-}"
+
+ALLOW="https://github.com/RumiCar-group/RumiCar-Simulator"
+
+norm() { u="${1%.git}"; printf '%s' "${u%/}"; }
+
+if [ "$(norm "$REMOTE_URL")" != "$(norm "$ALLOW")" ]; then
+  echo "" >&2
+  echo "✗ push を拒否しました (pre-push 宛先ガード・公開クローン側)。" >&2
+  echo "    remote: ${REMOTE_NAME:-(名前なし)}" >&2
+  echo "    URL   : ${REMOTE_URL:-(URL なし)}" >&2
+  echo "    許可  : ${ALLOW}" >&2
+  echo "" >&2
+  echo "  ここは公開リポジトリの作業ツリーです。内部記録 (PLAN/PROGRESS/決定ログ) は" >&2
+  echo "  1 つ上の非公開リポジトリ側で管理してください。" >&2
+  echo "" >&2
+  exit 1
+fi
+
+exit 0
