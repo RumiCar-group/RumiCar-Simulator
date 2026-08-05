@@ -3,6 +3,7 @@
 import { CONST, SENSOR_NOISE, SENSOR_HOLD, SIM } from './config.js';
 import { DYN } from './physics_dyn.js';
 import { readAll, readRear } from './sensors.js';
+import { t } from './i18n.js';
 
 // World は { car, walls, log(msg), rear?, encoder? } を持つ実行コンテキスト。
 // world.rear=true のとき後方センサー(任意装備)が、world.encoder=true のとき車輪エンコーダ(任意装備)が有効になる。
@@ -41,9 +42,27 @@ export function buildApi(world) {
 
   const clampPwm = (p) => Math.max(0, Math.min(255, Math.round(Number(p) || 0)));
 
-  function steer(direc) {
+  // 操舵。実機 RumiCar は 3値 (LEFT/CENTER/RIGHT) — これが D-1 の学習 API 表面 (AO_spec §0)。
+  // AS12: **比例操舵サーボ (任意装備)** を積んだ車だけ第2引数で舵の強さを指定できる。
+  //   RC_steer(LEFT)        → 全舵 左 (従来どおり。装備の有無に関わらず常に有効)
+  //   RC_steer(LEFT, 128)   → 約 半舵 左 (0..255・RC_drive(direc,pwm) と同形。255=全舵で3値と bit 一致)
+  // 第2引数を省略した呼び出しは steerAmt を null へ戻す = 3値へ復帰する (直前の連続舵指令が
+  // 残り続けない)。**未装備で第2引数を渡したら 0 (失敗) を返し、舵指令を一切変えない** —
+  // 黙って全舵にすると AP16/AS4 が潰した「サイレント意味論乖離」になるため、既存の
+  // 「引数エラーは 0」契約 (下の return 0) に合わせて失敗を返す。
+  // ただし RC_steer の返り値は普通読まれない ⇒ 未装備だと「舵が一切効かない車」になり
+  // 学習者に原因が見えない (実測: 連続舵プログラム×未装備で DNF timeout)。∴ **最初の1回だけ**
+  // ログへ理由を出す (毎 tick 出すと 20Hz でログが溢れるので one-shot)。沈黙截断の禁止。
+  let steerPropWarned = false;
+  function steer(direc, amount) {
     if (direc === CONST.LEFT || direc === CONST.CENTER || direc === CONST.RIGHT) {
-      world.car.steer = direc; return 1;
+      if (amount === undefined) { world.car.steer = direc; world.car.steerAmt = null; return 1; }
+      if (world.steerSet !== 'prop') {           // 比例操舵サーボ 未装備 = 連続舵は使えない
+        if (!steerPropWarned) { steerPropWarned = true; world.log(t('log.steer.needProp'), true); }
+        return 0;
+      }
+      world.car.steer = direc; world.car.steerAmt = clampPwm(amount);
+      return 1;
     }
     return 0;
   }

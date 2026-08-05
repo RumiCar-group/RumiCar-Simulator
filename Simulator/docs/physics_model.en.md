@@ -205,7 +205,29 @@ kA = kG·kμ          acceleration  (accel, brake, coast, C0)
 kT = √(kL/(kG·kμ))  time          (steerRate, vlatStop are ÷kT)
 ```
 
-The non-dimensional shape coefficients (the tire curve's `α_peak` / `k_decay`) are invariant under Froude similarity, so they carry over the tabletop values.
+The non-dimensional shape coefficients (the tire curve's `α_peak` / `k_decay`) are invariant under Froude similarity, so they carry over the tabletop values. For the same reason the v2 engine's tire constants (`v2tire` = `μ0` / `muDecay` / `α_P` / `κ_P` / `relLenFrac`) are **inherited verbatim from the tabletop** at mid-scale (`scaleRegime` in `config.js` does `v2tire: base.v2tire`).
+
+#### Is that inheritance correct? — measured (v6.2.1, `wf_as7_midscale.mjs`)
+
+"It is non-dimensional, so inheriting is fine" is an argument, not an observation, so **we measured the behavior**. A pure-sideslip sweep gives the vehicle-level lateral-force peak position α_peak and the break-away Ay\* in each regime, compared **with the step size scaled by the Froude time factor `kT=√k_L`** (similarity holds only as the three-way set of length, velocity **and time**).
+
+| Comparison | Result |
+|---|---|
+| Compared in Froude time (4 car types × normal/slip = 8 pairs) | α_peak **exactly equal (Δ=0.00°)**; relative difference of Ay\* **≤2.2×10⁻¹⁶** |
+| Detection power (perturb mid-scale μ0 by 1%) | Ay\* relative difference 1.05×10⁻³ — **detected** (so the test is not blunt) |
+
+→ **No mid-scale-specific tire calibration is needed.** Injecting regime-specific values here would introduce a difference that does not exist and break Ay\* invariance, which is the design principle of this regime.
+
+#### Two ways the similarity is not exact (an honest note)
+
+1. **The integration step does not scale with time.** The outer step is fixed at 1/60 s in every regime, so at the production step size α_peak reads 16.75° (tabletop) vs 13.75° (mid-scale). Refine the step, however, and **both converge to 8.25°** (regime difference 0.00°), so this is **discretization, not a broken model**. Mid-scale's non-dimensional step is `1/kT` times finer, so it actually sits closer to the continuum limit (deviation 5.50° vs the tabletop's 8.50°).
+2. **Program-side decision distances do not scale with the regime.** The bundled samples are written with **absolute millimetres** (`CONF=640`, `D_OPEN=620`) so they can be ported to the real device, and those values do not change with the regime. Put the same sample on a geometrically similar course (the course scaled by `k_L` as well) and lap times deviate from the expected `kT=1.414` by **up to 7.99%**; scale only the decision distances by `k_L` and that shrinks to **at most 1.66%** (9 combinations). In other words, **the dominant cause of "mid-scale behaves differently" in actual driving is not the tire but the program's absolute length constants.**
+
+Note also that **switching the regime does not enlarge the course** — only the car and the ToF range scale. Similarity holds when "the course is enlarged by the same factor"; keeping the same course and changing only the regime changes the car-to-course ratio (the UI auto-corrects combinations where that ratio breaks down, via `enforceFitRatio`).
+
+#### The integration-scheme switch is not non-dimensional (where the cliff is)
+
+The semi-implicit wheel ODE (§13) is enabled when the explicit sub-step demand `needW` at the regime's representative top speed exceeds the threshold 128. Since `needW ∝ 1/√k_L`, **that comparison is not non-dimensional**: grow a Froude-similar regime and the integration scheme flips discontinuously while the physics stays similar. The measured cliff is at **`k_L ≈ 2.396`** (tabletop `needW`=198.1, ×1.548 / mid-scale 140.1, ×1.094 / full scale 9.0, ×0.070). Today's mid-scale `k_L=2` sits at **83.5%** of the cliff, on the tabletop side. That margin is monitored permanently by `wf_as7_midscale.mjs` section C.
 
 ### Full scale = Broken Similarity (intentional)
 
@@ -231,6 +253,7 @@ At full scale, `kinFade=0` removes this shim; since the "physical basis of US/OS
 - Body: 0.19 × 0.08 m / wheelbase 0.13 m / max steering ±24° (tabletop). Top speed 0.7 m/s baseline with per-car multipliers. Acceleration 2.5 / braking 4.0 / coast 1.2 m/s² baseline.
 - ToF distance sensors: three units at left +65° / center / right −65° (plus an optional rear unit). Each unit measures the **nearest reflecting surface inside a 25° field-of-view cone** (matching the real VL53L0X; §12). Out of range / low signal returns −3 via the `RC_read` family, and the raw reading is 8190 per the real device. Distant readings cannot be trusted, so each sample treats readings `>CONF` / −3 as "open" via its confidence limit `CONF` (§12).
 - **Learning-program language semantics**: division by zero (`1/0`, `x%0`) is a **runtime error with a line number** (it does not silently return Infinity). Python handles negative indexing `a[-1]` (last element), chained comparison `a<b<c` (= `a<b and b<c`), string repetition `"ab"*2`→`"abab"`, and `%` formatting `"x=%d"%5`→`"x=5"` as on the real device. **However, C integer division is not modeled** — in this sim C's `/` is also **true division** (`7/2`→3.5, whereas real Arduino C does integer division `7/2`→3). This is a deliberate limitation (type tracking would be required — JS cannot distinguish the float literal `4.0` from the integer `4`); where integer division is needed, truncate explicitly (`floor`, etc.) or keep the true value.
+- **C arrays (Stage AS4)**: declaration, indexed read/write, fixed length, multiple dimensions, brace initializers (missing elements are zero-filled), global arrays, array parameters (`int a[]` / `int a[N]` / `int *a` — all **passed by reference**, equivalent to pointer decay) and declaration qualifiers (`const`, `static`, …) are supported. **`sizeof` returns the total number of leaf elements**, so both `sizeof(a)/sizeof(a[0])` and `sizeof(a)/sizeof(int)` give the element count, and for a 2-D `m[2][3]`, `sizeof(m)/sizeof(m[0])` gives the row count 2. **This differs from the byte count on real hardware** — a deliberate choice, because even on real Arduino `sizeof(int)` is board-dependent (AVR=2, ESP32=4), so the byte semantics are not unique; the idiom is what is preserved. **Initializing an array from a string, `char s[] = "ab";`, is not supported**: instead of silently producing an empty array it raises a **runtime error with a line number**.
 
 ---
 
@@ -299,6 +322,21 @@ The real VL53L0X cannot be trusted at long range because of **ground reflection*
 - **The full-scale competition samples** (`comp_circuit`/`comp_drift`/`comp_slip`/`comp_estimate`/`recon_racer`) are designed as real-car radar equivalents (sensorMaxMm=150 m), so their confidence limit sits at the **radar horizon of 150 m (`CONF=150000`)** (the honest real-ToF value of ~5 m is stated in the comments).
 - **Open-loop showpieces** (shows / zero-counter) and **samples that drive by wheel encoder** (TC launch / ABS) don't navigate by ranging, so they have no confidence-limit parameter.
 
+### Optics model (opt-in, v6.3.0 / Stage AS8) — reflectance, incidence, target size, mixed returns, crosstalk
+The default ranging is an idealization: it **always** returns the nearest reflecting surface inside the cone. Real hardware does not. **A real VL53L0X reports a valid range only while the signal rate coming back from the target stays above a threshold** (`setSignalRateLimit` in the Pololu library the real RumiCar uses; default 0.25 MCPS. Upstream `ArduinoAndESP32/Libraries/RumiCar/RumiCar.cpp:74-86` lowers it to 0.1 only when `LONG_RANGE` is defined, and that define is commented out by default). The library's own note says lowering it "extends its potential range, but increases the likelihood of getting an inaccurate reading because of **reflections from objects other than the intended target**. It works best in dark conditions." The vendor's product page likewise states that "its **effective range and accuracy (noise) depend heavily on ambient conditions and target characteristics like reflectance and size**", and that time-of-flight determines "the absolute distance to a target **without the object's reflectance greatly influencing the measurement**".
+
+Switching on **"ToF optics model (real-device)"** in the toolbar reproduces that criterion (default OFF; **deterministic — it uses no randomness**, so you can study it independently of "sensor noise". Official races force it OFF).
+
+- **Signal rate**: for a Lambertian extended target the illuminated area (∝d²) and the collected solid angle (∝1/d²) cancel, leaving the tilt factor, so `S ∝ ρ·cosθ / d²` (ρ = reflectance, θ = incidence angle, d = distance). Normalizing so the nominal range `maxMm` sits exactly at the threshold gives `S = ρ·cosθ·(maxMm/d)²`, and **S < 1 means an invalid reading (−3)**.
+- **Effective range is `d_max = maxMm·√(ρ·cosθ)`.** Measured (permanent gate `wf_as8_optics.mjs` section A5): the reference target's boundary is 1.953 m; ρ = 0.5 gives 1.397 m (+1.1% vs the √0.5 prediction); 30° incidence gives 1.778 m (+2.2%); 45° gives 1.647 m (+0.3%). Beyond 45° the 25° cone is wide enough that **its nearer part dominates, so the measurement lands farther than the prediction** (+5.9% at 60°, +17.3% at 70°). This is a structural departure from the narrow-beam limit whose direction and size both follow from the cone geometry.
+- **Target size**: the signal is averaged over the whole cone, so **a small target that fills only part of it is a weak signal and reads invalid**. Refining the angular sampling does not remove this (measured: 79 of 2952 readings over all 41 courses x 24 poses, and 81/79/79 at 33/129/513 samples). **"Visible but not measurable" is the most confusing real-hardware behavior**, and here it emerges from the model itself.
+- **Mixed returns (multipath / mixed pixel)**: with several surfaces inside the cone, real hardware returns a **signal-weighted mixture** of their distances (landing between the nearest and the farthest). This is exactly the library's "reflections from objects other than the intended target".
+- **Crosstalk**: the parasitic reflection from the cover glass mixes in as a zero-distance signal, so `d_meas = d·S̄/(S̄+xtalk)` — a systematic bias that **pulls readings short, and more so the weaker the signal** (far, dark, or glancing). Measured: −0.0% at 20% of range (below 1 mm quantization), −0.8% at 60%, −1.8% at 95%. Real devices can calibrate this out; the Pololu library does not do so by default.
+- **Reflectance does not distort the distance value.** Within the valid range, changing ρ from 1.0 to 0.6 to 0.3 leaves the reading identical (measured: 781 mm throughout). That reproduces the product page's "reflectance does not greatly influence the measurement": **reflectance only moves the valid/invalid boundary**.
+- **Angular sampling** defaults to 33 rays. In the neutral configuration the worst discretization error converges monotonically — 20 mm at 9 rays, **5 mm at 33**, 1 mm at 513 — and **5 mm sits below the real device's ranging noise σ = 8 mm**, which is why 33 is the default.
+- **Regime-scale invariance**: the threshold has the form `(d/maxMm)²`, i.e. it is dimensionless. Measured, "effective-range boundary ÷ nominal range" is **82.375% in all three regimes** (tabletop / mid-scale / full-scale; relative spread 0.000%). A permanent check keeps a new threshold from creating a cliff across regimes (a hand-off from Stage AS7).
+- **What it teaches** (measured over 38 courses x the 3 default samples, solo driving): invalid readings go **0.01% → 4.56%** (x721), and readings judged "open because > CONF" go **15.79% → 21.65%**. Even so, the samples hardened in Stage AS3 still **complete 111/114, unchanged**. So the honest conclusion is: the quality of information you can rely on drops sharply, yet a straightforward sensor-reactive logic survives it.
+
 > Note: this change **deliberately** brings ranging, driving, and determinism closer to the real device. The tabletop physics bytes and race-record verifyHash were **re-baselined** to new values; records carry the engine version (`engineFingerprint.appVersion`), so old records fall under the note "recorded on that version; may not replay exactly on the current one" (kept conditionally, unmodified).
 
 ---
@@ -332,11 +370,27 @@ Top speed 300–360 km/h (drag-limited), lateral grip capacity 1.40 g at low spe
 ### 13.5 Tire sets (normal/slip) and the road attribute muDecay — a tabletop drift-learning environment
 To reproduce the real RumiCar practice of "swap to slippery tires and practice drifting at low speed," v2 lets each vehicle equip a **tire set: normal / slip** (the constants are calibrated per regime: tabletop slip is μ0≈0.20 = starting wheelspin and power-over become reachable even on the tabletop, while full-scale slip is a hard-compound-like μ0≈0.9; with normal tires the tabletop matches the real-device observation that "ordinary driving doesn't drift"). Courses can also carry a **road-surface muDecay attribute** (post-peak slipperiness = low-μ surfaces). The go/no-go table of §11 was measured with this machinery.
 
+
+#### Rain tires (v6.4.0 / Stage AS9) — when the road gets wet, the "right choice" changes
+A third tire set, **rain** (a grooved soft compound), is **worse than normal on a dry surface and better on a wet one**. Real rain tires are quick in the wet because their grooves clear the water film and win back the road's friction; on a dry surface the soft compound overheats and cannot match a slick. The model is built exactly that way:
+
+- The tire's own peak friction is **ρ = 0.85×** that of normal (tabletop μ0 0.68 / full-scale 1.19).
+- Against the road's `course.grip` (<1 = wet) it **recovers a wetGain = 0.70 share of the deficit** (1−grip):
+  **gripEff = 1 − (1−grip)·(1−wetGain)**. normal / slip have wetGain = 0, so the expression is the identity (unchanged).
+
+Those two numbers alone fix, in closed form, the road grip at which the faster tire swaps over:
+
+**g\* = ρ·w / (1 − ρ·(1−w)) = 0.85·0.70 / (1 − 0.85·0.30) = 0.7987**
+
+Above 0.7987 (drier) normal is stronger; below it (wetter) rain is. Because ρ is the same in every regime, **g\* is regime-invariant** — measured at 0.798657718 in all three regimes (relative difference 1.4×10⁻¹⁶). Both shipped wet courses (grip 0.5 / 0.55) sit below g\*, i.e. on the rain-favouring side.
+
+**But a faster lap requires actually reaching the friction limit.** Giving the full-scale competition circuit a `grip` value and running Circuit Racer on it, normal's lap time stretches as the surface degrades (**+4.47%** from grip 1.0 to 0.5) while rain stays nearly flat (**0.30%**); at grip 0.5 **rain is 3.93% faster**. On the **tabletop wet courses, by contrast, changing tires barely changes the lap** — the reachable lateral acceleration there is ay ≈ 1.63 m/s², under 60% of a wet normal tire's lateral capacity of 3.92 m/s² (i.e. the car is not sliding at all). That follows directly from the §13.5 design ("a tabletop normal tire hardly ever slides") and is not a defect.
+
 ### 13.6 Tire heat and wear (opt-in) — tires as a "strategic resource"
 With "Tire wear" ON, each wheel deterministically accumulates **temperature** (first-order relaxation; cold/optimal/overheated) and **wear** (monotone accumulation) from its **slip power P = friction-circle utilization × normalized slip speed** (dimensionless = the same scale on tabletop and real car), modulating peak grip by `clamp(fT·fW, [0.9, 1])` — **the total effect is clamped within 10%** (wear is designed not to dominate the outcome). Measured: for the same running time, a drift stint's (slip FR) rear-tire wear is **tens of thousands of times** a grip stint's — "drift consumes the rears = a resource you spend wisely," and "an always-drift strategy can self-destruct over a long stint" come out as measurements. The HUD shows a 2×2 tire panel with per-wheel friction-circle utilization, temperature, and wear (**display only** = the physics never reads the HUD back). With the default OFF, behavior and hashes match the previous ones exactly.
 
 ### 13.7 Determinism and compatibility — with defaults, nothing changes
-Engine (v2), tires (slip), recon laps, and wear are stamped into the race record's canonical form (the seed of verifyHash) **only when a non-default is chosen**. So **default tabletop physics, past deterministic race records, and official records all stay byte-for-byte unchanged**, while non-default records carry their conditions and can be fully replayed and verified later (records also carry the engine version).
+Engine (v2), tires (slip / rain), **gearing (short / tall / auto2)**, recon laps, and wear are stamped into the race record's canonical form (the seed of verifyHash) **only when a non-default is chosen**. So **default tabletop physics, past deterministic race records, and official records all stay byte-for-byte unchanged**, while non-default records carry their conditions and can be fully replayed and verified later (records also carry the engine version).
 
 ### 13.8 What v2 taught us — an honest summary of the measurements
 v2 was built not to make things "fast and flashy" but to **measure faithfully what does and does not hold under the real-device constraints (forward ToF×3, three-valued steering, no attitude sensor)**. None of the conclusions are hidden; all are teaching material:
@@ -346,9 +400,10 @@ v2 was built not to make things "fast and flashy" but to **measure faithfully wh
 - **The net gain of precise speed-profile planning is roughly neutral on a uniform, symmetric course.** The strategy racer "Apex Strategist" (`strategist`) carries a curvature → target-speed forward/backward-pass plan built from its recon map, but most of its measured speed comes from "aggressive tuning that recon certifies as safe"; per-corner precision braking stayed neutral because (a) all corners share the same radius, so there is no per-corner difference to exploit, and (b) the absolute self-localization accuracy (above) is not enough to brake later safely (11% faster than Circuit Racer, with the mechanism honestly attributed to recon).
 - **Pre-race recon (`spec.recon`):** choosing **0–3 recon laps** in 🏁 Race / 📋 Host makes each car preview the course alone, off the clock, before the start (deterministic; stamped into official records too). It is nearly redundant for self-contained learners (Recon Racer previews by itself) — it is **machinery for strategy programs that plan on top of a map**.
 
-### 13.9 Slope (gradient) physics — downhill on touge courses (v4.0.0)
+### 13.9 Slope (gradient) physics — downhill on touge courses (v4.0.0 → made two-axis in v7.0.0)
 - **World-frame gravity projection:** a gradient acts not as a constant push toward the car's nose but as the gravity component along the **world-frame slope direction**, `gFwd = downhill·cos(θ−slopeDir)` (θ = car heading, slopeDir = the downhill direction). So **climbs decelerate and descents accelerate** correctly according to direction (previously it was always added forward — a "conveyor" that accelerated even uphill). **Roll-away from rest** and, optionally, a **static front/rear load transfer due to the gradient** are also modeled.
 - **Road-following slope direction (touge courses):** because a touge road descends continuously, the slope direction `slopeDir` is **updated every sub-step to the centerline tangent (the direction of travel)** (a fixed direction would make part of the arc run uphill through switchbacks). With `downhill = g·sinθ` the gradient is reconciled to what the elev badge implies, and the touge elev values were corrected to realistic gradients (up to ~15%) (elev had been a display-only decoration; it is now aligned to a physically meaningful value). Even after recalibration the top speed is capped by the drivetrain servo, so a descent mainly strengthens corner-exit acceleration.
+- **In-plane gravity has two components (corrected in v7.0.0):** v4.0.0–v6.4.0 applied only the forward component above and **dropped the body-lateral component `downhill·sin(θ−slopeDir)` of the very same gravity vector**. Measured on real touge runs, the car heading and the road direction diverge by up to 80°, so the **lateral gravity being discarded reached 1.47 m/s²** — the same order as the lateral acceleration a_y≈1.63 m/s² actually attainable at tabletop scale. Worse, the wheel loads still used the full `g`, so the model's total gravity was √(g²+downhill²) — **+1.16% of gravity created out of nothing**. v7.0.0 decomposes gravity correctly with respect to the road plane — with δ = θ − slopeDir: `in-plane fwd = g_in·cos δ` / `in-plane left = −g_in·sin δ` / `normal g_N = √(g² − g_in²)`. This finally includes the force that matters most on a real mountain pass: **being pushed from the uphill side toward the valley side through a descending hairpin**. Flat ground (zero in-plane component) is completely unchanged.
 - **Defaults unchanged:** downhill = 0 (non-touge courses) takes the previous path and is byte-identical. Only driving on touge courses and sloped v2 changes; records from that time are honestly kept with an "(as of vX)" note.
 
 ### 13.10 Read the implementation
@@ -358,6 +413,56 @@ v2 was built not to make things "fast and flashy" but to **measure faithfully wh
 - Verification gates (tracked in the repository; every item machine-asserted): `wf_ao1_v2.mjs`–`wf_ao12_wear.mjs` (public-surface compatibility, friction-circle invariants, energy audit, zero tunneling, momentum conservation, calibration bands, the go/no-go table, the localization oracle, wear measurements, and more)
 
 ---
+
+
+### 13.11 Gearing (optional equipment, v6.4.0 / Stage AS9) — trading acceleration against top speed
+The real RumiCar is direct-drive, but on RC cars changing the ratio by swapping the pinion is a standard adjustment, and two-speed mechanical transmissions do exist. v2 offers this as **optional equipment** (the same category as the rear sensor and the wheel encoder). The default is `direct` (ratio 1, single speed), so **if you do not pick it, nothing changes from before**.
+
+With a reduction ratio r, motor torque reaches the wheels multiplied by r and wheel speed is divided by r. Therefore:
+
+- **Torque-limited acceleration cap ×r**, **the gear-imposed speed ceiling ÷r**, and **motor braking ×r** as well (it runs through the same gear train).
+- **Power-limited output is unchanged**: the full-scale constant-power drivetrain (`wheelPower`) obeys P = F·v, so gearing cannot change the available power (it is not multiplied).
+
+Measured (on both tabletop and midscale the top-speed ratio matches the predicted 1/r to a relative difference of 10⁻¹⁶):
+
+| Gear | Ratio | 0→50% maxV | Top speed (vs baseline) |
+|---|---|---|---|
+| Direct (default) | 1.00 | 0.233 s | 102.0% |
+| Low (short) | 1.45 | **0.167 s** | 70.3% |
+| High (tall) | 0.72 | 0.317 s | **141.7%** |
+| 2-speed automatic | 1.45→0.72 | **0.167 s** | **141.7%** |
+
+Acceleration and top speed move in opposite directions — **no single choice is always best**, and that is the lesson. The 2-speed automatic shifts by road speed to chase both, but **drive is cut for a moment at each shift** (0.100 s on the tabletop; the shift time follows the Froude time √(L/0.13), giving 0.133 s at midscale and 0.433 s at full scale).
+
+**At full scale a taller gear does not raise the top speed at all** (ratio 1.0000), exactly as measured. Top speed there is set by **aerodynamic drag**, which bites before the gear ceiling does, so a tall gear only throws away acceleration (0→50% goes from 8.83 s to 12.80 s) for a top speed that never arrives. A low gear, conversely, puts the gear ceiling below the drag ceiling and does lower the top speed (ratio 0.819).
+
+---
+
+### 13.12 Cross-slope (cant / banking, v7.0.0 / Stage AS10) — a road surface that changes the cornering limit
+
+Real roads have **cant (cross-slope / superelevation)**. Raising the outside of a curve turns part of gravity toward the inside of the turn, so **you can corner without relying on tire friction alone**. The optional course field `bank` (degrees) expresses this (omitted = 0 = exactly as before).
+
+- **Where and how much:** `bank` is the **bank angle at this course's tightest corner**; everywhere else it scales **in proportion to the local curvature**, down to 0 (straights are unbanked). That is precisely the superelevation rule used in road design, e ∝ v²·κ/g at a fixed design speed, and it **introduces no new constant**. The sign follows the turn direction, so **the bank leans the same way even if you drive the course backwards** (just like a real bank). Negative values give **adverse camber** (working against the turn).
+- **Closed form for the limit speed:** in the road plane the inward acceleration available is "tire μ·(normal gravity) + in-plane gravity", so for a banked corner of radius R the limit speed is `v_max² = R·g·(μ·cos φ + sin φ)` (φ = bank angle; φ=0 recovers the familiar v²=μgR). The **cos φ appears** because the force pressing on the road (the normal load) is reduced by exactly what was taken into the plane. Taking ratios of this formula cancels both the proportionality constant and the absolute μ, so a standing gate can check it **without copying the implementation's internal expression into the test**.
+- **Lateral load transfer comes for free:** the lateral gravity produced by the bank is only balanced once **the tires hold it with a lateral force**. Load transfer is computed from that tire lateral force, so there is no need to add the cant term to the load-transfer equation (doing so would double-count it).
+- **Which engines interpret it:** **precision v2** and **dynamics**. The simple "classic" engine carries speed as a scalar and **has no lateral degree of freedom (v_lat)**, so it cannot represent lateral gravity (its forward component still works as before). `bank` is also only meaningful for `track`/`touge`, which carry a centerline; `annulus`/`raw` are unsupported.
+
+### 13.13 Suspension degrees of freedom (optional equipment, v7.1.0 / Stage AS11) — letting load transfer overshoot
+
+A car leans (rolls) in a corner because the springs take time to compress. While it is leaning, tyre load moves outwards, and that load transfer sets the grip. **Until now v2 treated load transfer as a quantity that follows acceleration with a first-order lag** (time constant τ_susp ≈ 0.12 s × the regime's time scale). A first-order lag can only lag — it can never overshoot — so it could not produce the transient that a real car shows on a flick transition, where the roll goes past its final value and then settles back. (That simplification was recorded as a deliberate Stage AO design decision.)
+
+Selecting **suspension DOF (optional equipment)** turns roll and pitch into **genuine one-degree-of-freedom spring-damper modes**. Writing q for the effective acceleration that the load transfer reads:
+
+```
+q̈ = ω²·(a − q) − 2ζω·q̇          ω = natural frequency, ζ = damping ratio, a = actual acceleration
+```
+
+- **Nothing changes in steady state.** The fixed point of this equation is q = a, so once the acceleration settles, the load transfer converges to **exactly the same value as before**. Only the **transient** differs (measured: relative difference from the previous model in a steady turn ≤ 1×10⁻¹⁵).
+- **The amount of overshoot depends only on the damping ratio.** For a step-like input the peak overshoot is **Mp = exp(−πζ/√(1−ζ²))** and it is reached at **t_p = π/(ω√(1−ζ²))**; neither contains a proportionality constant (measured: Soft 37.23% / Balanced 4.60% / Stiff 0%, within 4×10⁻⁴ of the closed form).
+- **Not a single new absolute constant was added.** The natural frequency is anchored to the existing τ_susp as ω₀ = 1/τ_susp, and the equipment supplies only **two dimensionless numbers** (ω/ω₀ and ζ). Being dimensionless, **the same numbers mean the same thing on the tabletop, mid-scale and full-scale** (measured: spread of ω·τ_susp across the three regimes ≤ 1.5×10⁻⁵).
+- **What you can observe**: on a flick, Soft makes the load transfer swing **past the peak of its own input** (measured: ratio 1.57 after normalising by the input's own peak; a first-order lag can never exceed 1 and measures 0.86). The overshooting load transfer transiently **eats into total lateral grip** through load sensitivity (measured on the tabletop: −1.01% for Soft against −0.02% for the previous model), and because the front axle carries the larger share ζF = 0.55, the loss is front-biased and shows up as **transient understeer** (front share of the capacity dips 0.41 pt against 0.16 pt).
+- **Numerics**: this one-DOF system is linear and its coefficients are constant throughout a step, so **the analytic solution is used directly as the discrete update** (the transition matrix is built once per step). That gives **zero numerical damping and zero frequency error**, and the eigenvalue magnitude is always e^{−ζωh} < 1, i.e. **unconditionally stable**. Against the ω·h = 2 divergence boundary of an explicit scheme, the worst production value is ω·h = 2.95×10⁻² (a margin of ×68).
+- **It is completely inactive by default.** The default "quasi-static" setting carries no degree of freedom and runs only the previous two-line first-order lag, so past records, frozen hashes and official races are unchanged to the byte. It applies only when equipped, and that condition is stamped into the source of the race verification hash. **Precise v2 engine only** (the dynamics and classic engines ignore it).
 
 ## 14. For Those Who Want to Dig Deeper — Index
 
@@ -373,6 +478,49 @@ v2 was built not to make things "fast and flashy" but to **measure faithfully wh
 **On the driving-logic side:** how to use each constant "to drive fast" is in GitHub's `programs/README.md` and the header comments ("why this setting") of each program (`programs.js` / .ino).
 
 ---
+
+### 13.14 Continuous steering (optional equipment, v7.2.0 / Stage AS12) — separating steering *resolution* from *bandwidth*
+
+The real RumiCar steers with **three states — left / centre / right** — and that is an invariant of the learning API
+itself (D-1). The equipment in this section does not replace it; it is an **opt-in addition** that lets you try
+"what changes if I fit a **proportional steering servo** to the real car" (the default `tri` changes nothing, not
+one byte). The API mirrors `RC_drive(direction, pwm)` with a second argument: `RC_steer(direction, 0..255)`.
+
+**Three-state steering can already make intermediate angles.** The servo simply travels toward its target at
+`steerRate` [rad/s], so toggling the three-state command rapidly averages out to an intermediate angle (duty
+steering). Therefore continuous steering changes the *resolution*, not the *bandwidth*:
+
+| Command rate | 3-state hold error (mean / max) | Continuous | Bound `steerRate / command rate` |
+|---|---:|---:|---:|
+| 60 Hz (physics) | 0.955° / 1.149° | **0.0235°** | 1.910° |
+| 20 Hz (**the rate a learning program actually runs at**) | 1.593° / 3.059° | **0.0235°** | 5.730° |
+
+The three-state ripple grows **in proportion to the command interval** (the bound is "how far the servo can travel
+during one command"). The residual with continuous steering, by contrast, is **exactly the API's 1/255 quantisation**
+and depends on neither the command rate nor the regime (`|round(0.35·255)/255 − 0.35|·δ_max = 0.0235°`). At the 20 Hz
+a program really runs at, that is roughly a **68× improvement**.
+
+**Drifting does not become faster with continuous steering (measured).** We re-measured Stage AO8's 20-cell
+"is drifting faster?" table with continuous steering: **not a single cell turns GO** (all 20 remain NO-GO). Isolating
+the cause:
+
+1. Making the servo rate `steerRate` **64× faster** (full lock to opposite full lock: 0.838 s → 0.013 s) leaves the
+   continuous-steering drift-hold time flat at 0.27–0.28 s ⇒ the limit is not steering bandwidth either.
+2. The real wall is the **car's own recovery limit**. Testing, from each point of the real trajectory, "if I
+   straighten the wheel, can it return to `|β| < 35°` within 0.6 s", it **can up to about 29° and cannot from 36°**.
+   The drift operating point (`|β| ≈ 35°`) sits right on that boundary, so no amount of steering precision turns it
+   into a controlled pass.
+
+∴ **Continuous steering is equipment for placing the steering precisely, not for going faster.** Indeed, three-state
+is quicker on the tabletop oval (best-lap ratio 1.030 / 1.061), and on the full-scale circuit the sign depends on the
+car (continuous is 8.2% faster for FF, but 27.7% and 22.9% slower for FR and AWD). Speed is set by corner radius and
+the friction limit, not by steering resolution.
+
+**Implementation**: the target steering angle is decided in one place, `steerTargetOf(command, δ_max, equipment,
+amount)`, which early-returns **the identical double as the old expression** whenever the equipment is `tri` or no
+amount was given (shared by all three engines; byte-invariant). `255/255` is exactly 1.0 in IEEE 754, so "full lock"
+is **bit-identical** to the three-state call. The equipment is stamped into the share URL (`ss=`) and into the canon
+of official records **only when it is not the default**.
 
 ## Credits
 

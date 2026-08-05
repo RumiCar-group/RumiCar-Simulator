@@ -61,28 +61,55 @@ export function validateEntry(event, entry) {
 // コース別キュレーション固定プール (W_spec §3・決定論・順序付き)。フィールドが minField 未満の
 // とき先頭から順に補充する。まずはどのコースでも完走を狙える汎用の競技プログラム×組込車を既定
 // プールとする (コース別の細分化は運用で拡張・W_spec §3/§9)。
+// **AS5 較正 (2026-08-04・実測)**: 旧プール (comp_circuit を2枠) は comp_circuit 単体で 39 コース中
+// 10 完走 (実測) しかない「フルスケール競技サーキット専用チューン」のプログラムで、"どのコースでも
+// 完走を狙える" という設計意図に反していた。5台グループ走行の population 実測=完走ペア 195中79
+// (40.5%)・1台以上完走コース 34/39。**AS3 で頑健化した3本 (normal_fr/awd/ff) と、単体実測で同等に
+// 頑健な drift 系2本 (drift_awd/ff) へ差し替え**(全5本とも組込 carType と一致=プログラムの車種別
+// チューニング前提を崩さない)。差替後の population 実測=完走ペア 195中115 (59.0%)・1台以上完走コース
+// 37/39・全5台完走コース 1→4/39 (母集団述語・Stage AS 共通測定作法=コース別0/1で受け入れ基準を書かない)。
 export const FILLER_POOL = [
-  { name: 'BOT-1', progKey: 'comp_circuit', carType: 'normal_ff' },
-  { name: 'BOT-2', progKey: 'normal_fr',    carType: 'normal_fr' },
-  { name: 'BOT-3', progKey: 'normal_awd',   carType: 'normal_awd' },
-  { name: 'BOT-4', progKey: 'comp_circuit', carType: 'normal_fr' },
-  { name: 'BOT-5', progKey: 'normal_ff',    carType: 'normal_ff' },
+  { name: 'BOT-1', progKey: 'normal_fr',  carType: 'normal_fr' },
+  { name: 'BOT-2', progKey: 'normal_awd', carType: 'normal_awd' },
+  { name: 'BOT-3', progKey: 'normal_ff',  carType: 'normal_ff' },
+  { name: 'BOT-4', progKey: 'drift_awd',  carType: 'drift_awd' },
+  { name: 'BOT-5', progKey: 'drift_ff',   carType: 'drift_ff' },
 ];
 
-// 補充車 1 台を field エントリー形に展開 (プログラムは PROGRAM_BY_KEY のコードを焼き込む)。
+// 補充車 1 台を field エントリー形に展開。
+// f.program.src (文字列) があれば**それをそのまま使う**(公式記録に凍結された本文=AS5)。
+// 無ければ f.progKey で**現在の** PROGRAM_BY_KEY から都度解決する (ローカル/暫定イベント向け・未凍結)。
 export function fillerEntry(f) {
+  if (f.program && typeof f.program.src === 'string') {
+    return { name: f.name, lang: f.program.lang || 'c', src: f.program.src, carType: f.carType, filler: true };
+  }
   const prog = PROGRAM_BY_KEY[f.progKey];
   return { name: f.name, lang: 'c', src: prog ? prog.code : '', carType: f.carType, filler: true };
+}
+
+// FILLER_POOL (または任意の pool) を W_spec §1 event.fillerPool の schema (program.src 凍結済み) へ
+// 変換する。GitHub 公式イベント (W5) の event.json 作成時に埋め込む用 (人間 CI-11)。埋め込んだ
+// event.fillerPool を formField/frozenField が優先して使うため、以後 programs.js の該当プログラムが
+// 改良されても**この記録の再検証結果は変わらない**(補充車もエントリーと同じく本文が凍結される。
+// AS3 決定ログの持ち越し課題=補充車だけ凍結されない問題への対処)。
+export function freezeFillerPool(pool = FILLER_POOL) {
+  return pool.map((f) => {
+    const prog = PROGRAM_BY_KEY[f.progKey];
+    return { name: f.name, program: { src: prog ? prog.code : '', lang: 'c' }, carType: f.carType };
+  });
 }
 
 // フィールド成立 (W_spec §3)。entries (エントリー順) に不足分を filler 先頭から決定論補充して
 // ≥ minField(既定3) にし、グリッド=エントリー順 (filler は末尾) の field 配列を返す。
 // spec クラスは全車を specCar に固定する (carType 上書き・carDef 無視)。
+// **event.fillerPool があればそれを使う**(凍結済み・公式記録の再検証で確定挙動)。無ければ
+// 生きた既定 FILLER_POOL へフォールバック (ローカル開催・未凍結の暫定イベント向け・後方互換)。
 export function formField(event, entries) {
   const minField = (event && event.minField) || 3;
+  const pool = (event && Array.isArray(event.fillerPool) && event.fillerPool.length) ? event.fillerPool : FILLER_POOL;
   const field = entries.map((e) => ({ ...e }));
-  for (let i = 0; field.length < minField && i < FILLER_POOL.length; i++) {
-    field.push(fillerEntry(FILLER_POOL[i]));
+  for (let i = 0; field.length < minField && i < pool.length; i++) {
+    field.push(fillerEntry(pool[i]));
   }
   if (event && event.class === 'spec' && event.specCar) {
     for (const f of field) { f.carType = event.specCar; f.carDef = undefined; }

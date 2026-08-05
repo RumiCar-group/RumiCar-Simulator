@@ -1,7 +1,9 @@
 // 統合: シミュレーションループ・UI 結線・手動操作・プログラム取込・
 //       ラップ計測 / コースエディタ / デバッグ機能 (Phase 2) +
 //       複数台同時走行 (各車に個別プログラムを割当, Phase 3)。
-import { CONST, VIEW, SIM, FLEET, TRAIL, CAR, CAR_TYPES, CAR_TYPE_BY_KEY, CAR_TYPE_DEFAULT, setCarScale, CAR_PARAM_DOC, registerCarType, unregisterCarType, APP_VERSION, CHANGELOG, displayKmh, setPhysicsMode, PHYSICS, SENSOR_NOISE, SENSOR_HOLD, A11Y, CVD, REGIMES, REGIME_STATE, GRID } from './config.js';
+import { CONST, VIEW, SIM, FLEET, TRAIL, CAR, CAR_TYPES, CAR_TYPE_BY_KEY, CAR_TYPE_DEFAULT, setCarScale, CAR_PARAM_DOC, registerCarType, unregisterCarType, APP_VERSION, displayKmh, setPhysicsMode, PHYSICS, SENSOR_NOISE, SENSOR_HOLD, SENSOR_OPTICS, A11Y, CVD, REGIMES, REGIME_STATE, GRID } from './config.js';
+// CHANGELOG は表示専用の 124KB のデータ塊なので critical path から外し (Stage AS2)、
+// 版ポップアップを組むときにだけ動的 import する (下の loadChangelog)。
 import { PROGRAMS, PROGRAM_BY_CARTYPE, PROGRAM_BY_KEY, programKeyForCode } from './programs.js';
 import {
   drawCourse, screenToWorld, worldToScreen,
@@ -14,6 +16,7 @@ import { buildApi } from './api.js';
 import { buildController } from './runner.js';
 import {
   makeSlot, rebuildSpawns, integrateSlot, integrateFleetV2, tickSlot, othersFor, releaseDrive, swapPhysics, fitsAllCars, minClearance, applyStartGate,
+  normTire, normGear, normSusp, normSteer,   // AS9/AS11/AS12: 装備値の正規化 (白リスト外は既定へ) — UI/共有 URL/レース field で単一実装
   // (driveableCapN は capacity.js から別 import)
 } from './fleet.js';
 import { driveableCapN } from './capacity.js';   // Stage AK7: 実態容量 (実走で「走り出せる最大台数」)
@@ -21,6 +24,7 @@ import { runRace, engineFingerprint, computeRaceTimeout } from './race_engine.js
 import { ghostProgressModel, ghostStandingsAt, ghostPasses } from './ghost_gap.js';
 import { costOf, validateEntry, formField, frozenField, FILLER_POOL } from './race_event.js';
 import { aggregate, worldBest, beatenChecks } from './race_ladder.js';
+import { challengeState } from './challenge.js';   // AS13: 練習記録から難度別チャレンジ進捗/バッジ (純関数)
 import {
   fetchFromGithub, readFile, listRepoDir, fetchRawFile,
   listCommunityCourses, fetchCommunityCourse, shareCourseUrl,
@@ -164,7 +168,10 @@ let speed = 3;   // 再生速度の初期値 (×)。スライダー既定と一�
 let interact = true;      // 他車を障害物として扱うか (検知 + 重なり防止)。既定 ON
 let rearOn = false;       // 後方センサー(任意装備)を有効にするか。既定 OFF=前方3つのみ(実機 faithful)
 let encoderOn = false;    // 車輪エンコーダ(任意装備)を有効にするか。既定 OFF。競技 TC/ABS で使う
-let tireSet = 'normal';   // v2 タイヤセット (normal|slip)。既定 normal。slip=疑似ドリフト環境 (Stage AO6・v2 のみ物理反映)
+let tireSet = 'normal';   // v2 タイヤセット (normal|slip|rain)。既定 normal。slip=疑似ドリフト環境 (AO6)・rain=ウェット向き (AS9)。v2 のみ物理反映
+let gearSet = 'direct';   // v2 ギア比 (direct|short|tall|auto2・Stage AS9 任意装備)。既定 direct=直結=byte 不変。v2 のみ物理反映
+let suspSet = 'quasi';    // v2 サス自由度 (quasi|soft|balanced|stiff・Stage AS11 任意装備)。既定 quasi=自由度なし=byte 不変。v2 のみ物理反映
+let steerSet = 'tri';     // 操舵サーボ (tri|prop・Stage AS12 任意装備)。既定 tri=実機準拠の3値=byte 不変。**3エンジン共通**で物理反映
 let wearOn = false;       // タイヤ熱・摩耗モデル (Stage AO12・v2 専用 opt-in)。既定 OFF=byte 不変。ドリフトは後輪を消耗=戦略資源
 const keys = {};
 const opts = { rays: true, labels: false, grid: false, timestamp: false, depth: true };
@@ -247,7 +254,7 @@ function startAuto() {
     slot.serial = '';
     slot.world._pendingDelay = 0; slot.world._others = [];
     slot.hostEnv = buildApi(slot.world);
-    slot.lap.reset(course, { carType: slot.carType, tire: slot.world.tire, wear: slot.world.wear });   // 練習記録(非公式)はコース×車種別 (W2)・装備を記録へ刻む (AP2)
+    slot.lap.reset(course, { carType: slot.carType, tire: slot.world.tire, wear: slot.world.wear, gear: slot.world.gear });   // 練習記録(非公式)はコース×車種別 (W2)・装備を記録へ刻む (AP2/AS9)
     try {
       slot.controller = buildController(slot.src, slot.lang, slot.hostEnv);
       slot.controller.setup();
@@ -505,7 +512,7 @@ function entryCarLabel(carType, carDef) {
 function buildRaceField() {
   return slots.map((s) => ({
     name: s.name, lang: s.lang, src: s.src,
-    carType: s.carType, rear: rearOn, encoder: encoderOn, tire: tireSet,
+    carType: s.carType, rear: rearOn, encoder: encoderOn, tire: tireSet, gear: gearSet, susp: suspSet, steerSet,
   }));
 }
 
@@ -557,10 +564,21 @@ function autoSpectate() { const c = $('raceWatch'); return !!(c && c.checked); }
 // AB13: お手本ライン トグル (PX-014)。ON のとき frame() が実走軌跡のなめらか基準線を重ねる。
 function refLineOn() { const c = $('refLine'); return !!(c && c.checked); }
 
+// AS3: 完走判定 (finish ライン) を持たないコース = 開けた raw コース (ドリフト広場 / 競技グラウンド)。
+//   lap.js は finish が無いと update() が即 return するため周回が **原理的に** 計上されず、レースを
+//   始めても全車が timeout DNF になるだけだった。開始せず理由を明示する (両コースの desc 自身が
+//   「通常の走行プログラムには不向き」と述べているショー/実演用コース)。ソロ走行 (▶) は従来どおり可能。
+function raceableCourse() {
+  if (course && course.finish) return true;
+  logLine(t('log.race.nofinish', { name: courseDisplayName(course) }));
+  return false;
+}
+
 function runRaceNow() {
   exitEdit();
   stopAuto();
   if (!slots.length) { logLine(t('log.race.nofield')); return; }
+  if (!raceableCourse()) return;
   enforceFitRatio('race');   // AK5/D8: 発走直前に実態容量へ確定 (startAuto と同型=carScale ドラッグ後の stale 台数でも団子発走を防ぐ)
   const laps = clampLaps($('raceLaps').value);
   $('raceLaps').value = laps;   // AB3 (RC-UX-001): 実効値を入力欄へ反映 (50→30・0/空欄→1)
@@ -700,6 +718,7 @@ function renderEventEntries() {
 
 // 締切してレース: フィールド成立 (補充≥3・グリッド=エントリー順) → 決定論レース (公式) → 結果。
 function closeAndRace() {
+  if (!raceableCourse()) return;   // AS3: 完走判定の無いコースは開催レースも成立しない (🏁 と同じガード)
   readEventConfig();
   raceEvent.minField = 3;
   const field = formField(raceEvent, raceEvent.entries);
@@ -915,11 +934,12 @@ async function loadCommunityPrograms() {
   try { list = await listCommunityPrograms(); } catch (e) { list = null; }
   // Q1[B]: 取得失敗 (null) は無言にせず 1 行通知。正常に 0 件 ([]) は静か。本体は止めない。
   if (list === null) { logLine(t('log.ghProgramsFail')); return; }
-  const loaded = [];
-  for (const e of list) {
-    try { const { code, lang } = await fetchRawFile(e.download_url, e.file); loaded.push({ name: e.name, path: e.path, code, lang: lang || e.lang || 'c' }); }
-    catch (err) { /* 1 件失敗はスキップ */ }
-  }
+  // v5.2.0: 逐次 await を並列取得へ (1 件失敗はスキップ=従来同値)。メニュー順は list 一覧順を維持。
+  const fetched = await Promise.all(list.map(async (e) => {
+    try { const { code, lang } = await fetchRawFile(e.download_url, e.file); return { name: e.name, path: e.path, code, lang: lang || e.lang || 'c' }; }
+    catch (err) { return null; /* 1 件失敗はスキップ */ }
+  }));
+  const loaded = fetched.filter(Boolean);
   if (!loaded.length) return;
   communityPrograms = loaded;
   // 既存の各列の走行セレクタへ「🌐 みんなの投稿」を反映 (選択状態は維持)
@@ -1057,7 +1077,7 @@ function addCar() {
   slots.push(newSlot(i, prog.lang, prog.code));
   slots[slots.length - 1].world.rear = rearOn;
   slots[slots.length - 1].world.encoder = encoderOn;
-  { const s = slots[slots.length - 1]; s.world.tire = tireSet; s.world.wear = wearOn; if (s.car.engine === 'v2') { s.car.tireSet = tireSet; s.car.wear = wearOn; } }
+  { const s = slots[slots.length - 1]; s.world.tire = tireSet; s.world.wear = wearOn; s.world.gear = gearSet; s.world.susp = suspSet; s.world.steerSet = steerSet; s.car.steerSet = steerSet; if (s.car.engine === 'v2') { s.car.tireSet = tireSet; s.car.wear = wearOn; s.car.gearSet = gearSet; s.car.suspSet = suspSet; } }
   rebuildSpawns(slots, course);
   buildFleetColumns();
   selectCar(slots.length - 1);
@@ -1131,6 +1151,68 @@ function renderCourseBadge(c) {
 function courseListSuffix(c) {
   if (!(c.diff >= 1 && c.diff <= 5)) return '';
   return '  ' + '★'.repeat(c.diff) + (c.beginner ? ' 🔰' : '');
+}
+
+// ── 🎯 チャレンジ (Stage AS13・W_spec §8 バックログ「チャレンジ (難コース完走バッジ)」) ─────────
+// 母集団 = 組込コースのうち**完走が定義される**もの (finish 線を持つ・AS3 の raceableCourse と同述語)。
+// 完走の証拠は練習ベスト記録の存在そのもの (lap.js は周回/ゴール計上時にしか書かない)。集計は
+// challenge.js の純関数が行い、ここは組立て (PRESETS/CAR_TYPES/loadBestRec の注入) と描画だけ。
+function challengeName(r) { return (getLang() === 'en' && r.nameEn) ? r.nameEn : r.name; }
+
+function renderChallenge() {
+  const esc = escapeHtml;
+  const built = PRESETS.map((f) => f());
+  const st = challengeState(built, CAR_TYPES.map((c) => c.key), loadBestRec);
+  let h = '';
+  // 総合進捗
+  h += `<p class="chal-total"><b>${esc(t('chal.total', { done: st.total.done, total: st.total.total }))}</b></p>`;
+  if (st.excluded) h += `<p class="hint">${esc(t('chal.excluded', { n: st.excluded }))}</p>`;
+  // バッジ (取得済みは色つき・未取得は灰。件数を必ず添えて「あと何個か」が分かるようにする)
+  h += '<p class="chal-badges">' + st.badges.map((b) => {
+    const label = t('chal.badge.' + b.key, { n: b.total });
+    return `<span class="chal-badge${b.got ? ' got' : ''}" title="${esc(label)}">${b.icon} ${esc(label)}` +
+      `<span class="hint"> ${b.done}/${b.total}</span></span>`;
+  }).join(' ') + '</p>';
+  // 難度別の進捗
+  h += `<h3>${esc(t('chal.byDiff.h'))}</h3>`;
+  h += '<table class="race-tab"><thead><tr>' +
+    [t('chal.col.diff'), t('chal.col.done'), t('chal.col.state')].map((x) => `<th>${esc(x)}</th>`).join('') +
+    '</tr></thead><tbody>';
+  for (const d of st.byDiff) {
+    if (!d.total) continue;
+    const icon = d.state === 'clear' ? '🏆' : (d.state === 'started' ? '⭐' : '—');
+    h += `<tr${d.state === 'clear' ? ' class="rank-record"' : ''}>` +
+      `<td>${'★'.repeat(d.diff)}${'☆'.repeat(5 - d.diff)} <span class="hint">${esc(t('course.diff.' + d.diff))}</span></td>` +
+      `<td>${d.done}/${d.total}</td><td>${icon} ${esc(t('chal.state.' + d.state))}</td></tr>`;
+  }
+  h += '</tbody></table>';
+  // 次の一歩 (未完走のうち最もやさしいもの)
+  if (st.next) h += `<p class="chal-next">${esc(t('chal.next', { name: challengeName(st.next) }))}</p>`;
+  else if (st.total.total) h += `<p class="chal-next">${esc(t('chal.next.none'))}</p>`;
+  // コース別の一覧
+  h += `<h3>${esc(t('chal.courses.h'))}</h3>`;
+  h += '<table class="race-tab"><thead><tr>' +
+    [t('chal.col.course'), t('chal.col.diff'), t('chal.col.result'), t('chal.col.best'), t('chal.col.cars')]
+      .map((x) => `<th>${esc(x)}</th>`).join('') + '</tr></thead><tbody>';
+  for (const r of st.rows) {
+    const stars = r.diff ? '★'.repeat(r.diff) : '—';
+    // AP2: 版スタンプの無い旧記録・当時版で樹立した記録は「(当時 vX)」相当を正直に添える。
+    const verNote = r.done ? (r.stale ? ` <span class="hint">${esc(t('chal.ver.unstamped'))}</span>`
+      : (r.ver && r.ver !== APP_VERSION ? ` <span class="hint">${esc(t('chal.ver.old', { v: r.ver }))}</span>` : '')) : '';
+    h += `<tr class="${r.done ? 'chal-done' : 'chal-todo'}">` +
+      `<td>${esc(challengeName(r))}${r.beginner ? ' 🔰' : ''}</td><td>${stars}</td>` +
+      `<td>${r.done ? '✅' : '⬜'}</td>` +
+      `<td>${r.bestSec != null ? fmtTime(r.bestSec) : '—'}${verNote}</td>` +
+      `<td class="hint">${r.cars.length ? esc(r.cars.map(carTypeLabel).join(', ')) : '—'}</td></tr>`;
+  }
+  h += '</tbody></table>';
+  $('chalBody').innerHTML = h;
+}
+
+function openChallengeDlg() {
+  exitEdit();
+  renderChallenge();
+  const dlg = $('dlgChallenge'); applyI18n(dlg); dlg.showModal();
 }
 
 function rebuildCourseList(selectName) {
@@ -1322,11 +1404,12 @@ async function loadCommunityCourses() {
   // Q1[B]: 取得失敗 (null) は無言にせず 1 行通知する (「コースが消えた」誤解を防ぐ)。
   // 正常に 0 件 ([]) のときは従来どおり静か。失敗しても本体は止めない (プリセット/保存で動く)。
   if (list === null) { logLine(t('log.ghCoursesFail')); return; }
-  const loaded = [];
-  for (const e of list) {
-    try { loaded.push({ name: e.name, data: await fetchCommunityCourse(e.download_url) }); }
-    catch (err) { /* 1 件失敗はスキップ */ }
-  }
+  // v5.2.0: 逐次 await を並列取得へ (1 件失敗はスキップ=従来同値)。メニュー順は list 一覧順を維持。
+  const fetched = await Promise.all(list.map(async (e) => {
+    try { return { name: e.name, data: await fetchCommunityCourse(e.download_url) }; }
+    catch (err) { return null; /* 1 件失敗はスキップ */ }
+  }));
+  const loaded = fetched.filter(Boolean);
   communityCourses = loaded;
   if (loaded.length) {
     const cur = $('courseSel').value;
@@ -1349,11 +1432,15 @@ async function loadCommunityCars() {
   // 失敗しても本体は止めない (組込6車種 + ローカル独自車種で動く)。
   if (list === null) { logLine(t('log.ghCarsFail')); return; }
   const localKeys = new Set(loadCustomCars().map(c => c.key));
+  // v5.2.0: 取得のみ並列化。registerCarType は従来どおり list 一覧順の逐次ループで呼ぶ
+  // (登録順=メニュー順の決定性を保つ・検査/スキップ条件も従来と同一)。
+  const defs = await Promise.all(list.map(async (e) => {
+    try { return await fetchCommunityCar(e.download_url); }
+    catch (err) { return null; /* 1 件失敗はスキップ */ }
+  }));
   const loaded = [];
-  for (const e of list) {
-    let def;
-    try { def = await fetchCommunityCar(e.download_url); }
-    catch (err) { continue; }                       // 1 件失敗はスキップ
+  for (const def of defs) {
+    if (def == null) continue;                       // 1 件失敗はスキップ
     if (!def || !def.key || !def.name) continue;     // 不正 JSON はスキップ
     if (isBuiltinKey(def.key)) continue;             // 組込 key は保護 (上書きしない)
     if (localKeys.has(def.key)) continue;            // ローカル独自車種を優先
@@ -1478,6 +1565,8 @@ $('ofDetail').addEventListener('click', (e) => {
   const v = e.target.closest('.official-viewsrc'); if (v) { toggleProgSrc(+v.dataset.i, v); return; }
   const f = e.target.closest('.official-fork'); if (f) { forkOfficialEntry(+f.dataset.i); return; }
 });
+// 🎯 チャレンジ (AS13): 練習記録から難度別の完走進捗とバッジを出す (公式記録とは別・W_spec §0 二層モデル)
+$('chalOpen').addEventListener('click', openChallengeDlg);
 // 🏅 ランキング / 👻 ゴースト再生 (W6)
 $('rankOpen').addEventListener('click', openRankingsDlg);
 $('rankReload').addEventListener('click', reloadRankings);
@@ -1489,7 +1578,7 @@ $('rankBody').addEventListener('click', (e) => {
   const b = e.target.closest('.rank-vsworld'); if (b) ghostVsWorld(b.dataset.cls, b.dataset.course);
 });
 // 新ダイアログの枠外クリックで閉じる (docdlg-x の × は querySelectorAll で配線済み)
-for (const _id of ['dlgRankings', 'dlgGhost']) {
+for (const _id of ['dlgRankings', 'dlgGhost', 'dlgChallenge']) {
   const _d = $(_id); if (_d) _d.addEventListener('click', (e) => { if (e.target === _d) _d.close(); });
 }
 $('reset').addEventListener('click', resetAll);
@@ -1578,13 +1667,49 @@ if (optEncoderEl) optEncoderEl.addEventListener('change', (e) => {
 // 反映される (旧エンジンは無視=byte 不変)。装備を変えたら全車へ適用し初期位置へリセット (タイヤ交換=挙動が変わる)。
 const optTireEl = $('optTire');
 if (optTireEl) optTireEl.addEventListener('change', (e) => {
-  tireSet = (e.target.value === 'slip') ? 'slip' : 'normal';
+  tireSet = normTire(e.target.value);
   slots.forEach(s => { s.world.tire = tireSet; if (s.car.engine === 'v2') s.car.tireSet = tireSet; });
   rebuildSpawns(slots, course);   // reset は tireSet を保持する (装備は reset で不変)。位置/ラップのみ戻す。
   running = false; paused = false;
   syncButtons();
   const v2 = (PHYSICS.mode === 'v2');
-  logLine(t(tireSet === 'slip' ? 'log.tire.slip' : 'log.tire.normal', { note: v2 ? '' : t('log.tire.v2only') }));
+  logLine(t('log.tire.' + tireSet, { note: v2 ? '' : t('log.tire.v2only') }));
+});
+// ギア比切替 (Stage AS9・任意装備)。既定 direct=直結=従来と完全一致。v2 エンジンのみ物理へ反映
+// (旧エンジンは無視=byte 不変)。装備変更は全車へ適用し初期位置へリセット (ギア交換=挙動が変わる)。
+const optGearEl = $('optGear');
+if (optGearEl) optGearEl.addEventListener('change', (e) => {
+  gearSet = normGear(e.target.value);
+  slots.forEach(s => { s.world.gear = gearSet; if (s.car.engine === 'v2') s.car.gearSet = gearSet; });
+  rebuildSpawns(slots, course);
+  running = false; paused = false;
+  syncButtons();
+  const v2 = (PHYSICS.mode === 'v2');
+  logLine(t('log.gear.' + gearSet, { note: v2 ? '' : t('log.tire.v2only') }));
+});
+// サスペンション自由度 切替 (Stage AS11・任意装備)。既定 quasi=自由度なし=従来と完全一致。v2 エンジンのみ
+// 物理へ反映 (旧エンジンは無視=byte 不変)。装備変更は全車へ適用し初期位置へリセット (足回り交換=挙動が変わる)。
+const optSuspEl = $('optSusp');
+if (optSuspEl) optSuspEl.addEventListener('change', (e) => {
+  suspSet = normSusp(e.target.value);
+  slots.forEach(s => { s.world.susp = suspSet; if (s.car.engine === 'v2') s.car.suspSet = suspSet; });
+  rebuildSpawns(slots, course);
+  running = false; paused = false;
+  syncButtons();
+  const v2 = (PHYSICS.mode === 'v2');
+  logLine(t('log.susp.' + suspSet, { note: v2 ? '' : t('log.tire.v2only') }));
+});
+// 操舵サーボ 切替 (Stage AS12・任意装備)。既定 tri=実機準拠の3値=従来と完全一致。**3エンジン共通**で
+// 物理へ反映する (サーボは Car が持つ共通機構ゆえ tire/gear/susp と違い v2 限定ではない)。prop を選ぶと
+// 学習 API で RC_steer(dir, 0..255) が使えるようになる。装備変更は全車へ適用し初期位置へリセット。
+const optSteerEl = $('optSteer');
+if (optSteerEl) optSteerEl.addEventListener('change', (e) => {
+  steerSet = normSteer(e.target.value);
+  slots.forEach(s => { s.world.steerSet = steerSet; s.car.steerSet = steerSet; });
+  rebuildSpawns(slots, course);
+  running = false; paused = false;
+  syncButtons();
+  logLine(t('log.steer.' + steerSet));
 });
 // タイヤ熱・摩耗トグル (Stage AO12)。opt-in=既定 OFF。v2 エンジンのみ物理へ反映 (旧エンジンは無視=byte 不変)。
 // ON にするとドリフト等の激しい滑りが後輪を消耗し、長丁場でグリップが目減りする「戦略資源」になる。装備変更=
@@ -1615,6 +1740,15 @@ if (optNoiseEl) optNoiseEl.addEventListener('change', (e) => {
   logLine(SENSOR_NOISE.on
     ? t('log.noise.on', { sig: SENSOR_NOISE.sigmaBaseMm, drop: Math.round(SENSOR_NOISE.dropout * 100) })
     : t('log.noise.off'));
+});
+// AS8: ToF 光学モデル (反射率/入射角/混入反射/クロストーク)。sensors.js が参照する単一フラグ。
+// SENSOR_NOISE (確率的) と独立の決定論モデルなので別トグルにしてある (両方 ON なら光学→ノイズの順に重なる)。
+const optOpticsEl = $('optOptics');
+if (optOpticsEl) optOpticsEl.addEventListener('change', (e) => {
+  SENSOR_OPTICS.on = e.target.checked;
+  logLine(SENSOR_OPTICS.on
+    ? t('log.optics.on', { car: Math.round(SENSOR_OPTICS.carRefl * 100), xt: Math.round(SENSOR_OPTICS.xtalk * 100) })
+    : t('log.optics.off'));
 });
 // AP18: センサー更新遅延 (sample-and-hold)。api.js の測距キャッシュが参照する単一フラグ (config の可変ホルダー)。
 const optHoldEl = $('optHold');
@@ -2312,10 +2446,27 @@ window.addEventListener('keydown', (e) => {
 window.addEventListener('keyup', (e) => { keys[e.key] = false; });
 
 // ---- 起動 ----
-// バージョン表示 + 変更履歴ポップアップ (ヘッダーのバッジ。単一ソース = config.APP_VERSION/CHANGELOG)。
+// バージョン表示 + 変更履歴ポップアップ (ヘッダーのバッジ。単一ソース = config.APP_VERSION と changelog.js の CHANGELOG)。
 // ホバーで開く (CSS :hover)・マウスが外れたら閉じる。バッジの子要素なのでポップアップ上でも開いたまま。
 // 見出し/各 note は現在言語に追従する (O5: 言語切替時に onLangChange から再生成)。
-function renderChangelogPopup() {
+// CHANGELOG の遅延読込 (Stage AS2)。1 度だけ import し、以後は解決済み Promise を使い回す。
+// 版バッジの表示自体 (APP_VERSION) は同期のまま＝起動直後から正しい版が出る。
+let _changelogP = null;
+function loadChangelog() {
+  if (!_changelogP) _changelogP = import('./changelog.js').then((m) => m.CHANGELOG);
+  return _changelogP;
+}
+
+// 版バッジのテキストだけ先に確定させる (ポップアップ本体は loadChangelog の解決後)。
+function renderVersionBadge() {
+  const v = $('appVer');
+  if (!v) return;
+  v.textContent = APP_VERSION;
+  v.removeAttribute('title'); // OS 標準ツールチップは下のポップアップに置き換える
+}
+
+async function renderChangelogPopup() {
+  const CHANGELOG = await loadChangelog();
   const v = $('appVer');
   if (!v) return;
   v.textContent = APP_VERSION;
@@ -2377,8 +2528,14 @@ function currentShareState() {
     // AO13: 手動選択済み (physModeUserPicked) は値が dynamic でも直列化=「fullscale で手動 dynamic」を
     // 受信側の v2 自動昇格から守る (未選択の既定状態は従来どおり省略=byte 不変)。
     physics: ($('optPhysMode') && (physModeUserPicked || $('optPhysMode').value !== 'dynamic')) ? $('optPhysMode').value : null,
-    // タイヤセット (Stage AO6): 既定 normal のときは null=hash に載せない=既存共有 URL byte 不変。
+    // タイヤセット (Stage AO6/AS9): 既定 normal のときは null=hash に載せない=既存共有 URL byte 不変。
     tire: ($('optTire') && $('optTire').value !== 'normal') ? $('optTire').value : null,
+    // ギア比 (Stage AS9): 既定 direct のときは null=hash に載せない=既存共有 URL byte 不変。
+    gear: ($('optGear') && $('optGear').value !== 'direct') ? $('optGear').value : null,
+    // サス自由度 (Stage AS11): 既定 quasi のときは null=hash に載せない=既存共有 URL byte 不変。
+    susp: ($('optSusp') && $('optSusp').value !== 'quasi') ? $('optSusp').value : null,
+    // 操舵サーボ (Stage AS12): 既定 tri のときは null=hash に載せない=既存共有 URL byte 不変。
+    steerSet: ($('optSteer') && $('optSteer').value !== 'tri') ? $('optSteer').value : null,
     // 試走周回数 (Stage AO9): 既定 0 のときは null=hash に載せない=既存共有 URL byte 不変。
     recon: reconLapsOf('raceRecon') > 0 ? reconLapsOf('raceRecon') : null,
     // タイヤ熱・摩耗 (Stage AO12): 既定 false のときは null=hash に載せない=既存共有 URL byte 不変。
@@ -2453,6 +2610,27 @@ function applyShareState(st) {
       sel.value = st.tire; fireChange(sel);
     }
   }
+  // ②''b ギア比 (Stage AS9・optGear change → gearSet 適用 + reset=既存経路)。既定 direct は捕捉側で省略ゆえ通常 null。
+  if (st.gear != null) {
+    const sel = $('optGear');
+    if (sel && [...sel.options].some(o => o.value === st.gear) && sel.value !== st.gear) {
+      sel.value = st.gear; fireChange(sel);
+    }
+  }
+  // ②''c サス自由度 (Stage AS11・optSusp change → suspSet 適用 + reset=既存経路)。既定 quasi は捕捉側で省略ゆえ通常 null。
+  if (st.susp != null) {
+    const sel = $('optSusp');
+    if (sel && [...sel.options].some(o => o.value === st.susp) && sel.value !== st.susp) {
+      sel.value = st.susp; fireChange(sel);
+    }
+  }
+  // ②''d 操舵サーボ (Stage AS12・optSteer change → steerSet 適用 + reset=既存経路)。既定 tri は捕捉側で省略ゆえ通常 null。
+  if (st.steerSet != null) {
+    const sel = $('optSteer');
+    if (sel && [...sel.options].some(o => o.value === st.steerSet) && sel.value !== st.steerSet) {
+      sel.value = st.steerSet; fireChange(sel);
+    }
+  }
   // ②''' タイヤ熱・摩耗 (Stage AO12・optWear change → wearOn 適用 + reset=既存経路)。既定 false は捕捉側で省略ゆえ通常 null。
   if (st.wear != null) {
     const el = $('optWear');
@@ -2497,13 +2675,24 @@ function applyShareState(st) {
 }
 
 // 設定変更 → hash 更新の配線 (既存ハンドラに後追いの第2リスナを足す=非侵襲)。
-for (const id of ['courseSel', 'regimeSel', 'optNoise', 'themeSel', 'raceLaps', 'optPhysMode', 'optTire', 'raceRecon', 'optWear']) {
+for (const id of ['courseSel', 'regimeSel', 'optNoise', 'themeSel', 'raceLaps', 'optPhysMode', 'optTire', 'raceRecon', 'optWear', 'optGear', 'optSusp', 'optSteer']) {
   const el = $(id); if (el) el.addEventListener('change', updateShareHash);
 }
 // 車種/プログラム/アクティブ車の変更は fleetCols 委譲 change と selectCar から拾う (下記参照)。
 { const b = $('shareLink'); if (b) b.addEventListener('click', copyShareLink); }
 
-renderChangelogPopup();
+// 版バッジは同期で確定させ、変更履歴ポップアップ本体は critical path の外で組む (Stage AS2)。
+// ① 初回コース描画のあと (下の起動末尾) に先読みして組む＝人がホバーする頃には出来ている
+// ② それより早くホバー/フォーカスされたらその場で組む (先読み前でも空にならない)
+renderVersionBadge();
+{
+  const v = $('appVer');
+  if (v) {
+    const build = () => { renderChangelogPopup(); };
+    v.addEventListener('pointerenter', build, { once: true });
+    v.addEventListener('focusin', build, { once: true });
+  }
+}
 // 初期値をスライダー既定に合わせて適用 (再生速度3×・車体スケール0.8×)
 {
   const cs = $('carScale'); if (cs) { const k = setCarScale(cs.value); const v = $('carScalev'); if (v) v.textContent = k.toFixed(1) + '×'; }
@@ -2514,6 +2703,10 @@ slots = [newSlot(0, PROGRAM_BY_CARTYPE[CAR_TYPE_DEFAULT].lang, PROGRAM_BY_CARTYP
 activeIdx = 0;
 buildFleetColumns();
 selectCar(0);
+// Stage AS2「即 render」: 初回のコース描画を **次の rAF を待たずにここで一度** 行う。
+// これで起動ローダー(AA1)の退場が 1 フレーム+残りの起動処理 (共有 hash 復元/ボタン同期) ぶん早まる。
+// 位置は selectCar(0) の直後＝車両が既に 1 台ある状態で描く (車が後から湧いて見えないように)。
+render();
 // 設定共有パーマリンク (AF2): 起動時に location.hash があれば、車種/プログラム/領域/ノイズ/
 // 周回/テーマ/言語を「既存の適用経路」(applyRegime・cc-cartype/cc-program change 等) を通して
 // 復元する。course はプリセット読込後に loadPresets().then で別途復元 (下記)。shareReady は
@@ -2522,6 +2715,12 @@ shareState = decodeState(location.hash);
 if (hasShareState(shareState)) applyShareState(shareState);
 syncButtons();
 requestAnimationFrame(frame);
+// Stage AS2: 変更履歴 (124KB) の先読み。初回コース描画を済ませた **後** の暇な時間に読む＝
+// 起動の critical path には乗らず、人が版バッジへホバーする頃には組み上がっている。
+{
+  const idle = window.requestIdleCallback ? window.requestIdleCallback.bind(window) : ((f) => setTimeout(f, 300));
+  idle(() => { renderChangelogPopup(); });
+}
 // AP4: data 系 (練習ベスト/自作コース/独自車種) の保存失敗を握りつぶさず 1 行通知する。
 // what = 安定 id ('best'|'course'|'car') を i18n 文言化して logLine へ (設定系トグルは対象外)。
 setStoreFailHandler((what) => {

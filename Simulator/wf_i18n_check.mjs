@@ -8,7 +8,7 @@
 //   ④ `h` (ja 内容ハッシュ印) 持ちキーは hash(ja)===h であること … 違反で非ゼロ終了
 //      (Phase O・陳腐化検知。ja を直して en を直し忘れた「古い英語」を落とす。
 //       `h` を持たないキー＝Phase N 既存の短文は従来どおり ④ 対象外＝後方互換。)
-//   ⑤ config.js CHANGELOG の各エントリに noteEn が非空・h=hash(note) であること … 違反で非ゼロ終了
+//   ⑤ changelog.js CHANGELOG の各エントリに noteEn が非空・h=hash(note) であること … 違反で非ゼロ終了
 //      かつ先頭エントリの版が APP_VERSION と一致すること (版バンプ時の更新漏れ検知)。
 //   ⑥ data/courses.json の各ビルトインコースに name_en/desc_en が非空であること   … 違反で非ゼロ終了
 //      (AB4・RC-I18N-001。name があるのに name_en 欠落 / desc があるのに desc_en 欠落で落とす。
@@ -39,8 +39,10 @@ const JSDIR = join(ROOT, 'public', 'js');
 const { MESSAGES } = await import('./public/js/i18n/messages.js');
 const catalogKeys = Object.keys(MESSAGES);
 
-// ---- ⑤ のため: config.js の CHANGELOG / APP_VERSION (en 併記＋陳腐化印 h=hash(note)) ----
-const { CHANGELOG, APP_VERSION } = await import('./public/js/config.js');
+// ---- ⑤ のため: changelog.js の CHANGELOG / config.js の APP_VERSION (en 併記＋陳腐化印 h=hash(note)) ----
+const { APP_VERSION } = await import('./public/js/config.js');
+// CHANGELOG は Stage AS2 で changelog.js へ分離。
+const { CHANGELOG } = await import('./public/js/changelog.js');
 
 // ---- ② のため: index.html が参照する data-i18n* キーを抽出 ----
 const html = readFileSync(HTML, 'utf8');
@@ -145,7 +147,8 @@ try {
 //   race.summary./race.reason./official.status./store.what. は suffix が実行時データ駆動で単一ソース列挙
 //   不能＝対象外 (存在するキーの ja/en 空は ① が既に担保)。
 const { PROGRAMS } = await import('./public/js/programs.js');
-const { CAR_PARAM_DOC, REGIMES } = await import('./public/js/config.js'); // CHANGELOG/APP_VERSION と同モジュール
+const { CAR_PARAM_DOC, REGIMES, TIRE_SETS, GEAR_SETS, SUSP_SETS, SUSP_DEFAULT, STEER_SETS, STEER_DEFAULT } = await import('./public/js/config.js'); // CHANGELOG/APP_VERSION と同モジュール
+const { DIFF_LEVELS } = await import('./public/js/challenge.js');   // AS13: チャレンジのバッジ suffix ドメイン
 const errSubs = new Set(['line', 'stepLimit']); // line=" (行 N)" 接尾ヘルパ / stepLimit=StepLimit クラス sub
 try {
   const evalSrc = readFileSync(join(JSDIR, 'interp', 'evaluator.js'), 'utf8');
@@ -158,6 +161,29 @@ const dynFamilies = [
   { prefix: 'fleet.regime.', keys: Object.keys(REGIMES), src: `REGIMES (${Object.keys(REGIMES).length})` },
   { prefix: 'course.diff.', keys: ['1', '2', '3', '4', '5'], src: 'diff 1..5' },
   { prefix: 'event.class.', keys: ['open', 'spec', 'budget'], src: 'クラス enum (3)' },
+  // AS9: 装備ラベルは main.js が t('log.tire.'+tireSet) / t('log.gear.'+gearSet)、hud.js が
+  // t('hud.lb.tire.'+…) / t('hud.lb.gear.'+…) で動的構築する。suffix ドメインの権威は config の
+  // TIRE_SETS/GEAR_SETS (白リストそのもの) ⇒ タイヤ/ギアを増やしたらラベル付け忘れで必ず落ちる。
+  { prefix: 'log.tire.', keys: TIRE_SETS, src: `TIRE_SETS (${TIRE_SETS.length})` },
+  { prefix: 'log.gear.', keys: GEAR_SETS, src: `GEAR_SETS (${GEAR_SETS.length})` },
+  { prefix: 'hud.lb.tire.', keys: TIRE_SETS, src: `TIRE_SETS (${TIRE_SETS.length})` },
+  { prefix: 'hud.lb.gear.', keys: GEAR_SETS, src: `GEAR_SETS (${GEAR_SETS.length})` },
+  // AS11: サス自由度も同型 (main.js が t('log.susp.'+suspSet)、hud.js が t('hud.lb.susp.'+…))。
+  // HUD は **非既定のときだけ**バッジを出すので既定 (quasi) のラベルは持たない ⇒ 既定を除いた集合が権威。
+  { prefix: 'log.susp.', keys: SUSP_SETS, src: `SUSP_SETS (${SUSP_SETS.length})` },
+  { prefix: 'fleet.susp.', keys: SUSP_SETS, src: `SUSP_SETS (${SUSP_SETS.length})` },
+  { prefix: 'hud.lb.susp.', keys: SUSP_SETS.filter((k) => k !== SUSP_DEFAULT), src: `SUSP_SETS 非既定 (${SUSP_SETS.length - 1})` },
+  // AS12: 操舵サーボも同型 (main.js が t('log.steer.'+steerSet)、hud.js が t('hud.lb.steer.'+…))。
+  // HUD は非既定のときだけバッジを出すので既定 (tri) のラベルは持たない。
+  { prefix: 'log.steer.', keys: STEER_SETS, src: `STEER_SETS (${STEER_SETS.length})` },
+  { prefix: 'fleet.steer.', keys: STEER_SETS, src: `STEER_SETS (${STEER_SETS.length})` },
+  { prefix: 'hud.lb.steer.', keys: STEER_SETS.filter((k) => k !== STEER_DEFAULT), src: `STEER_SETS 非既定 (${STEER_SETS.length - 1})` },
+  // AS13: チャレンジのバッジ/状態は main.js が t('chal.badge.'+key) / t('chal.state.'+state) で動的構築する。
+  // suffix ドメインの権威は challenge.js の DIFF_LEVELS (バッジは first + 難度ごと + all) と 3 状態の enum
+  // ⇒ 難度の刻みを増やしたらラベル付け忘れで必ず落ちる (TIRE_SETS と同型)。
+  { prefix: 'chal.badge.', keys: ['first', ...DIFF_LEVELS.map((d) => 'diff' + d), 'all'],
+    src: `first + DIFF_LEVELS (${DIFF_LEVELS.length}) + all` },
+  { prefix: 'chal.state.', keys: ['none', 'started', 'clear'], src: '進捗 enum (3)' },
 ];
 const dynExpected = [];
 for (const f of dynFamilies) for (const k of f.keys) dynExpected.push(f.prefix + k);
@@ -212,7 +238,7 @@ if (stale.length) {
 
 if (clEmpty.length || clStale.length || clVerMismatch) {
   fail = true;
-  console.log(`\n✗ ⑤ CHANGELOG (config.js) に問題`);
+  console.log(`\n✗ ⑤ CHANGELOG (changelog.js) に問題`);
   for (const s of clEmpty) console.log(`    - 空: ${s}`);
   for (const s of clStale) console.log(`    - 陳腐化: ${s}`);
   if (clVerMismatch) console.log(`    - 先頭版不一致: ${clVerMismatch}`);

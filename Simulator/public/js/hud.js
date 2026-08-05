@@ -181,7 +181,47 @@ export function drawFleetHud(ctx, slots, view, activeIdx) {
   // 2026-08-02 利用者指摘「右上の表示が小さすぎて読めない」により拡大 (行高/余白/フォント/列幅を
   // 約 1.2 倍・box 幅を余裕をもって拡張)。表示内容・並び順・判定ロジックは無変更 (描画のみ)。
   const rowH = 23, padT = 10, headH = 19, footH = 18; // footH=練習(非公式)注記の行高 (W2)
-  const w = 268, h = padT * 2 + headH + rowH * slots.length + footH;
+  const padL = 12, wMin = 268;
+  // BEST=練習(非公式)記録である旨を明示 (W2)。公式記録(将来のレース)と混同しないための注記。
+  // AP2: 表示中のベストに旧エンジン版で樹立された記録があれば「(当時 vX)」を併記（版跨ぎ比較の誤解
+  // を防ぐ・公式 official.result.archived と同型。現行版一致の記録には出さない＝誤検知なし）。
+  let note = t('hud.lb.note');
+  for (const s of slots) {
+    const rv = s.lap && s.lap.bestRec && s.lap.bestRec.ver;
+    if (rv && rv !== APP_VERSION) { note += '  ' + t('hud.lb.archived', { ver: rv }); break; }
+  }
+  // AS9 ③: **非既定の装備だけ**を注記へ刻む (既定 normal/direct では 1 文字も足さない=従来の注記と
+  // 完全一致)。装備は v2 エンジンのみ物理へ効くので v2 の車だけを見る (旧エンジンでは選んでも無効)。
+  // 幅は下の実測ロジックがこの note に合わせて広げる (AS1) ので枠外へ切れない。
+  const equip = [];
+  for (const s of slots) {
+    const c = s.car;
+    if (!c) continue;
+    // AS12: 操舵サーボは **全エンジン共通**の装備ゆえ v2 判定より前で拾う (下の3つは v2 専用)。
+    if (c.steerSet && c.steerSet !== 'tri') equip.push(t('hud.lb.steer.' + c.steerSet));
+    if (c.engine !== 'v2') continue;
+    if (c.tireSet && c.tireSet !== 'normal') equip.push(t('hud.lb.tire.' + c.tireSet));
+    if (c.gearSet && c.gearSet !== 'direct') equip.push(t('hud.lb.gear.' + c.gearSet));
+    if (c.suspSet && c.suspSet !== 'quasi') equip.push(t('hud.lb.susp.' + c.suspSet));   // AS11
+  }
+  if (equip.length) note += '  [' + [...new Set(equip)].join('/') + ']';
+  // AS1: 注記の実測幅にパネル幅を合わせる。固定幅 268px では注記が枠を越えて canvas の外へ
+  // 切れていた（実測: ja 282px / en 336px に対し内幅 244px。特に en は「(当時 vX)」注記なしでも
+  // 252px で既に溢れる）。パネルは右詰め (x0 = wPx - w - 12) なので、広げると左へ伸びて画面内に収まる。
+  // 行の列位置はすべて x0 基準なので配置は不変＝広がるのは右側の余白のみ。
+  let noteFont = 12;
+  ctx.save();
+  ctx.font = noteFont + 'px monospace';
+  let noteW = ctx.measureText(note).width;
+  const wMax = Math.max(wMin, view.wPx - 24);   // 画面幅を越えて広げない (狭い端末での保険)
+  const w = Math.min(Math.max(wMin, noteW + padL * 2), wMax);
+  // wMax で頭打ちになる狭い画面では、注記側を縮めて収める (下限 9px)。
+  while (noteW > w - padL * 2 && noteFont > 9) {
+    ctx.font = (--noteFont) + 'px monospace';
+    noteW = ctx.measureText(note).width;
+  }
+  ctx.restore();
+  const h = padT * 2 + headH + rowH * slots.length + footH;
   const x0 = view.wPx - w - 12, y0 = 12;
   ctx.save();
   ctx.fillStyle = 'rgba(10,12,16,0.86)';
@@ -214,16 +254,9 @@ export function drawFleetHud(ctx, slots, view, activeIdx) {
       : (s.car?.crashed ? '#ff6b6b' : (s.running ? '#6fe39a' : '#8a93a3'));
     ctx.fillText(st, x0 + 222, y);
   });
-  // BEST=練習(非公式)記録である旨を明示 (W2)。公式記録(将来のレース)と混同しないための注記。
-  // AP2: 表示中のベストに旧エンジン版で樹立された記録があれば「(当時 vX)」を併記（版跨ぎ比較の誤解
-  // を防ぐ・公式 official.result.archived と同型。現行版一致の記録には出さない＝誤検知なし）。
-  let note = t('hud.lb.note');
-  for (const s of slots) {
-    const rv = s.lap && s.lap.bestRec && s.lap.bestRec.ver;
-    if (rv && rv !== APP_VERSION) { note += '  ' + t('hud.lb.archived', { ver: rv }); break; }
-  }
-  ctx.font = '12px monospace'; ctx.fillStyle = '#a3aebe';
-  ctx.fillText(note, x0 + 12, y0 + h - padT + 2);
+  // 注記の本文とフォントは上（パネル幅の決定）で確定済み。
+  ctx.font = noteFont + 'px monospace'; ctx.fillStyle = '#a3aebe';
+  ctx.fillText(note, x0 + padL, y0 + h - padT + 2);
   ctx.restore();
 }
 

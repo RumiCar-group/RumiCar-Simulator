@@ -15,14 +15,16 @@
 // 車種を選ぶとその車のプログラムが自動で入り、別車種のを入れて挙動差を比べることもできる。
 
 const FR_CODE = `// Apex Hunter — ノーマル FR 用  [Fable Racing Line / Lv1 基準]  by Fable 5
-// 試走(全30ドライ周回): 27/30 完走・平均 2.08 km/h。素直なFRはこの単純ロジックで6種中トップ級。
+// 実測 (v6.0.0・完走が定義される全41コース中39コース・既定3台・laps=3・rejoin=OFF): 37/39 完走。
+// 素直なFRはこの単純ロジックで6種中トップ級。
 // ★学習の出発点★ FRは駆動(後輪)と操舵(前輪)が分かれるので最も素直に曲がる(us=0.10)。
 // だから小細工なしの「素直なギャップフォロワー」がそのまま良く走る。まずこれで基本を掴もう。
 //
-// 全車に共通する土台ロジック(3つ):
+// 全車に共通する土台ロジック(4つ):
 //   (1) 前方センサー C の空き具合で速度を3段に変える(直線=速い / 中速 / コーナー=遅い)
 //   (2) 前が詰まったら左右で「広い方」へ全力で曲げる
 //   (3) 側方の壁が近ければ離れる方向へ補正する
+//   (4) 前が塞がったまま開いてこなければ、いったん下がって切り返す(行き止まり脱出)
 // 他の車種は「この土台に何を足すか/引くか」で特性を引き出す。FRは足す必要が少ない=基準。
 // ※FRはアクセルONで少しリアが出る(powerOs=0.40)ので、旋回中だけ上限PWM(TCAP)で軽く抑える。
 
@@ -33,18 +35,39 @@ int CONF=640, OPEN=9999;   // 信頼区間[mm]: これを超える/範囲外(-3)
 // 広い(廊下~550mm)ため実スケール換算 ~640mm(=250×2.56) を既定にする。★実機へ移すときは自機の
 // 車体/搭載高に合わせて下げ(目安250mm)、併せて速度も落とすこと。fullscale は 250×領域スケール。
 
-void setup() { RC_setup(); }
+int ESC=120, STUCK=1, BACK=7, SETTLE=4;   // (4) [脱出] 前方が ESC[mm] 未満で「詰まり続け」が STUCK 回
+int prevC; int seen; int stuckT; int escBack; int escRec; int escDir;  // 続いたら行き止まり → BACK 回後退 → SETTLE 回落ち着き
+// 3値操舵は最小旋回半径が決まっているので、それより小さいコーナーは「下がって角度を作り直す」しか
+// 通れない(実機でも同じ)。要点は2つ:
+//   ★掠めただけでは発火させない★ 速いコースでは壁を数十mmでかすめるのが普通(実測: 全3台完走できる
+//     コースでも前方最小 25mm まで詰まる)。距離だけで判定すると正常な走行を壊す。だから「近い」に
+//     加えて「前方が開いてこない(dC<=0)」を必須にする — かすめて抜ける場面は前方が開くので発火しない。
+//   ★後退中は舵を固定する★ 毎回 L/R を見比べて舵を選び直すと左右にぶれて同じ場所を往復し(極限周回)、
+//     ヘアピンから出られなくなる。抜ける向きは入った瞬間に決めて、後退の間ずっと保つ。
+
+void setup() { RC_setup(); prevC = 0; seen = 0; stuckT = 0; escBack = 0; escRec = 0; escDir = CENTER; }
 
 void loop() {
   int L = sensor0.readRangeSingleMillimeters(); if (L < 0 || L > CONF) L = OPEN;  // 信頼区間外/範囲外=開放
   int C = sensor1.readRangeSingleMillimeters(); if (C < 0 || C > CONF) C = OPEN;
   int R = sensor2.readRangeSingleMillimeters(); if (R < 0 || R > CONF) R = OPEN;
 
-  // (2)(3) 操舵: 前が詰まれば広い方へ、側方が近ければ離れる
+  // (4) ★行き止まりからの脱出★ 詰まり続けたら、開いている側へ鼻先が向くよう“逆ハンで後退”する。
+  int dC = 0; if (seen == 1) dC = C - prevC; prevC = C; seen = 1;   // dC<=0 = 前方が開いてこない
+  if (C < ESC && dC <= 0) stuckT = stuckT + 1;   // 「近い」かつ「開かない」が続いた回数
+  if (C >= ESC) stuckT = 0;                      // 前が開いたら解除
+  if (escBack > 0) { escBack = escBack - 1; RC_steer(escDir); RC_drive(REVERSE, 170); return; }   // 舵を固定して後退
+  if (escRec > 0) { escRec = escRec - 1; RC_steer(CENTER); RC_drive(FORWARD, 90); return; }       // 直後は落ち着かせる
+  if (stuckT >= STUCK) {
+    if (L > R) escDir = RIGHT; else escDir = LEFT;   // 開いている側へ鼻先が向く舵を“入口で決めて”固定
+    escBack = BACK; escRec = SETTLE; stuckT = 0;
+    RC_steer(escDir); RC_drive(REVERSE, 170); return;
+  }
+
+  // (2)(3) 操舵: 前が詰まれば広い方へ、側方が近ければ「近い方の壁から」離れる
   int turning = 1;
   if (C < D_TURN) { if (L > R) RC_steer(LEFT); else RC_steer(RIGHT); }
-  else if (R < D_SIDE) RC_steer(LEFT);
-  else if (L < D_SIDE) RC_steer(RIGHT);
+  else if (L < D_SIDE || R < D_SIDE) { if (L > R) RC_steer(LEFT); else RC_steer(RIGHT); }
   else { RC_steer(CENTER); turning = 0; }
 
   // (1) 速度: 前方が開けているほど速く
@@ -57,7 +80,7 @@ void loop() {
 `;
 
 const AWD_CODE = `// Traction Blitz — ノーマル 4WD 用  [Fable Racing Line / Lv2 強みを使う]  by Fable 5
-// 試走(ドライ31コース): standard 25/31 完走 / 動力学モデル 24/31・平均 2.11 km/h(最高速級)。
+// 実測 (v6.0.0・同条件): 35/39 完走。最高速級。
 // 4WDは四輪で路面を掴み発進空転がほぼ無く(spin=0)、加速が最強(accel=1.25)・最高速も上。
 // 弱点はやや重くアンダー寄り(massが大)。
 // ★引き出すロジック★ 他車にはできない「コーナー出口で“誰より早く”フル加速」。
@@ -72,9 +95,11 @@ int CONF=640, OPEN=9999;   // 信頼区間[mm]: >CONF/範囲外(-3)=「遠い/�
 // ~250mm 超を信頼しにくい。本シム卓上は実機模型の約2.5倍広いので実スケール換算 ~640mm を既定にする。
 // ★実機へ移すときは自機の車体/搭載高に合わせて下げ(目安250mm)速度も落とす。fullscale は 250×領域スケール。
 int EXIT=18;            // 前方が1ループでこの[mm]以上開いたら=コーナー脱出 → 立ち上がり全開
+int ESC=100, STUCK=1, BACK=7, SETTLE=6;   // [脱出] 基準FRと同じ土台。詰まり続けたら BACK 回後退→SETTLE 回落ち着き。
+int stuckT; int escBack; int escRec; int escDir;   //   掠めただけでは発火させず、後退中は舵を固定する。
 int prevC; int started; // 前回の前方距離 (差分=接近/開きの検知に使う)
 
-void setup() { RC_setup(); prevC = 0; started = 0; }
+void setup() { RC_setup(); prevC = 0; started = 0; stuckT = 0; escBack = 0; escRec = 0; escDir = CENTER; }
 
 void loop() {
   int L = sensor0.readRangeSingleMillimeters(); if (L < 0 || L > CONF) L = OPEN;  // 信頼区間外/範囲外=開放
@@ -83,11 +108,20 @@ void loop() {
   int dC = 0;
   if (started == 1) dC = C - prevC;   // dC>0 = 前方が開いてくる = コーナーの立ち上がり
   prevC = C; started = 1;
+  // ★行き止まりからの脱出★ 詰まり続けたら開いている側へ鼻先を向けて後退 (立ち上がり検知は持ち越さない)
+  if (C < ESC && dC <= 0) stuckT = stuckT + 1;   // 「近い」かつ「開かない」が続いた回数
+  if (C >= ESC) stuckT = 0;                      // 前が開いたら解除
+  if (escBack > 0) { escBack = escBack - 1; RC_steer(escDir); RC_drive(REVERSE, 170); started = 0; return; }
+  if (escRec > 0) { escRec = escRec - 1; RC_steer(CENTER); RC_drive(FORWARD, 90); started = 0; return; }
+  if (stuckT >= STUCK) {
+    if (L > R) escDir = RIGHT; else escDir = LEFT;
+    escBack = BACK; escRec = SETTLE; stuckT = 0; started = 0;
+    RC_steer(escDir); RC_drive(REVERSE, 170); return;
+  }
 
   int turning = 1;
   if (C < D_TURN) { if (L > R) RC_steer(LEFT); else RC_steer(RIGHT); }
-  else if (R < D_SIDE) RC_steer(LEFT);
-  else if (L < D_SIDE) RC_steer(RIGHT);
+  else if (L < D_SIDE || R < D_SIDE) { if (L > R) RC_steer(LEFT); else RC_steer(RIGHT); }   // 近い方の壁から離れる
   else { RC_steer(CENTER); turning = 0; }
 
   int pwm = SLOW;
@@ -101,7 +135,7 @@ void loop() {
 `;
 
 const FF_CODE = `// Steady Nose — ノーマル FF 用  [Fable Racing Line / Lv3 弱点を補う]  by Fable 5
-// 試走(全30ドライ周回): 23/30 完走・平均 1.64 km/h。乾いた路面ではFFは構造上やや遅いが安定。
+// 実測 (v6.0.0・同条件): 31/39 完走。乾いた路面ではFFは構造上やや遅いが安定。
 //   ※FFの真価は雨(低グリップ)。攻めるとテールの出る車は自滅するが、アンダーのFFは生き残る。
 // FFは前輪が「駆動」と「操舵」を兼ねる。曲げながらアクセルを踏むと前輪が駆動に取られて
 // 曲がる力を失い、外へ膨らむ(パワーアンダー, powerUs=0.50)。発進空転も大きい(spin=0.45)。
@@ -116,17 +150,34 @@ int CONF=640, OPEN=9999;   // 信頼区間[mm]: >CONF/範囲外(-3)=「遠い/�
 // ~250mm 超を信頼しにくい。本シム卓上は実機模型の約2.5倍広いので実スケール換算 ~640mm を既定にする。
 // ★実機へ移すときは自機の車体/搭載高に合わせて下げ(目安250mm)速度も落とす。fullscale は 250×領域スケール。
 
-void setup() { RC_setup(); }
+int ESC=110, STUCK=1, BACK=5, SETTLE=4;   // [脱出] 基準FRと同じ土台。詰まり続けたら BACK 回後退→SETTLE 回落ち着き。
+int prevC; int seen; int stuckT; int escBack; int escRec; int escDir;
+// FF は前輪が駆動と操舵を兼ねるぶん曲がりきれず詰まりやすいので切り返しの効きが大きい。
+// ★掠めただけでは発火させない★ =「近い」かつ「開かない」が続いたときだけ行き止まりとみなす。
+// ★後退中は舵を固定する★ =左右にぶれて同じ場所を往復するのを防ぐ。
+
+void setup() { RC_setup(); prevC = 0; seen = 0; stuckT = 0; escBack = 0; escRec = 0; escDir = CENTER; }
 
 void loop() {
   int L = sensor0.readRangeSingleMillimeters(); if (L < 0 || L > CONF) L = OPEN;  // 信頼区間外/範囲外=開放
   int C = sensor1.readRangeSingleMillimeters(); if (C < 0 || C > CONF) C = OPEN;
   int R = sensor2.readRangeSingleMillimeters(); if (R < 0 || R > CONF) R = OPEN;
 
+  // ★行き止まりからの脱出★ 詰まり続けたら、開いている側へ鼻先が向くよう“逆ハンで後退”する。
+  int dC = 0; if (seen == 1) dC = C - prevC; prevC = C; seen = 1;   // dC<=0 = 前方が開いてこない
+  if (C < ESC && dC <= 0) stuckT = stuckT + 1;   // 「近い」かつ「開かない」が続いた回数
+  if (C >= ESC) stuckT = 0;                      // 前が開いたら解除
+  if (escBack > 0) { escBack = escBack - 1; RC_steer(escDir); RC_drive(REVERSE, 170); return; }
+  if (escRec > 0) { escRec = escRec - 1; RC_steer(CENTER); RC_drive(FORWARD, 90); return; }  // 脱出直後は落ち着かせる
+  if (stuckT >= STUCK) {
+    if (L > R) escDir = RIGHT; else escDir = LEFT;
+    escBack = BACK; escRec = SETTLE; stuckT = 0;
+    RC_steer(escDir); RC_drive(REVERSE, 170); return;
+  }
+
   int steering = 1;   // 1=今ハンドルを切っている, 0=まっすぐ
   if (C < D_TURN) { if (L > R) RC_steer(LEFT); else RC_steer(RIGHT); }
-  else if (R < D_SIDE) RC_steer(LEFT);
-  else if (L < D_SIDE) RC_steer(RIGHT);
+  else if (L < D_SIDE || R < D_SIDE) { if (L > R) RC_steer(LEFT); else RC_steer(RIGHT); }   // 近い方の壁から離れる
   else { RC_steer(CENTER); steering = 0; }
 
   // ★FFの肝★ 操舵中はアクセルを抜き(前輪を操舵に専念)、まっすぐなら前方の空きで加速する。
@@ -1704,6 +1755,562 @@ def loop():
             Serial.println("pos=bin " + round(estb) + "/" + LAPBF + " conf=" + round(conf*100) + "%")
 `;
 
+// AS4: 上の 2 本 (Recon Racer / Self-Locator) の Arduino C++ 移植。地図・指紋・ヒストグラムを
+//   「配列」で持つ学習モデルが Python でしか書けなかった状態を解消する。ロジックと定数は py 版と
+//   同一で、同じコース・同じ車種で走らせた結果 (順位・タイム・verifyHash) が py 版と一致すること
+//   を常設ゲート wf_as4_carray.mjs が実測で機械確認する (＝移植の忠実性を主張でなく測定で示す)。
+const RECON_RACER_C_CODE = `// Recon Racer (C) — コースを試走で覚えてレーシングライン＋本番は他車を見て最善手  [競技 / フルスケール・Arduino C++・要エンコーダ]  by Opus 5
+// ★領域=フルスケール / コース=競技サーキット / 車=ノーマルFF / 車輪エンコーダ(任意)ON★
+// Python 版 Recon Racer の忠実な C 移植。走りの考え方は py 版と同一:
+//   1周目(試走): 前方3センサーで安全に周回しつつ、エンコーダで測った「スタートからの距離」を
+//                インデックスに各地点の 前方の詰まり(コーナーのきつさ sev) と 左右の壁の余地(mapL/mapR)
+//                を配列の地図に記録する。前方の最近壁距離 wmin も覚える(近すぎる読み=他車は除く)。
+//   2周目以降(本番): 覚えた地図で「この先のきついコーナー」を先読みして手前で減速し、「覚えた壁の
+//                距離」と「今のセンサー値」の差から前/横の他車を見つけ、前が詰まったら余地の広い側
+//                (=多くはアウト側)から抜き、抜けないなら追従して自滅しない。
+// ★C 移植のポイント(ここが配列対応の学びどころ)★
+//   ・地図は配列 int sev[N]; / mapL[N]; / mapR[N]; で持つ。長さは const int N=72; の定数で決める。
+//   ・要素数は sizeof(sev)/sizeof(sev[0]) でも取れる(Arduino の定石。本シムは要素数を返す)。
+//   ・Python の切り捨て除算 a//b は C に無い。本シムの C の / は真の除算なので floor(a/b) と書く
+//     (実機 Arduino C は int どうしなら / が切り捨て=同じ結果になる)。
+//   ・配列は関数へ渡すと参照が渡る(C のポインタ減衰と同じ)。int f(int a[], int n) と書ける。
+// ★D-1: 学習側は ToF×3 + 任意エンコーダのみ。絶対位置・方位(ヨー)は与えられない★
+//   エンコーダ未装備だと距離が測れず地図は無効化され、反応のみ(Circuit Racer 相当)で走る。
+const int N=72;
+const int BL=700;
+const int AHEAD=3;
+const int TIGHT=20000;
+const int VTIGHT=15000;
+const int VFAST=26;
+const int RTCAP=53;
+const int LAP_MIN_S=18000;
+const int LAP_HDG=6000;
+const int TOP=91;
+const int MID=72;
+const int SLOW=53;
+const int TCAP=58;
+const int D_OPEN=33000;
+const int D_MID=22000;
+const int D_TURN=16000;
+const int CONF=150000;   // 信頼区間[mm]: >CONF/範囲外(-3)=遠い/開放
+const int CLOSE=1600;
+const int BRK=240;
+const int BIAS=2000;
+const int CARMIN=20000;
+const int CARGAP=3000;
+const int CAR_SEE=19000;
+const int OVT_NEAR=12000;
+const int SIDE_OPEN=15000;
+const int SIDE_DIFF=6000;
+const int FOLLOW=44;
+const int FOLLOW_NEAR=9000;
+// 地図(配列)。バケツ番号 = スタートからの距離 / BL。
+int sev[N];
+int mapL[N];
+int mapR[N];
+float LAPLEN=0;
+int LAPB=0;
+int phase=0;
+float s=0;
+float hdg=0;
+float prevC=0;
+int started=0;
+float wmin=99000;
+int told=0;
+long sc=0;
+
+void setup(){
+  RC_setup();
+  LAPLEN=0;
+  LAPB=0;
+  phase=0;
+  s=0;
+  hdg=0;
+  prevC=0;
+  started=0;
+  wmin=99000;
+  told=0;
+  sc=0;
+  // 配列の初期化。要素数は sizeof で取れる(= N と同じ)。
+  for(int i=0;i<sizeof(sev)/sizeof(sev[0]);i++){
+    sev[i]=99000;
+    mapL[i]=99000;
+    mapR[i]=99000;
+  }
+}
+
+void loop(){
+  // --- 自己位置(距離)をエンコーダで積分。未装備(-1)なら距離を測れず地図は無効=反応のみで走る ---
+  float v=RC_wheel_speed(REAR);
+  if(v<0){ v=0; }
+  s=s+v;
+  // --- 前方3センサー(範囲外 -3 は「遠く開けている」に正規化) ---
+  float L=RC_read(LEFT);
+  float C=RC_read(CENTER);
+  float R=RC_read(RIGHT);
+  if(L<0 || L>CONF){ L=99000; }
+  if(C<0 || C>CONF){ C=99000; }
+  if(R<0 || R>CONF){ R=99000; }
+  float dC=0;
+  if(started==1){ dC=prevC-C; }
+  prevC=C;
+  started=1;
+  // --- 距離→バケツ(本番は1周ぶんで折り返す)。py の s//BL は C では floor(s/BL) ---
+  int b=floor(s/BL);
+  if(phase==1){ b=b%LAPB; }
+  if(b<0){ b=0; }
+  if(b>=N){ b=N-1; }
+  // --- 地図づくり: 前方の詰まり・左右の余地を配列へ記録(最小=最も近い壁) ---
+  if(C<sev[b]){ sev[b]=C; }
+  if(L<mapL[b]){ mapL[b]=L; }
+  if(R<mapR[b]){ mapR[b]=R; }
+  if(phase==0 && C>CARMIN && C<wmin){ wmin=C; }
+  // --- 前方の他車検知(地図差分) ---
+  float cthr=wmin-CARGAP;
+  if(cthr>CAR_SEE){ cthr=CAR_SEE; }
+  int carF=0;
+  if(C<cthr){ carF=1; }
+  // --- 側方の他車検知(本番のみ・地図差分) ---
+  int carL=0;
+  int carR=0;
+  if(phase==1){
+    if(mapL[b]-L>SIDE_DIFF){ carL=1; }
+    if(mapR[b]-R>SIDE_DIFF){ carR=1; }
+  }
+  // --- 先読み: この先 AHEAD バケツのうち最もきついコーナーを見る(本番のみ) ---
+  float coming=99000;
+  if(phase==1){
+    int j=1;
+    while(j<=AHEAD){
+      int bb=(b+j)%LAPB;
+      if(sev[bb]<coming){ coming=sev[bb]; }
+      j=j+1;
+    }
+  }
+  // --- 抜きどころ判断: 前が他車で近く・直線なら、今ほんとうに広く開いている側へ寄せて抜く ---
+  int ovt=0;
+  if(carF==1 && C<OVT_NEAR && coming>TIGHT){
+    int okL=0;
+    int okR=0;
+    if(L>SIDE_OPEN && carL==0){ okL=1; }
+    if(R>SIDE_OPEN && carR==0){ okR=1; }
+    if(okL==1 && okR==1){
+      if(mapL[b]>mapR[b]){ ovt=1; }
+      else if(mapR[b]>mapL[b]){ ovt=-1; }
+      else if(L>R){ ovt=1; }
+      else { ovt=-1; }
+    }
+    else if(okL==1){ ovt=1; }
+    else if(okR==1){ ovt=-1; }
+    if(told==0 && ovt!=0){
+      Serial.println("traffic ahead: passing on the open side");
+      told=1;
+    }
+  }
+  // --- 操舵の向き(壁回避 → 抜き → センタリング)。st=方位デッドレコニング用の意図方向 ---
+  int turning=1;
+  int st=0;
+  int dir=CENTER;
+  if(C<D_TURN){
+    if(L>R){ dir=LEFT; st=1; }
+    else { dir=RIGHT; st=-1; }
+  }
+  else if(ovt==1){ dir=LEFT; st=1; }
+  else if(ovt==-1){ dir=RIGHT; st=-1; }
+  else if(L-R>BIAS){ dir=LEFT; st=1; }
+  else if(R-L>BIAS){ dir=RIGHT; st=-1; }
+  else { dir=CENTER; turning=0; }
+  // ★v2(精密動力学)対応=全舵デューティ変調★ 2ループに1回だけ実際に舵を当て残りは CENTER に戻す。
+  sc=sc+1;
+  if(turning==1 && (sc%2)<1){ RC_steer(dir); }
+  else { RC_steer(CENTER); }
+  hdg=hdg+st*v;
+  // --- 速度(反応): 前が開けているほど速く・旋回中は抑える ---
+  int pwm=SLOW;
+  if(C>D_OPEN){ pwm=TOP; }
+  else if(C>D_MID){ pwm=MID; }
+  if(turning==1 && pwm>TCAP){ pwm=TCAP; }
+  // --- 先読み減速(本番のみ) ---
+  if(phase==1 && coming<TIGHT && pwm>RTCAP){ pwm=RTCAP; }
+  // --- 抜けない時の追従(自滅回避) ---
+  if(carF==1 && ovt==0 && C<FOLLOW_NEAR && pwm>FOLLOW){ pwm=FOLLOW; }
+  // --- ブレーキ判断: 反応(前方が速く縮む) + 先読み(きついコーナーへ高速接近) ---
+  int brake=0;
+  if(dC>CLOSE && C<D_OPEN){ brake=1; }
+  if(phase==1 && coming<VTIGHT && v>VFAST){ brake=1; }
+  if(brake==1){ RC_drive(BRAKE,BRK); }
+  else { RC_drive(FORWARD,pwm); }
+  // --- 1周ぶん回ったら「試走→本番」へ ---
+  if(phase==0 && s>LAP_MIN_S && (hdg>LAP_HDG || hdg<-LAP_HDG)){
+    LAPLEN=s;
+    LAPB=floor(s/BL);
+    if(LAPB<1){ LAPB=1; }
+    phase=1;
+    Serial.println("course learned: " + LAPB + " zones");
+  }
+}
+`;
+
+const COMP_LOCALIZE_C_CODE = `// Self-Locator (C) — ToF×3 + 車輪エンコーダで「今コースのどこにいるか」を1次元ヒストグラムフィルタで推定する  [競技 / フルスケール・Arduino C++・要エンコーダ]  by Opus 5
+// ★領域=フルスケール / コース=競技サーキット / 車=ノーマルFF / 車輪エンコーダ(任意)ON★
+// Python 版 Self-Locator の忠実な C 移植。考え方は py 版と同一:
+//   1周目(試走): 反応走行しながら「スタートからの距離」を目盛りに、各地点の前方/左右の壁距離を
+//                「指紋(fingerprint)」の配列 fpC/fpL/fpR に記録する。スタート地点の壁も覚える。
+//   周回検出=loop closure: 方位が一周ぶん回り、スタートの壁パターンとの差 match が「局所最小」に
+//                なった点で1周確定(単なる閾値割れは対称ゴーストで早発火するので最小追跡)。
+//   2周目以降(本番): 予測(エンコーダで確率分布 w[] を前へ移流)＋観測(指紋残差の有理カーネル)で
+//                ヒストグラムフィルタを回し、オドメトリ中心の ±WIN 窓のピークへ GAIN だけ寄せる。
+//   他車分離(残差ゲーティング): 覚えた壁より有意に近い channel は位置更新から外す(他車が居ても発散しない)。
+// ★C 移植のポイント(配列の学びどころ)★
+//   ・指紋と信念(確率分布)を配列で持つ: int fpC[NF]; / float w[NF]; / float wt[NF];(予測用の作業配列)
+//   ・py の a//b は floor(a/b)。剰余 % と floor(), atan2(), round(), abs() はそのまま使える。
+//   ・配列の要素数は sizeof(fpC)/sizeof(fpC[0]) で取れる(Arduino の定石)。
+// ★毎周おなじ反応ラインで走る(先読みで線を変えない)=指紋が周回間で再現し照合が効く。速さより
+//   「自分がどこに居るか正確に知る」ことを見せるサンプル(先読み最速化は Apex Strategist へ)。★
+// ★D-1: 学習側は ToF×3 + 任意エンコーダのみ。位置は自前計測の学習物(コースデータは渡されない)。★
+// 走行(反応)定数
+const int CONF=150000;
+const int D_TURN=16000;
+const int D_MID=22000;
+const int D_OPEN=33000;
+const int BIAS=2000;
+const int TOP=91;
+const int MID=72;
+const int SLOW=53;
+const int TCAP=58;
+const int CLOSE=1600;
+const int BRK=240;
+// 自己位置(loop closure)定数
+const int BLF=380;
+const int NF=160;
+const int LAP_MIN_S=30000;
+const int LAP_HDG=6300;
+const int CLOSURE=4000;
+const int MINWAIT=6;
+// 観測カーネルσ² (残差の効き。σ大=甘い・小=多峰へ発散)
+const float SC2=64000000;
+const float SS2=100000000;
+const int CARGAP2=9000;
+const float DT=0.05;
+const int WIN=7;
+const float GAIN=0.05;
+// 指紋(fine バケツ)・ヒストグラム
+int fpC[NF];
+int fpL[NF];
+int fpR[NF];
+int fpN[NF];
+float w[NF];
+float wt[NF];
+float LAPLEN=0;
+int LAPBF=0;
+int lp=0;
+float s=0;
+float sl=0;
+float hdg=0;
+float prevC=0;
+int started=0;
+long sc=0;
+float fs0C=0;
+float fs0L=0;
+float fs0R=0;
+int lstart=0;
+int armed=0;
+float mmin=999999;
+float mminSl=0;
+int sinceMin=0;
+float mdbg=0;
+float estb=0;
+float ests=0;
+float conf=0;
+int carF=0;
+int carL=0;
+int carR=0;
+float pe=0;
+float betaEst=0;
+long betaN=0;
+
+void setup(){
+  RC_setup();
+  LAPLEN=0;
+  LAPBF=0;
+  lp=0;
+  s=0;
+  sl=0;
+  hdg=0;
+  prevC=0;
+  started=0;
+  sc=0;
+  fs0C=0;
+  fs0L=0;
+  fs0R=0;
+  lstart=0;
+  armed=0;
+  mmin=999999;
+  mminSl=0;
+  sinceMin=0;
+  mdbg=0;
+  estb=0;
+  ests=0;
+  conf=0;
+  carF=0;
+  carL=0;
+  carR=0;
+  pe=0;
+  betaEst=0;
+  betaN=0;
+  for(int i=0;i<NF;i++){
+    fpC[i]=99000;
+    fpL[i]=99000;
+    fpR[i]=99000;
+    fpN[i]=0;
+    w[i]=0;
+    wt[i]=0;
+  }
+}
+
+void loop(){
+  float v=RC_wheel_speed(REAR);
+  if(v<0){ v=0; }
+  s=s+v;
+  sl=sl+v;
+  float L=RC_read(LEFT);
+  float C=RC_read(CENTER);
+  float R=RC_read(RIGHT);
+  if(L<0 || L>CONF){ L=99000; }
+  if(C<0 || C>CONF){ C=99000; }
+  if(R<0 || R>CONF){ R=99000; }
+  float dC=0;
+  if(started==1){ dC=prevC-C; }
+  prevC=C;
+  started=1;
+  // ── 反応走行 (毎周同一ライン=指紋再現性の源) ──
+  int turning=1;
+  int st=0;
+  int dir=CENTER;
+  if(C<D_TURN){
+    if(L>R){ dir=LEFT; st=1; }
+    else { dir=RIGHT; st=-1; }
+  }
+  else if(L-R>BIAS){ dir=LEFT; st=1; }
+  else if(R-L>BIAS){ dir=RIGHT; st=-1; }
+  else { dir=CENTER; turning=0; }
+  sc=sc+1;
+  if(turning==1 && (sc%2)<1){ RC_steer(dir); }
+  else { RC_steer(CENTER); }
+  hdg=hdg+st*v;
+  int pwm=SLOW;
+  if(C>D_OPEN){ pwm=TOP; }
+  else if(C>D_MID){ pwm=MID; }
+  if(turning==1 && pwm>TCAP){ pwm=TCAP; }
+  if(dC>CLOSE && C<D_OPEN){ RC_drive(BRAKE,BRK); }
+  else { RC_drive(FORWARD,pwm); }
+  // ── 指紋づくり (fine バケツ・lap-local 弧長 sl 目盛り・初回入場時に1回) ──
+  int bf=floor(sl/BLF);
+  if(bf<0){ bf=0; }
+  if(bf>=NF){ bf=NF-1; }
+  if(lstart==0){
+    fs0C=C;
+    fs0L=L;
+    fs0R=R;
+    lstart=1;
+  }
+  if(lp==0){
+    if(fpN[bf]==0){
+      fpC[bf]=C;
+      fpL[bf]=L;
+      fpR[bf]=R;
+      fpN[bf]=1;
+    }
+  }
+  // ── loop closure (局所最小): 方位が一周ぶん回ったら武装し、スタート指紋との差 match が「最小」に
+  //    なった点=真のスタートで1周確定。単なる閾値割れは対称ゴーストで早発火するので最小追跡。──
+  float match=abs(C-fs0C)+abs(L-fs0L)+abs(R-fs0R);
+  mdbg=match;
+  if(sl>LAP_MIN_S && (hdg>LAP_HDG || hdg<-LAP_HDG)){ armed=1; }
+  if(armed==1){
+    if(match<mmin){
+      mmin=match;
+      mminSl=sl;
+      sinceMin=0;
+    }
+    else { sinceMin=sinceMin+1; }
+    // 最小を過ぎ (match が再上昇) かつ最小が十分小さいなら発火。LAPLEN=mminSl (真の1周長)。
+    if(sinceMin>MINWAIT && mmin<CLOSURE){
+      if(lp==0){
+        LAPLEN=mminSl;
+        LAPBF=floor(mminSl/BLF);
+        if(LAPBF<1){ LAPBF=1; }
+        if(LAPBF>=NF){ LAPBF=NF-1; }
+        int i=0;
+        while(i<LAPBF){
+          if(fpN[i]==0){
+            int pj=i-1;
+            if(pj<0){ pj=LAPBF-1; }
+            fpC[i]=fpC[pj];
+            fpL[i]=fpL[pj];
+            fpR[i]=fpR[pj];
+          }
+          w[i]=0.0;
+          i=i+1;
+        }
+        lp=1;
+        Serial.println("localizer ready: " + LAPBF + " bins (loop closed)");
+      }
+      // 再アンカー: sl を「最小からの走行ぶん」へ。信念もそこへ。
+      sl=sl-mminSl;
+      int bb=floor(sl/BLF);
+      if(bb<0){ bb=0; }
+      if(bb>=LAPBF){ bb=LAPBF-1; }
+      estb=bb;
+      int i2=0;
+      while(i2<LAPBF){
+        if(i2==bb){ w[i2]=1.0; }
+        else { w[i2]=0.0; }
+        i2=i2+1;
+      }
+      armed=0;
+      mmin=999999;
+      sinceMin=0;
+    }
+  }
+  // ============ 自己位置推定 (lp==1・ヒストグラムフィルタ) ============
+  if(lp==1){
+    // 予測: エンコーダで前進 dsb ビン (小数)。前方移流 + 小拡散。
+    float dsb=v/BLF;
+    if(dsb<0){ dsb=0; }
+    if(dsb>0.9){ dsb=0.9; }
+    int i=0;
+    while(i<LAPBF){
+      wt[i]=w[i];
+      i=i+1;
+    }
+    i=0;
+    while(i<LAPBF){
+      int jm=i-1;
+      if(jm<0){ jm=LAPBF-1; }
+      int jp=i+1;
+      if(jp>=LAPBF){ jp=0; }
+      w[i]=(1-dsb)*wt[i]+dsb*wt[jm];
+      w[i]=0.96*w[i]+0.02*wt[jm]+0.02*wt[jp];
+      i=i+1;
+    }
+    // 他車ゲーティング (現ベスト bin の指紋より有意に近ければ その channel は位置更新から除外)
+    int cb=floor(estb);
+    if(cb<0){ cb=0; }
+    if(cb>=LAPBF){ cb=LAPBF-1; }
+    int useC=1;
+    int useL=1;
+    int useR=1;
+    if(C<fpC[cb]-CARGAP2){ useC=0; }
+    if(L<fpL[cb]-CARGAP2){ useL=0; }
+    if(R<fpR[cb]-CARGAP2){ useR=0; }
+    // 観測: 指紋残差 → 有理カーネル k=1/(1+err)。ソフト適用で1tick の誤マッチでは信念が飛ばない。
+    i=0;
+    while(i<LAPBF){
+      float err=0;
+      if(useC==1){
+        float d0=C-fpC[i];
+        err=err+d0*d0/SC2;
+      }
+      if(useL==1){
+        float d1=L-fpL[i];
+        err=err+d1*d1/SS2;
+      }
+      if(useR==1){
+        float d2=R-fpR[i];
+        err=err+d2*d2/SS2;
+      }
+      float kk=1/(1+err);
+      w[i]=w[i]*(0.6+0.4*kk);
+      i=i+1;
+    }
+    // 正規化 (総和ガード)
+    float sm=0;
+    i=0;
+    while(i<LAPBF){
+      sm=sm+w[i];
+      i=i+1;
+    }
+    if(sm<0.000000001){
+      i=0;
+      while(i<LAPBF){
+        w[i]=1.0/LAPBF;
+        i=i+1;
+      }
+      sm=1.0;
+    }
+    i=0;
+    while(i<LAPBF){
+      w[i]=w[i]/sm;
+      i=i+1;
+    }
+    // 推定 ŝ = オドメトリ位置を中心に ±WIN 窓内の地図照合ピークへ GAIN だけ寄せる (有界な地図補正)。
+    float center=sl/BLF;
+    if(center<0){ center=0; }
+    if(center>=LAPBF){ center=center%LAPBF; }
+    int c0=floor(center);
+    if(c0<0){ c0=0; }
+    if(c0>=LAPBF){ c0=LAPBF-1; }
+    float pk=0;
+    int pi=c0;
+    int jw=-WIN;
+    while(jw<=WIN){
+      int kw=(c0+jw)%LAPBF;
+      if(kw<0){ kw=kw+LAPBF; }
+      if(w[kw]>pk){
+        pk=w[kw];
+        pi=kw;
+      }
+      jw=jw+1;
+    }
+    float csum=0;
+    float wsum=0;
+    int jj=-3;
+    while(jj<=3){
+      int kk2=(pi+jj)%LAPBF;
+      if(kk2<0){ kk2=kk2+LAPBF; }
+      csum=csum+w[kk2]*jj;
+      wsum=wsum+w[kk2];
+      jj=jj+1;
+    }
+    float off=0;
+    if(wsum>0){ off=csum/wsum; }
+    float estRaw=pi+off;
+    // 相補フィルタ: 出力=オドメトリ予測 + GAIN×(観測ピーク−予測) の円環ブレンド。
+    float diff=estRaw-center;
+    if(diff>LAPBF/2){ diff=diff-LAPBF; }
+    if(diff<-LAPBF/2){ diff=diff+LAPBF; }
+    estb=center+GAIN*diff;
+    if(estb<0){ estb=estb+LAPBF; }
+    if(estb>=LAPBF){ estb=estb-LAPBF; }
+    ests=estb*BLF;
+    conf=pk;
+    // 他車フラグ (recall 用・driver は他車回避しないがフラグは出す)
+    carF=0;
+    carL=0;
+    carR=0;
+    if(useC==0){ carF=1; }
+    if(useL==0){ carL=1; }
+    if(useR==0){ carR=1; }
+    // ── β 再挑戦 (地図事前分布つき・実験): レコンライン からの横ずれ e とそのレート ──
+    int cbf=floor(estb);
+    if(cbf<0){ cbf=0; }
+    if(cbf>=LAPBF){ cbf=LAPBF-1; }
+    if(useL==1 && useR==1 && v>3){
+      float e=((fpL[cbf]-L)+(R-fpR[cbf]))/2;
+      float de=e-pe;
+      pe=e;
+      float braw=atan2(de/1000/DT,v)*57.29578;
+      betaEst=0.7*betaEst+0.3*braw;
+      betaN=betaN+1;
+    }
+    if((sc%10)==0){
+      Serial.println("pos=bin " + round(estb) + "/" + LAPBF + " conf=" + round(conf*100) + "%");
+    }
+  }
+}
+`;
+
 const STRATEGIST_CODE = `# Apex Strategist — 試走で覚えた地図から速度プロファイルを計画して先読み最速で周回する  [競技 / フルスケール・Python・要エンコーダ]  by Opus 4.8
 # ★領域=フルスケール / コース=競技サーキット / 車=ノーマルFF / 車輪エンコーダ(任意)ON★
 # 標準の Circuit Racer は v2 で全舵=切りすぎスピンを避けるため保守的(TCAP 低め)に組み、実測 ~210s/3周(~31m/s
@@ -2402,13 +3009,25 @@ const SPEC = [
     key: 'recon_racer', name: 'Recon Racer', label: '競技 FF', carType: 'normal_ff', kind: 'comp', code: RECON_RACER_CODE, lang: 'py',
     level: '競技 Lv7 コース試走学習', regime: 'fullscale', course: '競技サーキット (フルスケール)', encoder: true,
     strategy: '★領域=フルスケール / コース=競技サーキット / 車=ノーマルFF / 車輪エンコーダ(任意)ON★ 実車のレースのように本番前にコースを試走(recon)して覚え、本番は他車を見て最善手を選ぶ学習モデル。1周目はエンコーダ距離をインデックスに各地点のコーナーのきつさと左右の余地、前方の最近壁距離を地図に記録し、2周目以降はその地図で先読み減速する。さらに「覚えた壁の距離」と「今のセンサー値」の差から前/横の他車を見つけ、前が詰まれば余地の広い側(=多くはアウト)から抜き、抜けないなら追従して自滅しない。',
-    learns: '「見てから反応」と「覚えて先読み＋他車を見て最善手」の差。ToF×3+任意エンコーダだけで(絶対位置は与えられない)デッドレコニングの距離インデックス地図を作り、反応のみより速く確実に走る考え方。他車検知に新センサーは要らない=ToF は壁と他車を区別せず最近距離を返すので「覚えた壁距離より今が近い＝そこに他車」で見分けられる(地図差分)。抜きどころは地図のコース余地＋現センサーで計算する(アウト・イン・アウトと整合)。正直な限界=デッドレコニング誤差・固定長バケツ・py 限定・発走の団子では試走自体が難しいこと。エンコーダOFFだと距離が測れず反応のみに退化する。',
+    learns: '「見てから反応」と「覚えて先読み＋他車を見て最善手」の差。ToF×3+任意エンコーダだけで(絶対位置は与えられない)デッドレコニングの距離インデックス地図を作り、反応のみより速く確実に走る考え方。他車検知に新センサーは要らない=ToF は壁と他車を区別せず最近距離を返すので「覚えた壁距離より今が近い＝そこに他車」で見分けられる(地図差分)。抜きどころは地図のコース余地＋現センサーで計算する(アウト・イン・アウトと整合)。正直な限界=デッドレコニング誤差・固定長バケツ・発走の団子では試走自体が難しいこと(Python 限定だった制約は Recon Racer (C) の追加で解消)。エンコーダOFFだと距離が測れず反応のみに退化する。',
   },
   {
     key: 'comp_localize', name: 'Self-Locator', label: '競技 FF', carType: 'normal_ff', kind: 'comp', code: COMP_LOCALIZE_CODE, lang: 'py',
     level: '競技 Lv8 自己位置推定', regime: 'fullscale', course: '競技サーキット (フルスケール)', encoder: true,
     strategy: '★領域=フルスケール / コース=競技サーキット / 車=ノーマルFF / 車輪エンコーダ(任意)ON★ ToF×3+エンコーダだけで「今コースのどこにいるか(周回弧長)」を1次元ヒストグラムフィルタで推定する研究サンプル。1周目に各地点の前方/左右の壁距離を距離目盛りの指紋として覚え、方位が一周ぶん回りスタートの壁パターンに戻ったら1周と判定(loop closure=1周の長さが確定)。2周目以降はエンコーダで進めた確率分布を前方3センサーの指紋照合で補正し、分布のピークで自己位置と信頼度を出す。前方/側方が覚えた壁より有意に近ければ他車と見なし位置更新から外す(残差ゲーティング=壁は位置に・地図差分は他車に)。',
     learns: 'ToF×3+エンコーダだけの自己位置推定(絶対位置は与えられない=D-1)。実測=周回内の相対位置(=次コーナーまでの距離＝先読みに効く量)は約0.5bin(9m/1周2057m)と高精度、他車5台混走でも約0.8bin・前方検知recall96%・発散なし。正直な限界(J1と同型に隠さない): この清潔なコースではToF照合はエンコーダ単独に勝てず観測はむしろ追従ノイズを足す→位置推定の骨格はエンコーダのデッドレコニングで、ヒストグラムは軽い補正＋信頼度＋他車分離の役。周回原点(絶対位置)はloop closureのToFノイズで周ごとに約2.6bin(46m)ブレる=これがToF閉じ込みの原点精度限界(対称コースでは絶対≤1binには届かない)。方位/横滑り角βは地図事前分布つきでも推定できない(J-1と同じ=符号が当たらない)。地図を前提に最速化するのはApex Strategist(AO11)へ。',
+  },
+  {
+    key: 'recon_racer_c', name: 'Recon Racer (C)', label: '競技 FF', carType: 'normal_ff', kind: 'comp', code: RECON_RACER_C_CODE, lang: 'c',
+    level: '競技 Lv7 コース試走学習 (C)', regime: 'fullscale', course: '競技サーキット (フルスケール)', encoder: true,
+    strategy: '★領域=フルスケール / コース=競技サーキット / 車=ノーマルFF / 車輪エンコーダ(任意)ON★ Recon Racer の Arduino C++ 版。ロジックと定数は Python 版と同一で、地図(コーナーのきつさ sev・左右の余地 mapL/mapR)を配列 int sev[N]; で持つ。同じコース・同じ車種で走らせた結果(順位・タイム・verifyHash)が Python 版と一致することを常設ゲートで機械確認している＝「同じ考え方は C でも書ける」ことの実物。',
+    learns: '配列を使う学習モデルを Arduino C++ で書く方法。①配列の宣言と長さの持ち方(const int N=72; int sev[N];)②要素数の定石 sizeof(sev)/sizeof(sev[0])(本シムは要素数を返す。実機のバイト数とは異なる＝仕様欄に明記)③Python の切り捨て除算 a//b は C に無いので floor(a/b) と書く(実機 Arduino C は int どうしなら / が切り捨てで同じ結果)④配列を関数へ渡すと参照が渡る(C のポインタ減衰・int f(int a[], int n))。Python 版と読み比べると、同じアルゴリズムが言語でどう変わる/変わらないかが分かる。',
+  },
+  {
+    key: 'comp_localize_c', name: 'Self-Locator (C)', label: '競技 FF', carType: 'normal_ff', kind: 'comp', code: COMP_LOCALIZE_C_CODE, lang: 'c',
+    level: '競技 Lv8 自己位置推定 (C)', regime: 'fullscale', course: '競技サーキット (フルスケール)', encoder: true,
+    strategy: '★領域=フルスケール / コース=競技サーキット / 車=ノーマルFF / 車輪エンコーダ(任意)ON★ Self-Locator の Arduino C++ 版。ロジックと定数は Python 版と同一で、指紋 fpC/fpL/fpR と確率分布 w[]/wt[] を配列で持つ1次元ヒストグラムフィルタ。同じ条件での走行結果が Python 版と一致することを常設ゲートで機械確認している。',
+    learns: '確率分布(信念)を配列で回すフィルタを Arduino C++ で書く方法。予測(移流+拡散)には更新前の値が要るので作業配列 wt[] へ退避してから w[] を書き換える(=その場更新で壊さない)、正規化は総和ガードつき、円環インデックスは (i+j)%LAPBF と負の巻き戻し、という配列プログラミングの定石が一通り出てくる。実測の限界は Python 版と同一(この清潔なコースでは ToF 照合はエンコーダ単独に勝てず、骨格はデッドレコニング)。',
   },
   {
     key: 'strategist', name: 'Apex Strategist', label: '競技 FF', carType: 'normal_ff', kind: 'comp', code: STRATEGIST_CODE, lang: 'py',

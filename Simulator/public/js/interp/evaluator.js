@@ -205,6 +205,10 @@ export class Interp {
   // C 配列宣言の実体化。dims=各次元サイズ式 (null=初期化子から推定)、initVal=波括弧初期化子の評価済み値。
   // 宣言サイズに満たない要素は 0 埋め (C セマンティクス)。多次元は再帰。
   shapeArray(dims, depth, initVal, scope) {
+    // AS4: `char s[] = "ab";` は従来「長さ0の配列」を黙って作り s[0] が空になっていた
+    //   (エラーが出ない罠＝AP16 が潰したサイレント意味論乖離と同型)。文字列からの配列初期化は
+    //   未対応であることを行番号付き実行時エラーで告げる (サイレント截断の禁止)。
+    if (typeof initVal === 'string') throw this.rt('strArrayInit', {});
     const sizeNode = dims[depth];
     let len = sizeNode != null ? Math.floor(this.evalExpr(sizeNode, scope)) : 0;
     if (!(len > 0)) len = Array.isArray(initVal) ? initVal.length : 0;
@@ -216,6 +220,13 @@ export class Interp {
     }
     return arr;
   }
+
+  // AS4: sizeof の値。配列は**葉要素の総数**・スカラー(および型名)は 1 とする要素数モデル。
+  //   これにより Arduino の定石 `sizeof(a)/sizeof(a[0])` が 1 次元 (4/1=4) でも 2 次元
+  //   (m[2][3] → 6/3=2 行) でも正しく要素数になる。実機はバイト数を返すが、実機 Arduino でも
+  //   `sizeof(int)` は AVR=2 / ESP32=4 とボード依存でバイト意味論は一意でない (利用者裁定
+  //   2026-08-04: 要素数モデルを採り、実機との差は docs/physics_model と仕様欄に明記する)。
+  sizeOfVal(v) { return Array.isArray(v) ? v.reduce((s, e) => s + this.sizeOfVal(e), 0) : 1; }
 
   // ===== 式 =====
   evalExpr(node, scope) {
@@ -255,6 +266,7 @@ export class Interp {
         return a;
       }
       case 'arraydecl': return this.shapeArray(node.dims, 0, node.init ? this.evalExpr(node.init, scope) : null, scope);
+      case 'sizeof': return this.sizeOfVal(this.evalExpr(node.a, scope));
       case 'ternary': return truthy(this.evalExpr(node.cond, scope)) ? this.evalExpr(node.a, scope) : this.evalExpr(node.b, scope);
       case 'assignexpr': {
         let v;

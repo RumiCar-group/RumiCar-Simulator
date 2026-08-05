@@ -15,10 +15,10 @@
 //  - 入力 {course, regime, field, laps, crashRule, interact} が同一なら結果は純関数。
 //  - ⚠ クロスPF 浮動小数決定論 (Math.sin/cos 等の last-ULP 差) は W1 で実測 → policy 確定。
 //    verifyHash / 毎tick チェックサムでビット差を検出できるよう設計。
-import { SIM, CONST, SENSOR_NOISE, SENSOR_HOLD, REGIME_STATE, REGIMES, registerCarType, SCALE_STATE, setCarScale, APP_VERSION, PHYSICS, setPhysicsMode } from './config.js';
+import { SIM, CONST, SENSOR_NOISE, SENSOR_HOLD, SENSOR_OPTICS, REGIME_STATE, REGIMES, registerCarType, SCALE_STATE, setCarScale, APP_VERSION, PHYSICS, setPhysicsMode } from './config.js';
 import { applyRegime } from './physics_dyn.js';
 import { carEdges } from './physics.js';
-import { makeSlot, rebuildSpawns, integrateSlot, integrateFleetV2, tickSlot, othersFor, releaseDrive, applyStartGate, fitsAllCars } from './fleet.js';
+import { makeSlot, rebuildSpawns, integrateSlot, integrateFleetV2, tickSlot, othersFor, releaseDrive, applyStartGate, fitsAllCars, normTire, normGear, normSusp, normSteer } from './fleet.js';
 import { buildController } from './runner.js';
 import { buildApi } from './api.js';
 
@@ -77,16 +77,10 @@ export function engineFingerprint() {
   };
 }
 
-// 決定論 32-bit FNV-1a 文字列ハッシュ。Math.random/Date 不使用 = どの環境でも同値。
-export function fnv1a(str) {
-  let h = 0x811c9dc5 >>> 0;
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    // h *= 16777619 (mod 2^32) をシフト和で (32bit 安全)
-    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
-  }
-  return ('00000000' + h.toString(16)).slice(-8);
-}
+// 決定論 32-bit FNV-1a 文字列ハッシュ。実体は葉モジュール fnv1a.js へ統合 (v5.2.0・lap.js との
+// 定義重複解消)。既存 import 互換のため再エクスポートを維持する。アルゴリズム・出力は従来と byte 一致。
+import { fnv1a } from './fnv1a.js';
+export { fnv1a };
 
 // 1tick の全車状態チェックサム。Number.prototype.toString は最短往復可能な10進=double をビット一意に
 // 表す → 丸めず連結することで「どこか1ビットでも違えば必ず異なる文字列」になる (分岐検出力 最大)。
@@ -138,8 +132,9 @@ export function computeRaceTimeout({ course, laps = 3, regime = null }) {
 //   course   : 走行可能なコースオブジェクト (course.buildFromSpec の出力。純データ = JSON 往復可)。
 //   regime   : 'tabletop'|'midscale'|'fullscale'|null。指定時 applyRegime で物理スケールを適用。
 //   laps     : 完了に要する周回数 (>=1)。
-//   field    : [{ name, lang:'c'|'py'|'js', src, carType?, carDef?, rear?, encoder?, tire? }]。グリッド=配列順。
-//              tire='slip' は v2 エンジンのスリップ/ドリフトタイヤ (Stage AO6・v2 のみ参照・既定 normal)。
+//   field    : [{ name, lang:'c'|'py'|'js', src, carType?, carDef?, rear?, encoder?, tire?, gear?, susp?, steerSet? }]。グリッド=配列順。
+//              tire='slip'|'rain' は v2 エンジンのタイヤセット (Stage AO6/AS9・v2 のみ参照・既定 normal)。
+//              gear='short'|'tall'|'auto2' は v2 の任意装備ギア比 (Stage AS9・v2 のみ参照・既定 direct=直結)。
 //              carDef を与えると registerCarType で登録 (持ち込み車種=full JSON・W_spec §1)。
 //   crashRule: { rejoin:false→クラッシュ=DNF / true→penaltySec 加算で復帰, penaltySec:3 }。
 //   interact : 他車を障害物/センサー対象に含めるか (true=対戦/false=独立TT)。
@@ -150,7 +145,7 @@ export function computeRaceTimeout({ course, laps = 3, regime = null }) {
 // 戻り値: { finishers[], dnf[], ticks, simSec, verifyHash, traceHash, trace?, ... }。
 export function runRace(spec) {
   const {
-    course, regime = null, laps = 3, field,
+    course, regime = null, laps: lapsArg = 3, field,
     crashRule = { rejoin: false, penaltySec: 3 },
     interact = true, maxSec, trace = false, report = false, ghost = false,
     probe = null,   // AO10: 検証オラクル専用の毎tick観測フック probe(tick, slots)。未指定(既定 null)は完全 no-op
@@ -161,6 +156,12 @@ export function runRace(spec) {
     recon = null,   // AO9: 試走フェーズ {laps:N} (N=0..3)。未指定/0 は完全 no-op (既存 hash byte 不変・§8)。
     wear = false,   // AO12: タイヤ熱・摩耗モデル (opt-in・§6)。既定 false は完全 no-op (fT=fW=1=既存 hash byte 不変)。
   } = spec;
+  // AS3: 峠 (touge) はスタート→ゴールの片道で、LapTracker がゴール通過時に laps=1 で確定する (lap.js の
+  //   touge 分岐)。周回コース用の laps 引数をそのまま完走条件に使うと laps>=2 では **どのプログラムでも
+  //   到達不能** (全車 timeout DNF) になっていた。峠は実効 1 本へ正規化する。canon には実効値が載るので
+  //   記録は自己記述的 (reconLaps の clamp・AO5/AO6 の条件付きキーと同型)。周回コースは lapsArg のまま
+  //   = 完全 no-op (f0/f1/f2/f3 および既存の全公式記録は byte 不変)。
+  const laps = (course && course.touge) ? 1 : lapsArg;
   // AO9: 試走周回数を 0..3 に正規化 (UI/event/share は 0..3 のみ渡すが再現性のため clamp=canon に載る値と一致)。
   const reconLaps = (recon && recon.laps != null) ? Math.max(0, Math.min(3, Math.round(recon.laps))) : 0;
   // maxSec 明示時はそのまま (公式再実行/fixture=byte 不変)。未指定のみスケール (AB2/RC-RACE-001)。
@@ -174,11 +175,14 @@ export function runRace(spec) {
   // --- 副作用の退避 (公式実行が live globals を恒久汚染しないよう終了時に復元) ---
   const noisePrev = SENSOR_NOISE.on;
   const holdPrev = SENSOR_HOLD.on;          // AP18: sample-and-hold を退避 (SENSOR_NOISE と同型・復元は finally)
+  const opticsPrev = SENSOR_OPTICS.on;      // AS8: ToF 光学モデルを退避 (SENSOR_NOISE/HOLD と同型・復元は finally)
   const regimePrev = REGIME_STATE.active;
   const userKPrev = SCALE_STATE.userK;      // AK2/D10: carScale スライダー位置を退避 (公式は非依存に固定)
   const physModePrev = PHYSICS.mode;        // AO5: 物理エンジンを退避 (SENSOR_NOISE/userK と同型・復元は finally)
   SENSOR_NOISE.on = false;                  // 公式は決定論 = ノイズ強制 OFF (W_spec §5)
   SENSOR_HOLD.on = false;                   // AP18: 公式は決定論 = sample-and-hold 強制 OFF (ライブ UI トグルを排除=verifyHash 不変)
+  SENSOR_OPTICS.on = false;                 // AS8: 公式は共通条件 = ToF 光学モデル強制 OFF (本モデル自体は決定論だが、
+                                            //   ライブ UI トグルが記録の測距条件を変えるのを排除する=verifyHash 不変)
   // AO5: spec.physics 指定時のみエンジンをピン留め (公式/fixture の再現性・SENSOR_NOISE と同型)。未指定は
   // 現在のグローバル PHYSICS.mode をそのまま使う (ライブ選択の尊重＝既定 dynamic の f0/f1 は byte 不変)。
   if (spec.physics != null) setPhysicsMode(spec.physics);
@@ -217,9 +221,20 @@ export function runRace(spec) {
       const ct = e.carType || (e.carDef && e.carDef.key) || slot.carType;
       slot.carType = ct; slot.car.type = ct;
       slot.world.rear = !!e.rear; slot.world.encoder = !!e.encoder;
-      // AO6: タイヤセット (v2 エンジンのみ物理として反映)。world にも保持し swapPhysics 経路と一貫させる。
-      slot.world.tire = (e.tire === 'slip') ? 'slip' : 'normal';
+      // AO6/AS9: タイヤセット (v2 エンジンのみ物理として反映)。world にも保持し swapPhysics 経路と一貫させる。
+      // 正規化は fleet.normTire に単一化 (白リスト外は既定 normal)。normal/slip は旧式と同一写像=byte 不変。
+      slot.world.tire = normTire(e.tire);
       if (slot.car.engine === 'v2') slot.car.tireSet = slot.world.tire;
+      // AS9: ギア比 (任意装備・v2 のみ物理反映)。既定 direct=直結。
+      slot.world.gear = normGear(e.gear);
+      if (slot.car.engine === 'v2') slot.car.gearSet = slot.world.gear;
+      // AS11: サスペンション自由度 (任意装備・v2 のみ物理反映)。既定 quasi=自由度なし=従来と同一。
+      slot.world.susp = normSusp(e.susp);
+      if (slot.car.engine === 'v2') slot.car.suspSet = slot.world.susp;
+      // AS12: 操舵サーボ (任意装備)。**全エンジン共通** (サーボは Car の共通機構) ゆえ v2 判定を通さない。
+      // world.steerSet は api.js が RC_steer の第2引数を受理するかの判定に使う (未装備なら 0 を返す)。
+      slot.world.steerSet = normSteer(e.steerSet);
+      slot.car.steerSet = slot.world.steerSet;
       // AO12: タイヤ熱・摩耗 (レース全体の opt-in オプション=spec.wear。v2 のみ物理反映・§6)。
       slot.world.wear = !!wear;
       if (slot.car.engine === 'v2') slot.car.wear = !!wear;
@@ -431,10 +446,24 @@ export function runRace(spec) {
     // 既定 dynamic は末尾キーを付けない = 既存全ハッシュ (f0/f1 等) が byte 完全不変。v2/standard の公式記録は
     // physics キーで dynamic と別ハッシュになり (同コースでも別軌跡=別結果ゆえ正しい)、再実行で照合できる。
     if (PHYSICS.mode !== 'dynamic') canonObj.physics = PHYSICS.mode;
-    // AO6: タイヤセットを canon に含めるのは **slip 装備車が居るときだけ** (physics/grid 前例と同型)。全車 normal は
-    // 末尾キーを付けない = AO7 の f2 (v2×normal) 等 既定タイヤ記録が byte 不変。slip 記録は別ハッシュで決定論。
-    const tires = fitField.map((e) => (e && e.tire === 'slip') ? 'slip' : 'normal');
-    if (tires.some((tt) => tt === 'slip')) canonObj.tire = tires;
+    // AO6/AS9: タイヤセットを canon に含めるのは **非既定 (slip/rain) の装備車が居るときだけ** (physics/grid 前例と
+    // 同型)。全車 normal は末尾キーを付けない = AO7 の f2 (v2×normal) 等 既定タイヤ記録が byte 不変。非既定は
+    // 別ハッシュで決定論 (全車 slip の既存記録は tires 配列の中身も従来と同一ゆえ再検証で一致する)。
+    const tires = fitField.map((e) => normTire(e && e.tire));
+    if (tires.some((tt) => tt !== 'normal')) canonObj.tire = tires;
+    // AS9: ギア比を canon に含めるのは **非既定 (direct 以外) の装備車が居るときだけ**。全車 direct は末尾キーを
+    // 付けない = 既存の全ハッシュ (f0/f1/f2/f3・全公式記録) が byte 完全不変。
+    const gears = fitField.map((e) => normGear(e && e.gear));
+    if (gears.some((gg) => gg !== 'direct')) canonObj.gear = gears;
+    // AS11: サス自由度を canon に含めるのは **非既定 (quasi 以外) の装備車が居るときだけ**。全車 quasi は
+    // 末尾キーを付けない = 既存の全ハッシュ (f0/f1/f2/f3・全公式記録) が byte 完全不変 (gear と同型)。
+    const susps = fitField.map((e) => normSusp(e && e.susp));
+    if (susps.some((ss) => ss !== 'quasi')) canonObj.susp = susps;
+    // AS12: 操舵サーボ (連続舵) を canon に含めるのは **非既定 (prop) の装備車が居るときだけ**。全車 tri は
+    // 末尾キーを付けない = 既存の全ハッシュ (f0/f1/f2/f3・全公式記録) が byte 完全不変 (gear/susp と同型)。
+    // これが W_spec §5 の「装備条件を記録の素へ刻む」= 連続舵で出した記録は3値の記録と別ハッシュになる。
+    const steers = fitField.map((e) => normSteer(e && e.steerSet));
+    if (steers.some((st) => st !== 'tri')) canonObj.steerSet = steers;
     // AO9: 試走 (spec.recon) を canon に含めるのは N>0 のときだけ (physics/tire/grid 前例と同型・末尾追加)。
     // 未指定/0 は末尾キーを付けない = 既存全ハッシュ (f0/f1/f2/f3) byte 完全不変。recon>0 は学習地図で
     // 本番挙動が変わり別ハッシュ (同コースでも別結果=正しい)、再実行で照合できる (自己記述的・§7)。
@@ -484,6 +513,7 @@ export function runRace(spec) {
     // --- live globals 復元 (公式実行の副作用を残さない) ---
     SENSOR_NOISE.on = noisePrev;
     SENSOR_HOLD.on = holdPrev;                // AP18: sample-and-hold を復元
+    SENSOR_OPTICS.on = opticsPrev;            // AS8: ToF 光学モデルを復元
 
     if (regime && regimePrev) applyRegime(regimePrev);
     setCarScale(userKPrev);                  // AK2/D10: スライダー位置を復元 (regime 復元後に再適用=最終状態を厳密復元)

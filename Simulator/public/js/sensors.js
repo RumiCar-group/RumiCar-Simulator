@@ -1,8 +1,8 @@
 // 距離センサーのコーン測距 (前方3 + 任意の後方1)。VL53L0X 相当の 25° 視野コーンで
 // 「扇内の最近反射面」を返す (Stage AM1・#27)。中心1本の直線レイでは凸コーナー端点の外を
 // 掠め遠い壁で止まる「壁の外へ抜ける」現象が起きたため、扇内最近距離へ置換した。
-import { SENSORS, SENSOR_REAR, SENSOR_RANGE, SENSOR_NOISE, SENSOR_FOV, CAR } from './config.js';
-import { coneNearest } from './geom.js';
+import { SENSORS, SENSOR_REAR, SENSOR_RANGE, SENSOR_NOISE, SENSOR_OPTICS, SENSOR_FOV, CAR } from './config.js';
+import { coneNearest, fanHits } from './geom.js';
 import { wallsNear } from './contact_v2.js';
 
 // 壁ブロードフェーズ候補限定 (AP6)。車位置中心・半径 = センサー最大レンジ + 1.5×車長 (センサー原点の
@@ -24,6 +24,51 @@ function gauss() {
   while (u === 0) u = Math.random();
   while (v === 0) v = Math.random();
   return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+// --- AS8: 実機 ToF の光学モデル (opt-in・決定論)。SENSOR_OPTICS.on のときだけ呼ばれる。--------------
+// 扇を rays 本の方向へ離散化し (fanHits)、方向ごとの最近反射面から反射信号レートを組み立てる:
+//   S_k = ρ_k · cosθ_k · (maxM/d_k)²      (Lambertian 拡張標的。S=1 が公称レンジ maxM の信号量)
+// 平均 S̄ = ΣS_k/K が 1 未満なら「信号レート下限を割った」= 実機の無効測距 (-3) とする
+//   (上流ライブラリ RumiCar.cpp:74-86 の setSignalRateLimit と同じ判定原理。config の一次情報を参照)。
+// 有効なら距離は**信号加重平均** d_w = ΣS_k d_k / ΣS_k = 「扇内の複数反射面の混合」(mixed pixel)。
+// さらにカバーガラス由来のクロストークを距離0の寄生信号として混ぜる:
+//   d = d_w · S̄/(S̄ + xtalk)   ⇒ 弱信号 (遠方/暗い/斜め) ほど短側へ寄る系統誤差。
+// 反射率は S にしか入らない ⇒ **単一標的の距離値は反射率で歪まない**（Pololu の公開記述どおり）。
+// 乱数は一切呼ばない (決定論)。scratch 配列はモジュール内で使い回す (ON 時のみ確保・OFF は未確保)。
+let _oD = null, _oC = null, _oK = null, _oN = -1;
+function opticsRead(ox, oy, ux, uy, maxM, walls, extra) {
+  const n = Math.max(1, Math.round(SENSOR_OPTICS.rays)) - 1;   // 分割数 (方向数 = n+1)
+  if (_oN !== n) { _oD = new Float64Array(n + 1); _oC = new Float64Array(n + 1); _oK = new Int8Array(n + 1); _oN = n; }
+  fanHits(ox, oy, ux, uy, SENSOR_FOV.halfRad, n, maxM, walls, extra, _oD, _oC, _oK);
+  const K = n + 1;
+  let sSum = 0, sdSum = 0, sMax = -1, kMax = -1, carSum = 0;
+  for (let k = 0; k < K; k++) {
+    if (_oK[k] < 0) continue;                                  // 反射面なし = 信号0 (S̄ を押し下げる = 標的サイズ依存)
+    const d = _oD[k];
+    if (!(d > 1e-9)) continue;                                 // 0 距離は信号無限大になるので数値安全側で捨てる
+    const refl = _oK[k] === 1 ? SENSOR_OPTICS.carRefl : SENSOR_OPTICS.wallRefl;
+    const cos = SENSOR_OPTICS.incidence ? _oC[k] : 1;
+    const r = maxM / d;
+    const s = refl * cos * r * r;
+    if (s <= 0) continue;
+    sSum += s; sdSum += s * d;
+    if (_oK[k] === 1) carSum += s;
+    if (s > sMax) { sMax = s; kMax = k; }
+  }
+  if (kMax < 0) return null;                                   // 扇内に反射面なし = 従来と同じ「範囲外」扱い
+  const sBar = sSum / K;                                       // 扇全体で平均した信号レート (1 = しきい値)
+  if (sBar < 1) return null;                                   // 低信号 = 無効測距 (実機の -3 / 生値 8190)
+  // multipath=false は「最強信号の1面だけを見る」= 混合しない理想化 (効果の切り分け用)。
+  const dW = SENSOR_OPTICS.multipath ? (sdSum / sSum) : _oD[kMax];
+  const xt = Math.max(0, SENSOR_OPTICS.xtalk);
+  const d = dW * (sBar / (sBar + xt));
+  // 方位は最強信号の方向 (=実機が「見ている」向き)。距離は上で求めた測距値に沿わせる。
+  const a = n === 0 ? 0 : -SENSOR_FOV.halfRad + (2 * SENSOR_FOV.halfRad) * (kMax / n);
+  const ca = Math.cos(a), sa = Math.sin(a);
+  const dx = ca * ux - sa * uy, dy = sa * ux + ca * uy;
+  // hitCar は SENSOR_NOISE の carSigmaMul 用 (AP19)。混合後は「信号の過半が他車由来か」で決める。
+  return { best: d, hx: ox + dx * d, hy: oy + dy * d, hitCar: carSum * 2 > sSum };
 }
 
 // 1 センサーの計測。戻り値 {mm, hit:{x,y}, origin:{x,y}}。返り形は不変 (描画・API 互換)。
@@ -48,6 +93,14 @@ function readSensor(car, walls, sensorDef, extra = []) {
     if (d < best) { best = d; hx = pt[0]; hy = pt[1]; hitCar = true; }
   }
   const maxM = SENSOR_RANGE.maxMm / 1000;
+  // AS8: 光学モデル (opt-in・決定論)。ON のときだけ「扇内最近」を信号レートにもとづく測距で置き換える。
+  // 低信号 (S̄<1) は best=Infinity に落として下の既存分岐へ渡す = mm=-3 (範囲外/低信号) の実機挙動。
+  // OFF ではこのブロックへ入らない = 上の扇内最近がそのまま使われる (byte 不変)。
+  if (SENSOR_OPTICS.on) {
+    const o = opticsRead(ox, oy, ux, uy, maxM, walls, extra);
+    if (o) { best = o.best; hx = o.hx; hy = o.hy; hitCar = o.hitCar; }
+    else { best = Infinity; hitCar = false; }
+  }
   let mm, hit;
   if (best === Infinity || best > maxM) {
     mm = -3; // 範囲外 / 扇内に反射面なし / 信号品質低下

@@ -77,6 +77,33 @@ export function fanDepths(ox, oy, ux, uy, halfRad, n, maxM, segs, extra, out) {
   return out;
 }
 
+// 扇を n 等分した n+1 方向について、各方向の「最初の反射面までの距離」に加えて、
+// **その面への入射角の cos** と **標的の種別** (0=壁 / 1=他車エッジ / -1=反射面なし) を返す
+// (Stage AS8 の ToF 光学モデル専用)。fanDepths と同じ走査だが、反射信号レート
+// S ∝ ρ·cosθ/d² を組み立てるのに要る2つを併せて供給する。決定的 (乱数なし)。
+// 反射面が無い方向は outD[k]=maxM・outC[k]=0・outK[k]=-1 (=無反射=信号0) にする。
+// 法線 n=(ey,-ex)/|e| ゆえ cos(入射角)=|dir·n|=|dx·ey-dy·ex|/|e|。
+export function fanHits(ox, oy, ux, uy, halfRad, n, maxM, segs, extra, outD, outC, outK) {
+  for (let k = 0; k <= n; k++) {
+    const a = n === 0 ? 0 : -halfRad + (2 * halfRad) * (k / n);
+    const ca = Math.cos(a), sa = Math.sin(a);
+    const dx = ca * ux - sa * uy, dy = sa * ux + ca * uy;
+    let d = maxM, kind = -1, ex = 0, ey = 0;
+    for (const w of segs) {
+      const t = raySeg(ox, oy, dx, dy, w.x1, w.y1, w.x2, w.y2);
+      if (t < d) { d = t; kind = 0; ex = w.x2 - w.x1; ey = w.y2 - w.y1; }
+    }
+    if (extra) for (const w of extra) {
+      const t = raySeg(ox, oy, dx, dy, w.x1, w.y1, w.x2, w.y2);
+      if (t < d) { d = t; kind = 1; ex = w.x2 - w.x1; ey = w.y2 - w.y1; }
+    }
+    outD[k] = d; outK[k] = kind;
+    const el = Math.sqrt(ex * ex + ey * ey);
+    outC[k] = (kind >= 0 && el > 1e-9) ? Math.abs(dx * ey - dy * ex) / el : 0;
+  }
+  return outD;
+}
+
 // 点 p から線分 a→b までの最短距離。
 export function distToSeg(p, a, b) {
   const dx = b.x - a.x, dy = b.y - a.y;

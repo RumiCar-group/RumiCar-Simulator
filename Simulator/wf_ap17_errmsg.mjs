@@ -67,6 +67,9 @@ const cases = [
   { label: 'divZero',     code: 'a=1\nb=2\nprint(a/0)',                    lang: 'py', wantLine: 3, wantKey: 'interp.err.divZero' },
   { label: 'notCallable', code: 'void setup(){}\nvoid loop(){\n  int a[2]={1,2};\n  a[0]();\n}', lang: 'c', wantLine: 4, wantKey: 'interp.err.notCallable' },
   { label: 'divZeroMod',  code: 'a=1\nprint(5%0)',                         lang: 'py', wantLine: 2, wantKey: 'interp.err.divZero' },
+  // AS4: char 配列の文字列初期化。従来は長さ0の配列を黙って作っていた (エラーが出ない罠) ものを
+  //   行番号付き i18n 実行時エラーへ。誤り文を 3 行目に置いて行一致を測る。
+  { label: 'strArrayInit', code: 'void setup(){}\nvoid loop(){\n  char s[] = "ab";\n}', lang: 'c', wantLine: 3, wantKey: 'interp.err.strArrayInit' },
 ];
 for (const c of cases) {
   const r = run(c.code, c.lang);
@@ -95,6 +98,7 @@ const enExpect = [
   { code: 'n=5\nfor x in n:\n  print(x)', lang: 'py', want: /not iterable/ },
   { code: cLoop('int a[2]={1,2}; a[0]();'), lang: 'c', want: /not a function/ },
   { code: cLoop('while(1){ int x=1; }'), lang: 'c', want: /step limit exceeded/ },
+  { code: cLoop('char s[]="ab";'),      lang: 'c', want: /is not supported/ },   // AS4
 ];
 for (const c of enExpect) {
   const r = run(c.code, c.lang);

@@ -43,7 +43,9 @@ const GATES = [
   'wf_ap16_semantics.mjs', 'wf_ap17_errmsg.mjs', 'wf_ap18_hold.mjs', 'wf_ap19_noise.mjs', 'wf_ap25_roundtrip.mjs', 'wf_ap26_pendulum.mjs', 'wf_capacity_fit.mjs',
   'wf_carscale_determinism.mjs', 'wf_clearance.mjs', 'wf_collision_model.mjs', 'wf_recover_model.mjs', 'wf_ratio_audit.mjs',
   'wf_sprite_extent.mjs', 'wf_silhouette_fill.mjs', 'wf_share_check.mjs', 'wf_fmttime_check.mjs', 'wf_i18n_check.mjs',
-  'wf_fan_render.mjs',
+  'wf_fan_render.mjs', 'wf_version_check.mjs', 'wf_ghostgap_cap.mjs', 'wf_modulepreload.mjs',
+  'wf_as3_samples.mjs', 'wf_as4_carray.mjs', 'wf_as5_calibrate.mjs', 'wf_as7_midscale.mjs', 'wf_as8_optics.mjs',
+  'wf_as9_tire_gear.mjs', 'wf_as10_cant.mjs', 'wf_as11_susp.mjs', 'wf_as12_steer.mjs', 'wf_as13_engage.mjs',
 ].map((name) => ({ name, args: [] }));
 
 // official_result は決定論2回照合→result.json 再検証→Node pin 照合の複合ゲート (AP20)。

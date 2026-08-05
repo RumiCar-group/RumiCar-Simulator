@@ -154,7 +154,12 @@ header h1::before {
 main {
   display: flex; gap: 18px; padding: 20px;
   align-items: flex-start; flex-wrap: wrap;
-  max-width: 1500px; margin: 0 auto;
+  /* 2026-08-04 (RC-UX-005・利用者指摘「左右に余裕があるのにプログラム欄が狭い」):
+     従来の max-width:1500px を撤廃。1500px 超の画面で左右に死に余白ができ
+     (1920px 実測: 余白 210px×2)、複数台比較時に車両カードが1枚しか完全に
+     見えない一因だった。1500px までの幅配分は従来と完全同一で、超過ぶんは
+     .side の media query (下) が優先的に受け取る。 */
+  margin: 0 auto;
 }
 
 /* ===== ステージ (キャンバス) ===== */
@@ -280,6 +285,15 @@ button.primary:hover { background: linear-gradient(135deg, var(--accent-hi), var
 
 /* ===== サイドパネル ===== */
 .side { flex: 1; min-width: 380px; display: flex; flex-direction: column; gap: 10px; }
+/* 2026-08-04 (RC-UX-005): 1500px 超の「従来は max-width で死に余白だった」幅の9割を
+   .side の flex-basis として先取りし、残りは従来どおり .stage と等分する。
+   → .stage (コース) の幅はどの画面幅でも従来実測値以上を維持 (1920px: 1001→1022px。
+   RC-UX-004「コース右側の余白がもったいない」対応の非退行) しつつ、.side が
+   441→840px (1920px 実測) に広がり複数台のプログラム比較が成立する。
+   1500px 以下では calc が負になり flex-basis は 0 扱い＝従来と完全同一。 */
+@media (min-width: 1500px) {
+  .side { flex-basis: calc((100vw - 1500px) * 0.9); }
+}
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .row label { font-size: 14px; color: var(--text-dim); min-width: 0; }
 
@@ -440,7 +454,12 @@ input[type=range]:focus-visible { outline: none; box-shadow: var(--ring); }
   container-type: inline-size; container-name: fleetcols;
 }
 .carcol {
-  flex: 0 0 300px; min-width: 300px; background: var(--surface);
+  /* 2026-08-04 (RC-UX-005): 固定 300px → 可変幅化。ストリップに余りがあるときは
+     各カードが均等に伸び (上限 480px)、プログラムエディタもその分広がる。
+     縮む方向は従来どおり min-width:300px で不可 (溢れたら横スクロール) なので、
+     「300px 幅前提でコンパクト」な内部設計 (RC-VIS-003 の cc-ghurl 11px 等) の
+     下限前提は変わらない。max-width は1台だけのとき間延びさせないための上限。 */
+  flex: 1 1 300px; min-width: 300px; max-width: 480px; background: var(--surface);
   border: 1px solid var(--border); border-radius: var(--radius);
   display: flex; flex-direction: column; overflow: hidden;
 }
@@ -1118,3 +1137,20 @@ tr.race-row-fast .race-dot { box-shadow: 0 0 0 2px var(--cyan); }
 .rank-me { color: var(--accent-hi); font-weight: 600; font-size: 11.5px; }
 .rank-crown { font-size: 12px; }
 .rank-badge { display: inline-block; font-size: 11.5px; color: var(--text); background: var(--bg-1); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; margin: 1px 2px 1px 0; white-space: nowrap; }
+
+/* ── AS13: シーズン/チャンピオンシップ・言語別ラダー・区間比較・チャレンジ ───────────────── */
+.season-champ { margin: 2px 0 6px; font-size: 13px; color: var(--text); }
+.rank-langstrip { margin: 2px 0 4px; display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.rank-langchip { font-size: 11.5px; color: var(--text); background: var(--bg-1); border: 1px solid var(--border); border-radius: 6px; padding: 1px 8px; }
+/* 区間表: 幅の広い表なので、はみ出しは表側で横スクロールさせ本文レイアウトを壊さない */
+.ghost-sectors { margin-top: 8px; overflow-x: auto; }
+.sect-tab td, .sect-tab th { white-space: nowrap; }
+.sect-tab .sect-best { color: var(--accent-hi); font-weight: 600; }
+.sect-tab .sect-theo td { border-top: 1px solid var(--border-strong); }
+.chal-body { overflow-x: auto; }
+.chal-total { margin: 2px 0 6px; font-size: 14px; }
+.chal-badges { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 4px 0 8px; }
+.chal-badge { display: inline-block; font-size: 11.5px; color: var(--text-dim); background: var(--bg-1); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; white-space: nowrap; opacity: 0.65; }
+.chal-badge.got { color: var(--text); border-color: var(--border-strong); background: var(--accent-soft); opacity: 1; }
+.chal-next { margin: 6px 0; font-size: 13px; color: var(--text); }
+.chal-todo td { color: var(--text-dim); }

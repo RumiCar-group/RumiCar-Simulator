@@ -21,7 +21,7 @@ function noThrow(fn, msg) {
   catch (e) { fail++; fails.push(msg + ' — THREW: ' + (e && e.message)); return false; }
 }
 
-const ALL_NULL = { course: null, car: null, program: null, regime: null, laps: null, noise: null, theme: null, lang: null, physics: null, tire: null, recon: null, wear: null };
+const ALL_NULL = { course: null, car: null, program: null, regime: null, laps: null, noise: null, theme: null, lang: null, physics: null, tire: null, recon: null, wear: null, gear: null, susp: null, steerSet: null };
 
 // ---- 代表状態マトリクス (round-trip / 冪等) -------------------------------------
 const STATES = [
@@ -131,9 +131,9 @@ ok(hasShareState({}) === false, 'hasShareState: 空');
 ok(hasShareState({ course: '   ' }) === false, 'hasShareState: 無害化後空');
 
 // ---- スキーマ健全性 -----------------------------------------------------------
-ok(SHARE_FIELDS.length === 12, 'スキーマ 12 フィールド (Stage AO1: physics / AO6: tire / AO9: recon / AO12: wear 追加)');
-ok(new Set(SHARE_FIELDS.map(f => f.k)).size === 12, '短縮キー一意');
-ok(new Set(SHARE_FIELDS.map(f => f.name)).size === 12, '状態キー一意');
+ok(SHARE_FIELDS.length === 15, 'スキーマ 15 フィールド (Stage AO1: physics / AO6: tire / AO9: recon / AO12: wear / AS9: gear / AS11: susp / AS12: steerSet 追加)');
+ok(new Set(SHARE_FIELDS.map(f => f.k)).size === 15, '短縮キー一意');
+ok(new Set(SHARE_FIELDS.map(f => f.name)).size === 15, '状態キー一意');
 ok(SHARE_VERSION === 1, 'SHARE_VERSION=1');
 
 // ---- AO1 前方互換の byte 不変: physics 未指定の従来状態は 'ph=' を一切出さない (既存共有 URL 不変) ----
@@ -153,6 +153,23 @@ ok(decodeState(encodeState({ recon: 3 })).recon === 3, 'AO9: recon=3 が往復')
 ok(!encodeState(legacyFull).includes('we='), 'AO12: wear 省略時は we= を出さない (既存 hash byte 不変)');
 ok(encodeState({ wear: true }).includes('we=1'), 'AO12: wear 明示時は往復する (we=1)');
 ok(decodeState(encodeState({ wear: true })).wear === true, 'AO12: wear=true が往復');
+// ---- AS9 前方互換の byte 不変: gear 未指定/既定の従来状態は 'gr=' を一切出さない (既存共有 URL 不変) ----
+ok(!encodeState(legacyFull).includes('gr='), 'AS9: gear 省略時は gr= を出さない (既存 hash byte 不変)');
+ok(encodeState({ gear: 'auto2' }).includes('gr=auto2'), 'AS9: gear 明示時は往復する (gr=auto2)');
+ok(decodeState(encodeState({ gear: 'tall' })).gear === 'tall', 'AS9: gear=tall が往復');
+
+// ---- AS11 前方互換の byte 不変: susp 未指定/既定の従来状態は 'sp=' を一切出さない (既存共有 URL 不変) ----
+ok(!encodeState(legacyFull).includes('sp='), 'AS11: susp 省略時は sp= を出さない (既存 hash byte 不変)');
+ok(encodeState({ susp: 'balanced' }).includes('sp=balanced'), 'AS11: susp 明示時は往復する (sp=balanced)');
+ok(decodeState(encodeState({ susp: 'soft' })).susp === 'soft', 'AS11: susp=soft が往復');
+ok(decodeState(encodeState({ tire: 'rain' })).tire === 'rain', 'AS9: tire=rain が往復');
+
+// ---- AS12 前方互換の byte 不変: steerSet 未指定/既定の従来状態は 'ss=' を一切出さない (既存共有 URL 不変) ----
+ok(!encodeState(legacyFull).includes('ss='), 'AS12: steerSet 省略時は ss= を出さない (既存 hash byte 不変)');
+ok(encodeState({ steerSet: 'prop' }).includes('ss=prop'), 'AS12: steerSet 明示時は往復する (ss=prop)');
+ok(decodeState(encodeState({ steerSet: 'prop' })).steerSet === 'prop', 'AS12: steerSet=prop が往復');
+ok(decodeState(encodeState({ steerSet: 'tri' })).steerSet === 'tri', 'AS12: steerSet=tri も明示すれば往復 (捕捉側が省略するだけ)');
+ok(encodeState({ susp: 'soft', steerSet: 'prop' }).indexOf('sp=') < encodeState({ susp: 'soft', steerSet: 'prop' }).indexOf('ss='), 'AS12: 新フィールドは末尾 (既存キーの並び順を動かさない)');
 
 // ---- 結果 ---------------------------------------------------------------------
 const line = '─'.repeat(60);

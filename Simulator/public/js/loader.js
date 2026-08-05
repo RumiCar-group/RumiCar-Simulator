@@ -270,9 +270,12 @@ export async function fetchRace(eventId) {
     if (r.ok) {
       const items = await r.json();
       const files = (Array.isArray(items) ? items : []).filter((f) => f.type === 'file' && /\.json$/i.test(f.name));
-      for (const f of files) {
-        try { entries.push(await (await fetch(f.download_url)).json()); } catch (e) { /* 1 件失敗はスキップ */ }
-      }
+      // v5.2.0: 逐次 await を並列取得へ (1 件失敗はスキップ=従来同値)。結果は files 一覧順に詰める
+      // が、確定順は呼び出し側 frozenField (submittedAt 昇順) が決めるため取得順は元々結果に非影響。
+      const fetched = await Promise.all(files.map(async (f) => {
+        try { return await (await fetch(f.download_url)).json(); } catch (e) { return null; /* 1 件失敗はスキップ */ }
+      }));
+      for (const j of fetched) if (j != null) entries.push(j);
     }
   } catch (e) { /* entries 無し = [] */ }
   // 確定結果 (任意・締切後のみ)。

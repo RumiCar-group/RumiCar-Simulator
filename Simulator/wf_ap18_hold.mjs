@@ -12,6 +12,10 @@ import { buildApi } from './public/js/api.js';
 import { buildFromSpec } from './public/js/course.js';
 import { runRace } from './public/js/race_engine.js';
 import { PROGRAMS } from './public/js/programs.js';
+// AS3: f0 は中央マニフェスト (wf_frozen_manifest.json) を単一の真実源として読む。AP3 で 5 参照ゲートを
+//   中央化したあとに本ゲート (AP18) が追加され、f0 だけハードコードが残っていた (刻み直しのたびに
+//   ここだけ取り残されて落ちる)。wf_refreeze.mjs 1 回で全ゲートが追随する状態へ揃える。
+import { FROZEN } from './wf_frozen.mjs';
 
 let fail = 0;
 const chk = (cond, msg) => { console.log(`  ${cond ? '✓' : '✗'} ${msg}`); if (!cond) fail++; };
@@ -141,7 +145,7 @@ SENSOR_NOISE.on = false; SENSOR_NOISE.dropout = savDrop;
 {
   const prog = (key) => { const p = PROGRAMS.find(x => x.key === key); return { src: p.code, lang: p.lang || 'c', carType: p.carType }; };
   const fieldOf = (...keys) => keys.map((k, i) => { const p = prog(k); return { name: 'C' + i, lang: p.lang, src: p.src, carType: p.carType, rear: false, encoder: false }; });
-  const F0 = '4bbed0f4';
+  const F0 = FROZEN.f0;   // 中央マニフェスト由来 (ハードコードしない)
   SENSOR_HOLD.on = false;
   const rOff = runRace({ report: true, course: oval, laps: 3, field: fieldOf('normal_fr', 'normal_awd', 'normal_ff'), crashRule: { rejoin: false, penaltySec: 3 } });
   SENSOR_HOLD.on = true;   // ライブ UI トグル ON を模す

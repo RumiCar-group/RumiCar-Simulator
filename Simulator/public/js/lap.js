@@ -4,8 +4,9 @@
 // 武装(armed)し、負側→正側への通過を 1 周として数える (ヒステリシス)。
 
 import { segIntersect } from './geom.js';
-import { APP_VERSION, REGIME_STATE, PHYSICS, SENSOR_NOISE, SCALE_STATE, CAR_TYPE_BY_KEY } from './config.js';
+import { APP_VERSION, REGIME_STATE, PHYSICS, SENSOR_NOISE, SENSOR_OPTICS, SCALE_STATE, CAR_TYPE_BY_KEY } from './config.js';
 import { safeSetItem } from './storage.js'; // AP4: 保存失敗を握りつぶさず可視化
+import { fnv1a } from './fnv1a.js'; // v5.2.0: 葉モジュールへ統合 (旧ローカル複製と byte 一致・下記 AP2 注記参照)
 
 const ARM_DIST = 0.25; // m: 再計上のためにライン正側へ離れるべき距離 (通常コースの既定)
 
@@ -37,17 +38,10 @@ function computeArmDist(course) {
 function bestKey(courseName, carType) { return 'rumicar.practice.' + courseName + '::' + (carType || ''); }
 
 // ── AP2: 練習ベスト記録の時点記録化（版・条件・定義ハッシュ＋移行）──────────────────
-// FNV-1a 32bit。race_engine.js:81 の fnv1a と **同一アルゴリズム（byte 一致）**。lap.js が
-// race_engine.js を import すると循環（lap→race_engine→fleet→lap）になるためローカルに複製する
-// （config.js の「循環 import を避ける」方針と同型・将来の統合候補）。定義ドリフト検出用の本物のハッシュ。
-function fnv1a(str) {
-  let h = 0x811c9dc5 >>> 0;
-  for (let i = 0; i < str.length; i++) {
-    h ^= str.charCodeAt(i);
-    h = (h + ((h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24))) >>> 0;
-  }
-  return ('00000000' + h.toString(16)).slice(-8);
-}
+// FNV-1a 32bit は race_engine.js と共通の葉モジュール fnv1a.js から import する (v5.2.0 統合)。
+// 旧実装は「lap→race_engine→fleet→lap の循環 import を避ける」ためローカル複製していた
+// （定義ドリフトのリスクを「将来の統合候補」と注記）— 依存ゼロの葉に切り出したことで循環なしに
+// 統合できた。アルゴリズム・出力は旧複製と byte 一致 = 既存の練習記録ハッシュは全て不変。
 
 // コース定義の指紋。壁1本の移動・フィニッシュ/スタート位置・峠フラグの変化で必ず変わり、無編集の
 // 再保存では不変（誤検知ゼロ）＝定義ドリフトの検出。値の配列で正規化（オブジェクト identity/キー順に
@@ -75,13 +69,16 @@ function carHashOf(carType) {
 
 // 保存時点の走行条件スナップショット（版跨ぎ比較の誤解を防ぐ）。regime/physics/noise/carScale は
 // config の live 大域・tire/wear は reset で渡された slot 装備・course/car ハッシュは上記。
-function captureCond(carType, tire, wear, course) {
+function captureCond(carType, tire, wear, course, gear) {
   return {
     regime: REGIME_STATE.active,
     physics: PHYSICS.mode,
     tire: tire || 'normal',
+    gear: gear || 'direct',       // AS9: ギア比 (任意装備)。tire/wear と同型に条件へ刻む (直結=既定)。
     wear: !!wear,
     noise: !!SENSOR_NOISE.on,
+    optics: !!SENSOR_OPTICS.on,   // AS8: ToF 光学モデル (noise と同じく「読める値」を変えるので条件に刻む)。
+                                  //   ※ SENSOR_HOLD (更新遅延) は AP18 以来ここに無い=既存の記録漏れ (AS8 では拡げない・AS8_tof.md §6)。
     carScale: SCALE_STATE.userK,
     courseHash: courseHashOf(course),
     carHash: carHashOf(carType),
@@ -131,6 +128,7 @@ export class LapTracker {
     this.carType = opts.carType || '';
     this._tire = opts.tire || 'normal';   // AP2: 記録に刻む条件（v2 タイヤセット）。既定 normal。
     this._wear = !!opts.wear;             // AP2: 同（タイヤ摩耗 opt-in）
+    this._gear = opts.gear || 'direct';   // AS9: 同（ギア比 任意装備）。既定 direct=直結。
     this.persist = opts.persist !== false;
     this.finish = course.finish || null;
     this.armDist = computeArmDist(course);   // AK5/D12: コース別の武装距離 (出荷コースは 0.25 不変)
@@ -199,7 +197,7 @@ export class LapTracker {
   // AP2: 新スキーマで書込（t/ver/cond）。cond は保存時点のライブ条件を捕捉（版跨ぎ比較の誤解を防ぐ）。
   // this.bestRec も現行版へ同期＝ベスト更新直後は「(当時 vX)」注記が消える（現行で樹立ゆえ）。
   _saveBest() {
-    const cond = captureCond(this.carType, this._tire, this._wear, this.course);
+    const cond = captureCond(this.carType, this._tire, this._wear, this.course, this._gear);
     const rec = { t: this.bestLap, ver: APP_VERSION, cond };
     this.bestRec = rec;
     safeSetItem(bestKey(this.course.name, this.carType), JSON.stringify(rec), 'best'); // AP4: 失敗は 1 行通知

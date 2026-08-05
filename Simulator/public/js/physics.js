@@ -1,11 +1,14 @@
 // 車両運動モデル (自転車モデル) と衝突判定。
-import { CAR, CONST, TRAIL, CAR_TYPE_BY_KEY, CAR_TYPE_DEFAULT, MASS_REF, MASS, gForward } from './config.js';
+import { CAR, CONST, TRAIL, CAR_TYPE_BY_KEY, CAR_TYPE_DEFAULT, MASS_REF, MASS, gForward, STEER_DEFAULT, steerTargetOf } from './config.js';
 import { segIntersect } from './geom.js';
 import { wallsNear } from './contact_v2.js';
 
 export class Car {
   constructor(start) {
     this.type = CAR_TYPE_DEFAULT;   // 車種 (reset では保持。CAR_TYPES のキー)
+    // 装備した操舵サーボ (Stage AS12・opt-in)。既定 'tri'=実機準拠の3値=byte 不変。type 同様
+    // 外部から上書き・reset で不変 (装備は走行でリセットされない)。3エンジン共通 (Car/DynCar/CarV2)。
+    this.steerSet = STEER_DEFAULT;
     this.reset(start);
   }
   profile() { return CAR_TYPE_BY_KEY[this.type] || CAR_TYPE_BY_KEY[CAR_TYPE_DEFAULT]; }
@@ -15,6 +18,9 @@ export class Car {
     this.theta = start.theta; // rad (0 = +x)
     this.v = 0;             // m/s
     this.steer = CONST.CENTER;
+    // Stage AS12: 連続舵の指令量 0..255 (null = 3値指令 = 既定)。**指令**なので steer/pwm と同じく
+    // reset で消える (装備 steerSet は消えない)。RC_steer を1引数で呼ぶと null へ戻る = 3値へ復帰。
+    this.steerAmt = null;
     this.driveDir = CONST.FREE;
     this.pwm = 0;
     this.crashed = false;
@@ -43,11 +49,10 @@ export class Car {
   // δ: 実際の操舵角(rad)。指令(3値)ではなく、サーボが追従中の現在角。
   get delta() { return this.steerAngle; }
 
-  // 指令(3値)に対する目標舵角。
+  // 指令に対する目標舵角。既定 (3値・steerSet='tri') は従来と厳密に同一 (steerTargetOf の早期 return)。
+  // Stage AS12: 比例操舵サーボを装備した車だけ steerAmt(0..255) がフル舵への比として効く。
   get steerTarget() {
-    if (this.steer === CONST.LEFT) return CAR.maxSteer;
-    if (this.steer === CONST.RIGHT) return -CAR.maxSteer;
-    return 0;
+    return steerTargetOf(this.steer, CAR.maxSteer, this.steerSet, this.steerAmt);
   }
 
   // 1 物理ステップ。操舵サーボ → 縦方向 (駆動/制動) → 横方向 (操舵/ドリフト/姿勢)。

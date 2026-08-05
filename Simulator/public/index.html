@@ -7,11 +7,14 @@
   <!-- テーマを CSS 適用前に反映してフラッシュを防ぐ (選択は localStorage に保存)。
        既定テーマは 'green' (ライトグリーン。data-theme 属性なし=:root)。 -->
   <script>try { var t = localStorage.getItem('rumicar.theme'); if (t && t !== 'green') document.documentElement.dataset.theme = t; } catch (e) {}</script>
-  <link rel="stylesheet" href="css/style.css?v=20260802a">
+  <link rel="stylesheet" href="css/style.css?v=20260804a">
+  <!-- modulepreload: 発見が遅く大きいモジュールだけ (wf_modulepreload.mjs が機械生成・手書き禁止) -->
+  <link rel="modulepreload" href="js/i18n/messages.js">
+  <!-- /modulepreload -->
 </head>
 <body>
   <header>
-    <h1>RumiCar Simulator <span class="ver" id="appVer" data-i18n-title="appVer.title" title="バージョン">v5.0.0</span></h1>
+    <h1>RumiCar Simulator <span class="ver" id="appVer" data-i18n-title="appVer.title" title="バージョン">v7.3.0</span></h1>
     <label class="themesel" data-i18n-title="theme.title" title="画面テーマ (保存されます)"><span data-i18n="theme.label">テーマ</span>
       <select id="themeSel">
         <option value="green" data-i18n="theme.green">ライトグリーン (標準)</option>
@@ -99,7 +102,7 @@
       </ul>
       <h3 data-i18n="usage.s7.h">7. プログラミング API (主要)</h3>
       <ul class="api">
-        <li data-i18n-html="usage.s7.steer"><code>RC_steer(LEFT / CENTER / RIGHT)</code> — 操舵 (3値)</li>
+        <li data-i18n-html="usage.s7.steer"><code>RC_steer(LEFT / CENTER / RIGHT)</code> — 操舵 (3値・実機準拠)。<b>比例操舵サーボ(任意装備)</b>を選んだときだけ <code>RC_steer(方向, 0〜255)</code> で舵の強さも指定できる (未装備なら 0 を返して指令は変わらない)</li>
         <li data-i18n-html="usage.s7.drive"><code>RC_drive(FORWARD / REVERSE / FREE / BRAKE, pwm)</code> — 駆動 (pwm 0〜255)</li>
         <li data-i18n-html="usage.s7.read1"><code>sensor0/1/2.readRangeSingleMillimeters()</code> (C++) / <code>get_distance()</code> (Python) — 測距 [mm] (左/中央/右)</li>
         <li data-i18n-html="usage.s7.read2"><code>RC_read(LEFT/CENTER/RIGHT)</code> — 測距の別形 (範囲外は -3)</li>
@@ -136,8 +139,8 @@
       <h3 data-i18n="rg.rules.h">ルール</h3>
       <ul data-i18n-html="rg.rules.body"><li>クラス・フィールド成立・クラッシュ規則・公開ポリシー。</li></ul>
 
-      <h3 data-i18n="rg.gear.h">装備と条件 — エンジン・タイヤ・試走・摩耗 (精密 v2)</h3>
-      <ul data-i18n-html="rg.gear.body"><li>物理エンジン・タイヤ (ノーマル/スリップ)・試走 0〜3周・タイヤ摩耗はいずれも記録に刻まれ再現される。既定のままなら従来と完全一致。</li></ul>
+      <h3 data-i18n="rg.gear.h">装備と条件 — エンジン・タイヤ・ギア比・試走・摩耗 (精密 v2)</h3>
+      <ul data-i18n-html="rg.gear.body"><li>物理エンジン・タイヤ (ノーマル/スリップ/レイン)・ギア比 (直結/ロー/ハイ/2速)・試走 0〜3周・タイヤ摩耗はいずれも記録に刻まれ再現される。既定のままなら従来と完全一致。</li></ul>
 
       <h3 data-i18n="rg.design.h">設計思想</h3>
       <ul data-i18n-html="rg.design.body"><li>決定論・正準エンジン・持ち込み自由・適不適・ToF のみ・学んで伸びる。</li></ul>
@@ -208,7 +211,7 @@
       <h3 data-i18n="sys.prog.h">プログラム API（学習側）</h3>
       <ul data-i18n-html="sys.prog.body">
         <li>対応言語: <b>Arduino C++</b> と <b>Python</b> は教育用サブセットのインタープリタ、<b>JavaScript</b> はブラウザネイティブ実行 (<code>setup</code>/<code>loop</code> を定義)。</li>
-        <li><b>Arduino 系 API</b>: <code>RC_setup()</code> / <code>RC_steer(dir)</code> / <code>RC_drive(dir, pwm)</code> / <code>RC_read(dir)</code> (前方ToF距離mm) / <code>RC_wheel_speed(axle)</code> (任意装備の車輪エンコーダ・未装備 −1) / <code>Serial.print()</code>・<code>println()</code> / <code>delay(ms)</code>。<code>dir</code> は <code>LEFT</code>/<code>CENTER</code>/<code>RIGHT</code>。</li>
+        <li><b>Arduino 系 API</b>: <code>RC_setup()</code> / <code>RC_steer(dir)</code>・<code>RC_steer(dir, 0〜255)</code> (第2引数は<b>比例操舵サーボ(任意装備)</b>を積んだときだけ有効・未装備は 0 を返す) / <code>RC_drive(dir, pwm)</code> / <code>RC_read(dir)</code> (前方ToF距離mm) / <code>RC_wheel_speed(axle)</code> (任意装備の車輪エンコーダ・未装備 −1) / <code>Serial.print()</code>・<code>println()</code> / <code>delay(ms)</code>。<code>dir</code> は <code>LEFT</code>/<code>CENTER</code>/<code>RIGHT</code>。</li>
         <li><b>Raspberry Pi 系 API</b>: <code>rc_steer</code>/<code>rc_drive</code>/<code>rc_wheel_speed</code>/<code>rc_clear</code>、<code>read_one_sensor()</code>、<code>read_all_sensors()</code>、センサーオブジェクト <code>sensor0..sensor3</code> (各 <code>.readRangeSingleMillimeters()</code>/<code>.get_distance()</code>。<code>sensor3</code>＝後方・任意装備)、<code>time.sleep(sec)</code>。</li>
         <li><b>共通の数学関数</b>: <code>abs/min/max/sqrt/floor/ceil/round</code>、研究用に <code>atan2/atan/sin/cos/hypot/pi</code> (純粋数学＝物理状態の肩代わりではない)。</li>
         <li><b>範囲外コード</b>: <code>RC_read</code> 系は範囲外で <b>−3</b>、生読取 (<code>readRangeSingleMillimeters</code> 等) は実機準拠の <b>8190</b>。計測は前方3基 (左 +65°/中央/右 −65°)・レンジ 2,000 mm。</li>
@@ -248,6 +251,7 @@
         <li data-i18n-html="doc.common.meta"><code>diff</code>/<code>beginner</code> (任意): 難易度・入門印。</li>
         <li data-i18n-html="doc.common.noRace"><code>noRace</code> (任意): フルスケール設計コースの印。</li>
         <li data-i18n-html="doc.common.grip"><code>grip</code> (任意): 路面グリップ。</li>
+        <li data-i18n-html="doc.common.bank"><code>bank</code> (任意): 横勾配 (カント)。</li>
       </ul>
       <h3 data-i18n="doc.track.h">kind: "track" — 中心線＋道幅で内外2本の壁 (一定幅の周回路)</h3>
       <ul>
@@ -386,6 +390,7 @@
         <li data-i18n-html="pm.s9.pacejka">タイヤ曲線は<b>簡易 Pacejka</b>。温度・摩耗・荷重感度・路面の細かな差は持ちません。</li>
         <li data-i18n-html="pm.s9.rates">ユーザープログラムの <code>loop()</code> は 20Hz、物理積分は 60Hz。ToF センサーは ±65°・3基、計測レンジは卓上2,000mm / フルスケール150m。</li>
         <li data-i18n-html="pm.s9.cone"><b>ToF は 25° の視野コーン</b>で扇内の最近反射面を測ります (実機 VL53L0X 準拠・v3.50.0)。中心1本の直線ではないので、コーナーの角を掠めて壁の外へ抜けません (#27 の根治)。各サンプルは<b>信頼区間 (CONF)</b> を持ち、これを超える/範囲外の測距を「遠い/開放」とみなします (卓上は実スケール換算で約640mm、実機移行時は搭載高に合わせ約250mmへ下げ速度も落とす)。詳細は <code>docs/physics_model.md</code> §12。</li>
+        <li data-i18n-html="pm.s9.optics"><b>光の当たり方は既定では理想化</b>しています。実機の有効測距は「標的から返る<b>信号の強さ</b>」で決まり、信号は <i>反射率 × cos(入射角) ÷ 距離²</i> に比例します (上流ライブラリの <code>setSignalRateLimit</code> が実際にこのしきい値)。既定はこれを無視して「扇内の最近反射面」を必ず返しますが、ツールバーの <b>ToF 光学モデル(実機相当)</b> を ON にすると実機と同じ判定になり、①斜めから見た壁・暗い他車・扇を埋めない小さな標的は<b>早く測れなくなり (-3)</b> ②扇内に複数の面があると<b>信号加重で混ざり</b> ③カバーガラスのクロストークで<b>遠方が少し短めに出ます</b>。決定論(乱数なし)なので「センサーノイズ」とは独立に試せます。公式レースは強制 OFF。詳細は <code>docs/physics_model.md</code> §12。</li>
       </ul>
 
       <h3 id="pm-learn" data-i18n="pm.s10.h">10. もっと深く調べる人へ(索引)</h3>
@@ -406,6 +411,11 @@
         <li data-i18n-html="pm.s11.localize"><b>Q. 自己位置推定(上級者向け)は、ToFで壁を照合した方が正確になりますか?</b> A. 意外かもしれませんが、1周内の相対位置ではホイールエンコーダ単独の推定の方が、ToFで壁形状と照合するフィルタより誤差が小さいという実測結果が出ています(ToFのノイズが逆に誤差を増やすため)。コース一周にわたる絶対位置(いわゆるループクロージャ)はToFのノイズが支配的になり、40m前後のブレが残ります。</li>
         <li data-i18n-html="pm.s11.scalefeel"><b>Q. 同じ「アンダーステア/オーバーステア」でも、卓上とフルスケールで感触が違うのはなぜですか?</b> A. 卓上スケールでは実際の摩擦係数のままだと横加速度が小さすぎて絶対に滑らないため、意図的に摩擦円を縦長の楕円にして「滑り出しが目に見える」ようにしています(§2参照)。フルスケールでは本物の等方な摩擦円に戻るため、アンダー/オーバーステアはタイヤのコーナリング剛性比から自然に立ち上がる、より現実に近い感触になります。</li>
         <li data-i18n-html="pm.s11.hitbox"><b>Q. 車種(スポーツカー風など)の見た目を変えると当たり判定も変わりますか?</b> A. 変わりません。衝突・配置判定は常にその車種の <code>length</code>/<code>width</code> で決まる矩形だけで行われ、外観スプライトの形状は判定に一切関与しません。複数台を見分けやすくするための色分け・形状差は、あくまで表示上の演出です。</li>
+        <li data-i18n-html="pm.s11.raintire"><b>Q. 雨のコースではレインタイヤの方が本当に速いのですか?</b> A. 速いですが、<b>「路面が十分に濡れていて」「摩擦限界まで攻めている」ときだけ</b>です。レインは自分のピーク摩擦がノーマルの 0.85 倍で、そのかわり路面のグリップ低下分の 70% を排水で取り戻します。この2つから<b>速さが入れ替わる路面グリップ g*=0.7987</b> が決まり (領域によらず同じ値)、出荷のウェット2コース (grip 0.5/0.55) はレイン有利側です。ただし<b>卓上ではタイヤを替えてもラップはほとんど変わりません</b> — 卓上で出せる横加速度は濡れたノーマルの限界の 60% にも届かず、そもそも滑っていないからです (フルスケールの競技サーキットを grip 0.5 にすると 3.93% 速くなります)。精密 v2 エンジンのみ。</li>
+        <li data-i18n-html="pm.s11.gear"><b>Q. ギア比(任意装備)を変えると何が変わりますか?</b> A. <b>加速と最高速が逆向きに動きます</b>。減速比 r を上げる (ロー) と駆動トルクが r 倍になって加速が鋭くなる一方、頭打ち速度は 1/r になります (ハイはその逆)。実測では 0→50% が 0.233→0.167 秒に縮む代わり最高速は 102%→70% へ、ハイは 0.317 秒/142% です。2速オートマは車速で自動変速して両取りを狙いますが、<b>変速中は駆動が一瞬切れます</b>。なお<b>フルスケールではハイギアにしても最高速は伸びません</b> — あちらの最高速は空力抗力が先に決めているので、伸びない最高速のために加速だけ失います。精密 v2 エンジンのみ・既定「直結」なら従来と完全に同じです。</li>
+        <li data-i18n-html="pm.s11.cant"><b>Q. コースの「横勾配 (バンク/カント)」は何をしますか?</b> A. カーブの外側を持ち上げて重力の一部を旋回の内側へ向け、コーナーの限界速度を上げます。</li>
+        <li data-i18n-html="pm.s11.susp"><b>Q. 「サス自由度(任意装備)」を選ぶと何が変わりますか?</b> A. コーナーで<b>荷重が移る「途中」の動き</b>が変わります。既定(準静的)では、荷重移動は加速度に一次遅れで追いつくだけで<b>行き過ぎることができません</b>。装備を選ぶとロールとピッチが<b>ばねと減衰を持つ本物の1自由度系</b>になり、切り返しで荷重が行き過ぎてから揺り返します。行き過ぎの大きさは減衰比だけで決まり(閉形式 exp(−πζ/√(1−ζ²))＝ソフト 37.2%・標準 4.6%・ハード 0%)、行き過ぎたぶんは荷重感度を通じて<b>横グリップを過渡的に削る</b>ので、切り返しの瞬間だけ曲がりにくくなります(過渡アンダー)。<b>定常のコーナリングは既定と厳密に同じ</b>です(相対差 1e-15)＝変わるのは過渡だけ。精密 v2 エンジン専用で、既定のままなら 1 バイトも変わりません。</li>
+        <li data-i18n-html="pm.s11.steer"><b>Q. 「操舵サーボ(任意装備)」で〈連続舵〉を選ぶと何が変わりますか?</b> A. <b>舵をどれだけ正確に置けるか</b>が変わります。実機 RumiCar の操舵は左/中立/右の<b>3値だけ</b>で、これは学習APIの基本仕様です。ただし<b>3値でも中間の舵角は作れます</b>——サーボは目標角へ一定の速さで動くだけなので、小刻みにオン/オフすれば平均化されて中間角になります(デューティ操舵)。ですから連続舵が変えるのは<b>分解能であって帯域ではありません</b>。3値では指令のたびにフル舵へ向かって流れるので、保持誤差が「1指令のあいだにサーボが動ける角度」に張り付きます(学習プログラムの実レート20Hzで平均 1.59°)。連続舵は目標角を直接置けるので、残るのは <code>0〜255</code> の刻みぶん <b>0.0235°</b> だけ(指令レートにも領域にも依存しません)＝<b>約68倍</b>の改善です。<b>ただし速くはなりません。</b> ドリフトの go/no-go 20セルを連続舵で取り直しても<b>GOは1つも復活せず</b>、サーボの速さを64倍にしても変わりませんでした。本当の壁は舵ではなく<b>車体の回復限界</b>で、横滑り角がおよそ36°を超えると舵を戻しても0.6秒では戻れません。連続舵は「速く走るための装備」ではなく「舵を正確に置くための装備」です。3エンジン全てで効き、既定の3値なら1バイトも変わりません。</li>
         <li data-i18n-html="pm.s11.official"><b>Q. 自分のブラウザで走らせたタイムと、GitHub上の公式レース記録が微妙に違うのはなぜですか?</b> A. 浮動小数点演算(<code>Math.sin</code>等)はブラウザ・Node.js・OSの組合せでビット単位の極小差が出ることがあり、僅差の勝負ではその差が結果に響く場合があります。そのため公式記録は特定のNode.js環境で固定実行する「正準エンジン」の結果だけを採用しています。ご自分のブラウザでの結果はあくまで手元の参考タイムとしてご覧ください。</li>
       </ul>
 
@@ -575,6 +585,20 @@
       <div id="ghostFlash" class="ghost-flash" aria-live="polite"></div>
       <div id="ghostStandings" class="ghost-standings"></div>
       <div id="ghostLegend" class="ghost-legend"></div>
+      <!-- AS13: テレメトリ区間別 並走比較。周回を「走った距離」で等分した区間ごとに各車の所要を並べ、
+           区間最速 (紫) と理論ベスト (各区間最速の和) を出す。sector.js の純関数が算出 (観測のみ)。 -->
+      <div id="ghostSectors" class="ghost-sectors"></div>
+    </div>
+  </dialog>
+
+  <!-- チャレンジ (Stage AS / AS13): 練習 (非公式・ローカル) の完走記録から難度別の進捗とバッジを出す。
+       母集団は「完走が定義されるコース」= フィニッシュ線を持つコースのみ (AS3 の raceableCourse と同述語)。
+       本体は main.js が challenge.challengeState の結果から生成する。公式ラダーとは混ざらない (W_spec §0)。 -->
+  <dialog id="dlgChallenge" class="docdlg">
+    <div class="docdlg-head"><h2 data-i18n="chal.title">🎯 チャレンジ (練習)</h2><button class="docdlg-x" data-close="dlgChallenge" data-i18n-aria="modal.close">×</button></div>
+    <div class="docdlg-body">
+      <p class="event-intro" data-i18n="chal.intro">このブラウザの練習記録から、難度別の完走状況とバッジを集計します。ソロ走行 (▶) で一度でも完走 (周回・峠はゴール) すれば記録され、ここに反映されます。公式レースの記録とは別物です。</p>
+      <div id="chalBody" class="chal-body"></div>
     </div>
   </dialog>
 
@@ -647,6 +671,7 @@
         <button id="eventOpen" data-i18n="event.open" data-i18n-title="event.open.title" title="開催 (ローカル): クラス (ワンメイク/バランス/無制限) を決めてエントリーを集め、3台未満は補充車で成立させて公式レースとして走らせます">📋 開催</button>
         <button id="officialOpen" data-i18n="official.open" data-i18n-title="official.open.title" title="GitHub で開かれている公式レースを一覧・閲覧し、エントリーや確定結果 (公式記録) を見ます。結果はローカルで再実行して検証できます">🏆 公式レース</button>
         <button id="rankOpen" data-i18n="rank.open" data-i18n-title="rank.open.title" title="クラス別・コース別のリーダーボード (コースレコード・表彰台) とドライバープロフィール・称号を表示します。検証済の公式記録のみを反映します">🏅 ランキング</button>
+        <button id="chalOpen" data-i18n="chal.open" data-i18n-title="chal.open.title" title="このブラウザの練習記録から、コース難度別の完走状況とバッジを表示します。ソロ走行 (▶) で完走したコースが対象です (公式記録とは別)">🎯 チャレンジ</button>
         <label class="racelaps" data-i18n-title="race.laps.title" title="完走に要する周回数"><span data-i18n="race.laps">周回</span> <input id="raceLaps" type="number" min="1" max="30" step="1" value="3"></label>
         <label class="racelaps" data-i18n-title="race.recon.title" title="レース前に各車が単独でコースを試走(recon)する周回数。0=従来(試走なし)。試走で覚えた地図を持って本番へ入るため、コースを学習するプログラム(Recon Racer 等)は本番1周目から先読み走行できます。試走は計時外・他車なし・決定論的に再現されます"><span data-i18n="race.recon">試走</span> <select id="raceRecon"><option value="0" selected>0</option><option value="1">1</option><option value="2">2</option><option value="3">3</option></select></label>
         <label class="chk" data-i18n-title="race.rejoin.title" title="ON=クラッシュしても3秒ペナルティを課して自動復帰し走り続ける / OFF=クラッシュでリタイア(DNF)。どちらでも結果は決定論的に再現できます"><input type="checkbox" id="raceRejoin"> <span data-i18n="race.rejoin">クラッシュで復帰(+3秒)</span></label>
@@ -735,10 +760,14 @@
           <label class="chk" data-i18n-title="fleet.rear.title" title="任意装備の後方センサーを有効化(実機はI2Cアドレス確保済で追加可能)。RC_read(BACK)/sensor3 が使え、追走車の察知などに使えます"><input type="checkbox" id="optRear"> <span data-i18n="fleet.rear">後方センサー(任意)</span></label>
           <label class="chk" data-i18n-title="fleet.encoder.title" title="任意装備の車輪エンコーダを有効化(実機は車輪に追加可能)。RC_wheel_speed(FRONT/REAR) で前/後軸の車輪面速度[m/s]が読め、前後の差からスリップ率が分かる。競技(フルスケール)のトラクション制御/ABS に使う"><input type="checkbox" id="optEncoder"> <span data-i18n="fleet.encoder">車輪エンコーダ(任意)</span></label>
           <label class="chk" data-i18n-title="fleet.noise.title" title="実機(VL53L0X)相当の測距ノイズと時々の欠測(タイムアウト)を ToF に注入する。ONにすると前方3センサー(後方有効時は後方も)の値が距離に応じて揺れ、時々無効値(範囲外)になる。学習プログラムが読む値にも効くので『simで動く=実機でも頑健か』を試せる。既定OFF=理想値"><input type="checkbox" id="optNoise"> <span data-i18n="fleet.noise">センサーノイズ(実機相当)</span></label>
+          <label class="chk" data-i18n-title="fleet.optics.title" title="実機(VL53L0X)相当の『光の当たり方』をモデル化する(opt-in・既定OFF・決定論)。実機の有効測距は『標的から返ってくる信号の強さ』で決まり、信号は 反射率×cos(入射角)÷距離² に比例する。ONにすると①斜めから見た壁や暗い他車は早く測れなくなる(-3)②扇の中に複数の面があると信号加重で混ざる(意図した標的以外からの反射)③カバーガラスのクロストークで遠方が少し短めに出る。ノイズ(ばらつき)とは独立の『系統誤差』なので、両方ONにすると重なる。既定OFF=扇内最近反射面(理想)"><input type="checkbox" id="optOptics"> <span data-i18n="fleet.optics">ToF 光学モデル(実機相当)</span></label>
           <label class="chk" data-i18n-title="fleet.hold.title" title="実機(VL53L0X)相当の測距の『遅さ』を再現する(sample-and-hold・既定OFF)。実機ToFは1計測に20〜33ms(約30Hz)かかり、理想センサー(遅延0・無制限更新)と違う。ONにすると1/30秒が経つまで前回の測距値を保持する=画面のコーンが実機の更新レートでカクつき、学習プログラムの見え方と一致する。多数回読んで平均するとノイズを人工的に消せる裏技も同時に塞ぐ(保持中は同じ値=平均しても縮まらない)。既定OFF=理想の即時更新"><input type="checkbox" id="optHold"> <span data-i18n="fleet.hold">センサー更新遅延(実機相当)</span></label>
           <label class="chk" data-i18n-title="fleet.cvd.title" title="ON=赤緑が見分けにくい色覚特性に配慮した配色に切り替え、センサーレイを破線・ヒット点を四角にして色だけに頼らず形状でも区別できるようにします(表示のみ・走りや物理には影響しません)。既定OFF=従来配色"><input type="checkbox" id="optCvd"> <span data-i18n="fleet.cvd">色覚セーフ配色</span></label>
           <label class="chk" data-i18n-title="fleet.eng.title" title="物理エンジンを選ぶ。動力学モデル (既定)=横向き90°超のドリフト/バックエントリーが可能なシングルトラック。クラシック=キネマティック自転車モデル (従来挙動)。精密 v2=4輪 two-track の精密動力学 (Stage AO・フルスケール推奨)。切替で車は一度リセットされます"><span data-i18n="fleet.eng">物理エンジン</span> <select id="optPhysMode"><option value="standard" data-i18n="fleet.eng.std">クラシック (キネマティック)</option><option value="dynamic" selected data-i18n="fleet.eng.dyn">動力学モデル (既定)</option><option value="v2" data-i18n="fleet.eng.v2">精密 v2</option></select></label><button type="button" class="infohint" data-pm="models" data-i18n-title="fleet.eng.info" title="このモデルの解説を開く (運動方程式)">ⓘ</button>
-          <label class="chk" data-i18n-title="fleet.tire.title" title="装着タイヤを選ぶ。ノーマル=ゴム/スリック (グリップ・通常は滑らない)。スリップ=硬質プラ/ハードコンパウンドの疑似ドリフトタイヤ (グリップが低く、全開で後輪が空転して滑り出す=卓上でもドリフト練習ができる)。精密 v2 エンジンでのみ効きます (他のエンジンは無視)。実機の『タイヤ交換』に相当します。切替で車は一度リセットされます"><span data-i18n="fleet.tire">タイヤ</span> <select id="optTire"><option value="normal" selected data-i18n="fleet.tire.normal">ノーマル (グリップ)</option><option value="slip" data-i18n="fleet.tire.slip">スリップ (ドリフト)</option></select></label>
+          <label class="chk" data-i18n-title="fleet.tire.title" title="装着タイヤを選ぶ。ノーマル=ゴム/スリック (グリップ・通常は滑らない)。スリップ=硬質プラ/ハードコンパウンドの疑似ドリフトタイヤ (グリップが低く、全開で後輪が空転して滑り出す=卓上でもドリフト練習ができる)。レイン=溝つき軟質コンパウンド (乾いた路面ではノーマルに劣るが、ウェット路面〈grip<1〉では排水でグリップを取り戻す=雨のコースで速い)。精密 v2 エンジンでのみ効きます (他のエンジンは無視)。実機の『タイヤ交換』に相当します。切替で車は一度リセットされます"><span data-i18n="fleet.tire">タイヤ</span> <select id="optTire"><option value="normal" selected data-i18n="fleet.tire.normal">ノーマル (グリップ)</option><option value="slip" data-i18n="fleet.tire.slip">スリップ (ドリフト)</option><option value="rain" data-i18n="fleet.tire.rain">レイン (ウェット向き)</option></select></label>
+          <label class="chk" data-i18n-title="fleet.gear.title" title="ギア比(減速比)を選ぶ任意装備。実機は直結だが、RCカーではピニオン交換によるギア比変更が標準的な調整で、2速トランスミッションも実在する。減速比が大きい(ロー)ほど駆動トルクが増えて加速が鋭くなる代わりに最高速が下がり、小さい(ハイ)ほど逆になる。2速オートマは車速で自動変速して両取りを狙うが、変速中は駆動が一瞬切れる。精密 v2 エンジンでのみ効きます(他は無視)。既定の直結なら従来と完全に同じ。切替で車は一度リセットされます"><span data-i18n="fleet.gear">ギア比(任意)</span> <select id="optGear"><option value="direct" selected data-i18n="fleet.gear.direct">直結 (既定)</option><option value="short" data-i18n="fleet.gear.short">ロー (加速重視 ×1.45)</option><option value="tall" data-i18n="fleet.gear.tall">ハイ (最高速重視 ×0.72)</option><option value="auto2" data-i18n="fleet.gear.auto2">2速オートマ (自動変速)</option></select></label>
+          <label class="chk" data-i18n-title="fleet.susp.title" title="サスペンションの自由度(ばね・減衰)を選ぶ任意装備。既定の準静的では、荷重移動は加速度に1次遅れで追従するだけで「行き過ぎ」が起きない。ソフト/標準/ハードを選ぶとロールとピッチが本物のばね・減衰系になり、切り返しで荷重が行き過ぎてから戻る過渡が出る(定常のコーナリングは既定と完全に同じ)。ソフトほど大きくゆっくり揺れ、ハードほど速くフラットになる。精密 v2 エンジンでのみ効きます(他は無視)。既定の準静的なら従来と完全に同じ。切替で車は一度リセットされます"><span data-i18n="fleet.susp">サス自由度(任意)</span> <select id="optSusp"><option value="quasi" selected data-i18n="fleet.susp.quasi">準静的 (既定)</option><option value="soft" data-i18n="fleet.susp.soft">ソフト (よく動く)</option><option value="balanced" data-i18n="fleet.susp.balanced">標準 (ばね・減衰)</option><option value="stiff" data-i18n="fleet.susp.stiff">ハード (フラット)</option></select></label>
+          <label class="chk" data-i18n-title="fleet.steer.title" title="操舵サーボを選ぶ任意装備。実機 RumiCar の操舵は左/中立/右の3値だけで、これは学習APIの基本仕様です(プログラムは3値でコースを走り切れるように書く)。比例サーボを『増設』すると RC_steer(方向, 0〜255) で舵の強さを指定でき、目標舵角を直接置けるようになります。3値でも小刻みなオン/オフで中間舵角は作れますが(デューティ操舵)、指令のたびにフル舵へ向かって流れるぶんのリップルが残ります。3エンジン全てで効きます。既定の3値なら従来と完全に同じ。切替で車は一度リセットされます"><span data-i18n="fleet.steer">操舵サーボ(任意)</span> <select id="optSteer"><option value="tri" selected data-i18n="fleet.steer.tri">3値 (実機・既定)</option><option value="prop" data-i18n="fleet.steer.prop">連続舵 (比例サーボ)</option></select></label>
           <label class="chk" data-i18n-title="fleet.wear.title" title="タイヤの熱・摩耗をシミュレートする(opt-in・既定OFF)。ONにすると激しい滑り(ドリフト/スピン/急制動)ほど接地タイヤが発熱・摩耗し、限界グリップが徐々に目減りする(合計効果は10%以内=支配しない設計)。とくに『ドリフトは後輪を消耗する』ため、常時ドリフト戦略は長丁場で自滅しうる=タイヤは『使いどころを選ぶ戦略資源』になります。HUDに輪ごとの温度/摩耗/摩擦円利用率が出ます。精密 v2 エンジンでのみ効きます(他は無視)。切替で新品タイヤへリセット"><input type="checkbox" id="optWear"> <span data-i18n="fleet.wear">タイヤ摩耗</span></label>
           <label class="chk" data-i18n-title="fleet.regime.title" title="物理スケールの領域。同じ動力学エンジンで卓上(実機相当)〜フルスケール・レース(実車350km/h)まで扱う。卓上/中スケールは動的相似で支配比 Ay*=(v²/R)/(μg) を不変に保つ(同じプログラムが同じ操作で滑り出す)。フルスケールは等方実μ+空力ダウンフォースで「速度=グリップ」(速いほど曲がれる)。車サイズ・ToFレンジが連動。車は一度リセットされます"><span data-i18n="fleet.regime">領域</span> <select id="regimeSel"><option value="tabletop" data-i18n="fleet.regime.tabletop">卓上 (実機相当)</option><option value="midscale" data-i18n="fleet.regime.midscale">中スケール (屋外RC)</option><option value="fullscale" data-i18n="fleet.regime.fullscale">フルスケール・レース (350km/h)</option></select></label><button type="button" class="infohint" data-pm="regime" data-i18n-title="fleet.regime.info" title="領域(スケール)と動的相似の解説を開く">ⓘ</button>
           <button id="carAdd" data-i18n="fleet.add">＋ 車両追加</button>

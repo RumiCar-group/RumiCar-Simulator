@@ -8,7 +8,11 @@ import { FLEET, CAR_TYPE_BY_KEY, APP_VERSION } from './config.js';
 import { runRace, engineFingerprint } from './race_engine.js';
 import { frozenField } from './race_event.js';
 import { aggregate, worldBest, beatenChecks } from './race_ladder.js';
+// AS13: シーズン/チャンピオンシップ・言語別ラダー (result.json の schema は不変・event/entries から引く)
+import { championships, langBoards, langRecordsAt, langProfiles, POINTS_DEFAULT } from './race_season.js';
 import { ghostProgressModel, ghostStandingsAt, ghostPasses } from './ghost_gap.js';
+import { sectorAnalysis, SECTORS_DEFAULT } from './sector.js';   // AS13: 区間別テレメトリ比較 (観測のみ)
+import { PROGRAM_BY_KEY } from './programs.js';                  // AS13: progKey 参照エントリーの言語解決
 import { fmtTime, loadBestRec } from './lap.js';
 import * as SFX from './sfx.js';
 import { drawCourse, worldToScreen } from './course.js';
@@ -476,16 +480,22 @@ let ghostOnClose = null;        // AB10: 観戦リプレイを閉じたとき一
 function loadMe() { try { return (localStorage.getItem(ME_KEY) || '').trim(); } catch (e) { return ''; } }
 function saveMe(a) { try { localStorage.setItem(ME_KEY, String(a || '').trim()); } catch (e) {} }
 
+// AS13: progKey 参照エントリー (docs/phase_w/official_sample_event.json 形式) の言語を実 PROGRAMS で解決。
+// program.lang を持つ通常のエントリーはこの経路を通らない (race_ladder.langOfEntry が先に返す)。
+const progLangOf = (key) => (PROGRAM_BY_KEY[key] || {}).lang || null;
+
 // 全公式レースの詳細を取得 → race_ladder で集計 (起動時 + ランキング/再読込時)。未シードは [] のまま。
 async function loadAllOfficialData(force) {
   if (officialDataLoaded && !force) return officialData;
   const list = officialRaces || [];
-  const out = [];
-  for (const r of list) {
-    try { const race = await fetchRace(r.id); if (race && race.event) out.push(race); } catch (e) { /* 1件失敗はスキップ */ }
-  }
+  // v5.2.0: 逐次 await を並列取得へ (1件失敗はスキップ=従来同値)。out は list 一覧順を維持
+  // (aggregate 入力の順序決定性を保つ)。
+  const fetchedRaces = await Promise.all(list.map(async (r) => {
+    try { return await fetchRace(r.id); } catch (e) { return null; /* 1件失敗はスキップ */ }
+  }));
+  const out = fetchedRaces.filter((race) => race && race.event);
   officialData = out;
-  ladder = aggregate(out);
+  ladder = aggregate(out, { progLang: progLangOf });
   officialDataLoaded = true;
   return officialData;
 }
@@ -566,6 +576,12 @@ async function reloadRankings() {
   renderRankings();
 }
 
+// AS13: 既定配点の表示ラベル (「10-8-6-5-4-3-2-1」)。規定を画面にも出して黙って配らない。
+const POINTS_LABEL = POINTS_DEFAULT.join('-');
+// AS13: プログラム言語の表示名。言語名は ja/en で同一なので i18n キーは持たせない (孤児を作らない)。
+const LANG_LABEL = { c: 'C', py: 'Python', js: 'JavaScript' };
+const langLabel = (l) => LANG_LABEL[String(l)] || String(l || '?').toUpperCase();
+
 // 称号バッジの文言 (リテラル t() = i18n 孤児検査③にも引っかからない)。ラベルはアイコンを内包する。
 function titleLabel(x) {
   if (x.key === 'rank.title.record') return t('rank.title.record', { n: x.n });
@@ -576,7 +592,7 @@ function titleLabel(x) {
 function renderRankings() {
   const esc = escapeHtml;
   const me = loadMe();
-  const data = ladder || aggregate(officialData);
+  const data = ladder || aggregate(officialData, { progLang: progLangOf });
   const { boards, drivers, verifiedCount } = data;
   if (!verifiedCount || !boards.length) { $('rankBody').innerHTML = `<p class="race-empty">${esc(t('rank.empty'))}</p>`; return; }
   let html = `<p class="hint rank-verifiednote">${esc(t('rank.verified'))} · ${esc(t('rank.intro'))}</p>`;
@@ -598,11 +614,53 @@ function renderRankings() {
     }
   }
 
+  // ── AS13 ①: シーズン/チャンピオンシップ (シーズン × クラス別のポイント順位表) ──────────
+  // 配点は規定 (race_season.POINTS_DEFAULT・event.points で上書き可)。順位は補充車を含む実走順位で
+  // 引き、ポイントを得るのは実在の著者だけ。リタイアは 0 点だが出走には数える。
+  const champs = championships(data.records, data.dnfs || []);
+  if (champs.length) {
+    html += `<h3>${esc(t('season.h'))}</h3>`;
+    html += `<p class="hint">${esc(t('season.note', { pts: POINTS_LABEL }))}</p>`;
+    for (const c of champs) {
+      const title = c.season ? c.season : t('season.unnamed');
+      html += `<div class="rank-board"><div class="rank-board-head">🏆 <b>${esc(title)}</b> — ${esc(t('event.class.' + c.cls))} ` +
+        `<span class="hint">${esc(t('season.events', { n: c.events }))}</span></div>`;
+      if (c.champion) {
+        // キーは静的リテラルで渡す (t(cond ? 'a' : 'b') にすると i18n 孤児検査③ の走査から消える)。
+        const cv = { who: c.champion.author, pts: c.champion.points };
+        html += `<p class="season-champ">${esc(c.tie ? t('season.champion.tie', cv) : t('season.champion', cv))}</p>`;
+      } else {
+        html += `<p class="hint">${esc(t('season.champion.none'))}</p>`;
+      }
+      html += '<table class="race-tab"><thead><tr>' +
+        [t('season.col.pos'), t('rank.col.author'), t('season.col.points'), t('rank.driver.wins'),
+          t('rank.driver.podiums'), t('season.col.finishes'), t('season.col.dnfs'), t('season.col.starts')]
+          .map((x) => `<th>${esc(x)}</th>`).join('') + '</tr></thead><tbody>';
+      c.rows.forEach((r, i) => {
+        const meMark = (r.author === me) ? ` <span class="rank-me">${esc(t('rank.me'))}</span>` : '';
+        html += `<tr${i === 0 && r.points > 0 ? ' class="rank-record"' : ''}><td>${i + 1}</td>` +
+          `<td>${esc(r.author)}${meMark}</td><td><b>${r.points}</b></td><td>${r.wins}</td><td>${r.podiums}</td>` +
+          `<td>${r.finishes}</td><td>${r.dnfs}</td><td>${r.starts}</td></tr>`;
+      });
+      html += '</tbody></table></div>';
+    }
+  }
+
+  // ── AS13 ②: 言語別ラダー (クラス×コース×言語)。言語は entries の program.lang から引く ──────
+  const lb = langBoards(data.records);
+
   // クラス別ラダー (👑コースレコード・🥇🥈🥉・「あなた」ハイライト・👻 vs world)
   html += `<h3>${esc(t('rank.boards.h'))}</h3>`;
   for (const b of boards) {
     html += `<div class="rank-board"><div class="rank-board-head"><b>${esc(t('event.class.' + b.cls))}</b> — ${esc(b.course)} ` +
       `<button class="rank-vsworld" data-cls="${esc(b.cls)}" data-course="${esc(b.course)}" title="${esc(t('ghost.vsWorld.title'))}">${esc(t('ghost.vsWorld'))}</button></div>`;
+    // 言語別のコースレコード帯 (同じコース・同じクラスの中で「その言語での最速」を並べる)
+    const lrec = langRecordsAt(lb.boards, b.cls, b.course);
+    if (lrec.length) {
+      html += '<p class="rank-langstrip">' + lrec.map((x) =>
+        `<span class="rank-langchip"><b>${esc(langLabel(x.lang))}</b> 👑 ${esc(x.rec.name)}` +
+        `<span class="hint"> (${esc(x.rec.author || '—')}) ${fmtTime(x.rec.classifiedMs / 1000)} · n=${x.n}</span></span>`).join(' ') + '</p>';
+    }
     html += '<table class="race-tab"><thead><tr>' +
       [t('race.col.rank'), t('race.col.name'), t('rank.col.author'), t('race.col.car'), t('race.col.time'), t('race.col.best'), t('rank.col.event')]
         .map((x) => `<th>${esc(x)}</th>`).join('') + '</tr></thead><tbody>';
@@ -616,6 +674,22 @@ function renderRankings() {
         `<td>${r.bestLapMs != null ? fmtTime(r.bestLapMs / 1000) : '—'}</td><td class="hint">${esc(r.eventTitle)}</td></tr>`;
     });
     html += '</tbody></table></div>';
+  }
+
+  // ── AS13 ②: 言語別の集計 (どの言語がどれだけ走っているか)。言語不明は混ぜず件数で明示 ──────
+  const lprof = langProfiles(data.records);
+  if (lprof.length) {
+    html += `<h3>${esc(t('lang.h'))}</h3>`;
+    html += `<p class="hint">${esc(t('lang.note'))}</p>`;
+    if (lb.unknown) html += `<p class="hint">${esc(t('lang.unknown', { n: lb.unknown }))}</p>`;
+    html += '<table class="race-tab"><thead><tr>' +
+      [t('lang.col.lang'), t('lang.col.records'), t('lang.col.authors'), t('rank.driver.wins'), t('lang.col.best')]
+        .map((x) => `<th>${esc(x)}</th>`).join('') + '</tr></thead><tbody>';
+    for (const p of lprof) {
+      html += `<tr><td><b>${esc(langLabel(p.lang))}</b></td><td>${p.entries}</td><td>${p.authors}</td>` +
+        `<td>${p.wins}</td><td>${p.bestMs != null ? fmtTime(p.bestMs / 1000) : '—'}</td></tr>`;
+    }
+    html += '</tbody></table>';
   }
 
   // ドライバープロフィール／称号
@@ -746,11 +820,58 @@ function openGhostReplay(data, onClose) {
     // AB12: 効果音用の遷移検出状態 (観測のみ＝hash 不変)。周回(先頭)・クラッシュ(各車)・ゴール(再生終端)。
     _sfxFi: -1, _sfxMaxLap: 0, _sfxCrashed: [], _sfxEnded: false };
   $('ghostFlash').textContent = ''; $('ghostStandings').innerHTML = '';
+  renderGhostSectors(g, rc);        // AS13: 区間別 並走比較 (事後解析・1 回だけ)
   $('ghostPlay').textContent = t('ghost.pause');
   const dlg = $('dlgGhost'); applyI18n(dlg); dlg.showModal();
   drawGhostFrame();   // カウントダウン中の静止初期フレームを描いておく
   // AB9: 観戦再生も発走演出 (3-2-1-GO) を重ねてから再生開始 (UI のみ)。
   playCountdown(dlg, () => { if (ghostAnim) { ghostAnim.lastTs = null; ghostRaf = requestAnimationFrame(ghostStep); } });
+}
+
+// ── AS13 ④: テレメトリ区間別 並走比較 (W_spec §8 バックログ) ─────────────────────────
+// 再生開始時に一度だけ算出する事後解析 (フレーム毎に変わらないため rAF ループに載せない=描画コスト0)。
+// 算出本体は ./sector.js の純関数＝node ゲートと同一コード。ゴーストからの「観測のみ」ゆえ
+// race_engine 非改変・verifyHash/traceHash 不変 (ghost_gap.js と同じ契約)。
+function renderGhostSectors(g, rc) {
+  const el = $('ghostSectors'); if (!el) return;
+  const esc = escapeHtml;
+  el.innerHTML = '';
+  const an = sectorAnalysis(g, rc.bounds, SECTORS_DEFAULT);
+  if (!an.lapsCounted) {
+    // 1 周も完了していない (全車リタイア・峠で未到達など)。区間は「周を等分する」ものなので出せない。
+    el.innerHTML = `<h3>${esc(t('sect.h'))}</h3><p class="hint">${esc(t('sect.none'))}</p>`;
+    return;
+  }
+  const K = an.k;
+  const secName = (j) => 'S' + (j + 1);
+  const fmtSec = (v) => (v == null ? '—' : v.toFixed(2) + 's');
+  let h = `<h3>${esc(t('sect.h'))}</h3>`;
+  h += `<p class="hint">${esc(t('sect.note', { k: K }))}</p>`;
+  h += `<p class="hint">${esc(t('sect.quant', { ms: Math.round(an.dt * 1000) }))}</p>`;
+  h += '<table class="race-tab sect-tab"><thead><tr>' +
+    [t('sect.col.car'), ...Array.from({ length: K }, (_, j) => secName(j)), t('sect.col.best'), t('sect.col.laps')]
+      .map((x) => `<th>${esc(x)}</th>`).join('') + '</tr></thead><tbody>';
+  for (const c of an.cars) {
+    h += `<tr><td><span class="race-dot" style="background:${FLEET.colors[c.ci % FLEET.colors.length]}"></span>${esc(c.name)}</td>`;
+    for (let j = 0; j < K; j++) {
+      const v = c.bestSectors[j];
+      const isBest = (an.holderOf[j] === c.ci && v != null);
+      h += `<td class="${isBest ? 'sect-best' : ''}">${esc(fmtSec(v))}${isBest ? ' ●' : ''}</td>`;
+    }
+    h += `<td>${esc(fmtSec(c.bestLapSec))}</td><td class="hint">${c.laps.length}</td></tr>`;
+  }
+  // 理論ベスト = 各区間の全車最速の和。定義上 実ベストラップ以下で、その差が「1 周で取りこぼした合計」。
+  if (an.theoreticalBestSec != null) {
+    h += `<tr class="sect-theo"><td><b>${esc(t('sect.theoretical'))}</b></td>`;
+    for (let j = 0; j < K; j++) {
+      const who = an.holderOf[j] != null ? an.cars.find((c) => c.ci === an.holderOf[j]) : null;
+      h += `<td><b>${esc(fmtSec(an.bestOf[j]))}</b><br><span class="hint">${esc(who ? who.name : '—')}</span></td>`;
+    }
+    h += `<td><b>${esc(fmtSec(an.theoreticalBestSec))}</b></td><td class="hint">—</td></tr>`;
+  }
+  h += '</tbody></table>';
+  if (an.gainSec != null) h += `<p class="hint">${esc(t('sect.gain', { s: an.gainSec.toFixed(2) }))}</p>`;
+  el.innerHTML = h;
 }
 
 function stopGhost() { if (ghostRaf) { cancelAnimationFrame(ghostRaf); ghostRaf = 0; } ghostAnim = null; }

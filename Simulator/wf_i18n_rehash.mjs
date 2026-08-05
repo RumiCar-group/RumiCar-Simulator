@@ -16,9 +16,9 @@ import { hashJa } from './wf_i18n_hash.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const MSG = join(ROOT, 'public', 'js', 'i18n', 'messages.js');
-const CFG = join(ROOT, 'public', 'js', 'config.js');
+const CFG = join(ROOT, 'public', 'js', 'changelog.js');   // Stage AS2: CHANGELOG は config.js から分離
 const { MESSAGES } = await import('./public/js/i18n/messages.js');
-const { CHANGELOG } = await import('./public/js/config.js');
+const { CHANGELOG } = await import('./public/js/changelog.js');
 
 // キー k のオブジェクトリテラル範囲 {start..end} (両端は { と }) を string-aware に求める。
 function findEntry(src, key) {
@@ -37,7 +37,7 @@ function findEntry(src, key) {
   return null;
 }
 
-// config.js CHANGELOG の各エントリ ({ v: 'vX', ... }) のオブジェクト範囲を版 v で string-aware に求める。
+// changelog.js CHANGELOG の各エントリ ({ v: 'vX', ... }) のオブジェクト範囲を版 v で string-aware に求める。
 // (各エントリの '{' は ` v:` の直前にある＝v 文字列を見つけ、その手前の '{' から brace-match する。)
 function findChangelogEntry(src, v) {
   const esc = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -99,7 +99,7 @@ if (changed.length) {
   console.log('rehash(messages.js): 更新なし (全 h 印が最新)');
 }
 
-// ---- config.js CHANGELOG の h=hash(note) を再計算 (h 印を持つエントリのみ) ----
+// ---- changelog.js CHANGELOG の h=hash(note) を再計算 (h 印を持つエントリのみ) ----
 let csrc = readFileSync(CFG, 'utf8');
 const clChanged = [];
 for (const e of CHANGELOG) {
@@ -115,8 +115,8 @@ for (const e of CHANGELOG) {
 }
 if (clChanged.length) {
   writeFileSync(CFG, csrc);
-  console.log(`rehash(config.js CHANGELOG): ${clChanged.length} 件の h を更新しました`);
+  console.log(`rehash(changelog.js CHANGELOG): ${clChanged.length} 件の h を更新しました`);
   for (const c of clChanged) console.log(`  - ${c}`);
 } else {
-  console.log('rehash(config.js CHANGELOG): 更新なし (全 h 印が最新)');
+  console.log('rehash(changelog.js CHANGELOG): 更新なし (全 h 印が最新)');
 }

@@ -1,0 +1,10 @@
+{
+  "name": "rumicar-browser-harness",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Real (non-headless) browser verification harness for RumiCar Simulator",
+  "dependencies": {
+    "playwright": "1.62.1"
+  }
+}

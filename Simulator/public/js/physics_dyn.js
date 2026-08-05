@@ -16,7 +16,7 @@
 // スケール注意: 卓上 (最高速 0.7m/s・ホイールベース 0.13m) なので、実車の μ≈1 (9.8m/s²)
 // だと横限界が到達不能になり絶対に滑らない。横の摩擦は「滑り出しが見える」よう小さく、
 // 縦は現モデルの加速 2.5 / 制動 4.0 m/s² を出せるよう強く、と異方性を持たせる (摩擦楕円)。
-import { CAR, CONST, TRAIL, CAR_TYPE_BY_KEY, CAR_TYPE_DEFAULT, MASS_REF, MASS, REGIMES, REGIME_STATE, setRegimeScale, SENSOR_RANGE, REGIME_HOOKS, gForward } from './config.js';
+import { CAR, CONST, TRAIL, CAR_TYPE_BY_KEY, CAR_TYPE_DEFAULT, MASS_REF, MASS, REGIMES, REGIME_STATE, setRegimeScale, SENSOR_RANGE, REGIME_HOOKS, gForward, gPlane, gNormal, steerTargetOf } from './config.js';
 
 // 駆動方式ごとの動力学パラメータ。
 //   aFrac    : CG 位置 (前軸からの距離 a = aFrac×wheelBase)。小さい=前荷重 (FF)。
@@ -219,6 +219,11 @@ export class DynCar {
     // で上書き可 (未指定=0)。出荷峠は全て発走が +x 近傍のため既定 0 で発走方向≈下り方向になる
     // (峠ごとの方位・大きさの elev 較正は AP11 スコープ)。
     this.slopeDir = (start && start.slopeDir) || 0;
+    // 横勾配 (カント) が生む面内重力の横成分 [m/s²] (Stage AS10)。slopeDir の **左 90°** を正とする符号付き
+    // スカラー。既定 0 = 平坦 (全既存コース) = 完全 no-op。峠/track で `course.bank` があるとき fleet.js が
+    // 毎サブステップ 道の局所曲率から書き込む (slopeDir と同型の道追従量)。
+    this.gLat = (start && start.gLat) || 0;
+    this._gp = { fwd: 0, left: 0 };   // gPlane の書込先スクラッチ (毎サブステップの割当回避)
     this.grip = (start && start.grip) || 1;
     this._axPrev = 0;
     this._ayPrev = 0;  // 前ステップの横タイヤ力 (左右荷重移動 Z2 用・代数ループ回避。latLoadK=0 では未使用)
@@ -232,9 +237,8 @@ export class DynCar {
   get steerTarget() {
     // ドリフト車はフルスケール領域でのみ操舵上限を拡大 (I2)。卓上/中スケールは driftSteerMul=1 で ±24° 不変。
     const mx = CAR.maxSteer * (this.profile().drift ? DYN.driftSteerMul : 1);
-    if (this.steer === CONST.LEFT) return mx;
-    if (this.steer === CONST.RIGHT) return -mx;
-    return 0;
+    // Stage AS12: 既定 (3値・steerSet='tri') は従来と厳密に同一。連続舵はこの mx (=その車のフル舵) への比。
+    return steerTargetOf(this.steer, mx, this.steerSet, this.steerAmt);
   }
 
   step(dt) {
@@ -289,7 +293,13 @@ export class DynCar {
     // gFwd = downhill·cos(theta−slopeDir): 下り向き(theta=slopeDir)で+downhill、登り向き(θ=slopeDir±π)で−downhill。
     // downhill===0 (平地・全凍結シナリオ・全オラクルゲート) は gFwd=0 で以降の勾配項が完全 no-op = byte 不変。
     // AP22: 3エンジン同一式を config.gForward へ 3→1 統合 (純リファクタ・値不変=traceHash 不変)。
-    const gFwd = gForward(this.downhill, this.theta, this.slopeDir);
+    // AS10: 面内重力を **2 軸へ完全射影** (gPlane)。AP10 は前方成分しか適用せず横成分 downhill·sin(θ−slopeDir)
+    // を落としていた (峠実走で最大 1.47 m/s² = 到達横加速度と同オーダーの一次項)。gLat=0 でも前方は AP10 と
+    // 同一 double・面内成分ゼロ (平地) は早期 return で完全 no-op = byte 不変。
+    const gp = gPlane(this.downhill, this.gLat, this.theta, this.slopeDir, this._gp);
+    const gFwd = gp.fwd, gLeft = gp.left;
+    // 路面法線の重力 (AS10)。面内へ取り出したぶん法線は減る (gN=√(g²−gIn²))。平地は g そのもの=byte 不変。
+    const gN = gNormal(g, this.downhill, this.gLat);
 
     // --- 操舵サーボ (キネマティック版と同一: 3値→有限速度で実舵角へ) ---
     const tgt = this.steerTarget;
@@ -374,8 +384,11 @@ export class DynCar {
     // 勾配ピッチ荷重 (AP10 defect④): 斜面の傾きで CG が幾何的に前後へ寄り、静的輪荷重が移る。
     // 下り(gFwd>0=前傾)で前軸 +gFwd·hOverL・後軸 −gFwd·hOverL (Σ保存)。タイヤ縦力の動的移動(axPrev)とは
     // 別の静的重力項。downhill===0 で gFwd=0 = +0 加算 = byte 不変。
-    let nF = g * (b / L) - DYN.hOverL * axPrev + DYN.hOverL * gFwd;
-    let nR = g * (a / L) + DYN.hOverL * axPrev - DYN.hOverL * gFwd;
+    // AS10: 静的輪荷重は **路面法線方向の重力 gN** で立てる (面内へ取り出したぶん法線は減る)。平地は gN===g
+    // ゆえ厳密同一 = byte 不変。カントの横荷重移動は「タイヤが重力を支える横力」経由で自動的に入るので
+    // ここへ gLat を足さない (足すと二重計上・_ayPrev はタイヤ横力のみを持つ設計を保つ)。
+    let nF = gN * (b / L) - DYN.hOverL * axPrev + DYN.hOverL * gFwd;
+    let nR = gN * (a / L) + DYN.hOverL * axPrev - DYN.hOverL * gFwd;
     nF = Math.max(0.1 * g, nF); nR = Math.max(0.1 * g, nR);
     // ダウンフォースを前後配分で加算 (床クランプ後 = 常に load を増やす方向)。
     if (fDown > 0) { nF += fDown * DYN.downforceBalance; nR += fDown * (1 - DYN.downforceBalance); }
@@ -528,6 +541,10 @@ export class DynCar {
     let gApplied = 0;
     if (gFwd !== 0 && this.driveDir !== CONST.FREE && (driven || Math.abs(this.u) > 1e-3)) gApplied = gFwd;
     ax += gApplied;
+    // AS10: 面内重力の横成分。前方と違い FREE 惰行ブロックへ折り込む相手 (転がり抵抗) が無いので**無条件に
+    // 加算**する (坂を惰行で下る車も横へ押される)。gLeft は非タイヤ力ゆえ下の REVERSE 半陰的分岐でも
+    // ayNoLat 側 (=ay − タイヤ横力) に残り、正しく陽的に扱われる。平地は gLeft===0 で +0 加算 = byte 不変。
+    if (gLeft !== 0) ay += gLeft;
 
     this._axPrev = fxF * cd + fxR; // 前後荷重移動用 (タイヤ縦力のみ。重力成分は含めない)
     this._ayPrev = fyF * cd + fxFLat * sd + fyR; // 左右荷重移動用 (タイヤ横力。latLoadK=0 では未使用=byte 不変)

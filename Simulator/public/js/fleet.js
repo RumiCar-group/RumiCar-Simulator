@@ -1,8 +1,16 @@
 // 車両スロット = 1台分の実行単位 (プログラム・物理・ラップ計測)。
 // スロットの生成・グリッド配置・物理積分・プログラム tick を main (UI/ループ) から分離。
-import { FLEET, CAR_TYPE_DEFAULT, CONST, SIM, CAR, PHYSICS } from './config.js';
+import { FLEET, CAR_TYPE_DEFAULT, CONST, SIM, CAR, PHYSICS, TIRE_SETS, TIRE_DEFAULT, GEAR_SETS, GEAR_DEFAULT, SUSP_SETS, SUSP_DEFAULT, STEER_SETS, STEER_DEFAULT, gLatOf } from './config.js';
+
+// 装備値の正規化 (Stage AO6/AS9)。白リスト外・未指定は既定へ落とす **単一の実装** (UI・共有 URL・
+// レース field・swapPhysics が同じ規則を通る=「同じ値が意味の違う複数箇所」でズレない)。
+// 旧 `(x==='slip')?'slip':'normal'` と normal/slip については同一の写像 = 既存挙動 byte 不変。
+export function normTire(v) { return TIRE_SETS.includes(v) ? v : TIRE_DEFAULT; }
+export function normGear(v) { return GEAR_SETS.includes(v) ? v : GEAR_DEFAULT; }
+export function normSusp(v) { return SUSP_SETS.includes(v) ? v : SUSP_DEFAULT; }   // AS11
+export function normSteer(v) { return STEER_SETS.includes(v) ? v : STEER_DEFAULT; } // AS12 (3エンジン共通)
 import { Car, checkCollision, carEdges } from './physics.js';
-import { DynCar } from './physics_dyn.js';
+import { DynCar, DYN } from './physics_dyn.js';
 import { CarV2 } from './physics_v2.js';
 import { t } from './i18n.js';
 
@@ -268,11 +276,17 @@ export function makeSlot({ i, lang, src, course, slotCount, logFor }) {
     log: logFor(slot), _sensors: [], _pendingDelay: 0, _others: [], rear: false,
     _sensGen: 0,      // AP5: tick 世代カウンタ。tickSlot が毎 tick 進め、api.js refresh() の測距キャッシュ鍵になる。
     _simMs: 0,        // AP8: シム時刻[ms]。tickSlot が loop 周期ぶん進め、millis()/micros() へ供給 (wallclock 非依存=決定論)。
-    tire: 'normal',   // AO6: v2 タイヤセット (normal|slip)。v2 車のみ car.tireSet へ反映 (旧エンジンは無視)。
+    tire: 'normal',   // AO6/AS9: v2 タイヤセット (normal|slip|rain)。v2 車のみ car.tireSet へ反映 (旧エンジンは無視)。
     wear: false,      // AO12: タイヤ熱・摩耗 opt-in。v2 車のみ car.wear へ反映 (旧エンジンは無視)。
+    gear: GEAR_DEFAULT,  // AS9: ギア比 (任意装備・既定 direct=直結)。v2 車のみ car.gearSet へ反映 (旧エンジンは無視)。
+    susp: SUSP_DEFAULT,  // AS11: サス自由度 (任意装備・既定 quasi=自由度なし)。v2 車のみ car.suspSet へ反映 (旧エンジンは無視)。
+    // AS12: 操舵サーボ (任意装備・既定 tri=実機準拠の3値)。**3エンジン共通** (サーボは Car が持つ共通機構ゆえ
+    // v2 専用の上3つと違い standard/dynamic でも効く)。api.js が world.steerSet を見て第2引数を受理する。
+    steerSet: STEER_DEFAULT,
   };
-  if (car.engine === 'v2') { car.tireSet = slot.world.tire; car.wear = slot.world.wear; }
-  slot._slopeCL = slopeCenterline(course);   // AP11: 峠の道追従 downhill 用中心線 (非峠=null=no-op)
+  car.steerSet = slot.world.steerSet;   // AS12: 全エンジン (Car/DynCar/CarV2 が共通で持つ)
+  if (car.engine === 'v2') { car.tireSet = slot.world.tire; car.wear = slot.world.wear; car.gearSet = slot.world.gear; car.suspSet = slot.world.susp; }
+  slot._road = roadFrame(course);   // AP11/AS10: 道追従の路面フレーム (勾配+カント。平坦コース=null=no-op)
   slot.hostEnv = buildApi(slot.world);
   return slot;
 }
@@ -285,10 +299,13 @@ export function swapPhysics(slots) {
   for (const s of slots) {
     const car = newCar(s.spawn);
     car.type = s.carType;
-    // AO6/AO12: v2 へ切替えた車は world のタイヤセット/摩耗設定を引き継ぐ (物理モード/領域切替でも装備維持)。
+    car.steerSet = normSteer(s.world && s.world.steerSet);   // AS12: 操舵サーボは全エンジン共通ゆえ v2 判定の外
+    // AO6/AO12/AS9: v2 へ切替えた車は world のタイヤ/摩耗/ギア設定を引き継ぐ (物理モード/領域切替でも装備維持)。
     if (car.engine === 'v2') {
-      car.tireSet = (s.world && s.world.tire === 'slip') ? 'slip' : 'normal';
+      car.tireSet = normTire(s.world && s.world.tire);
       car.wear = !!(s.world && s.world.wear);
+      car.gearSet = normGear(s.world && s.world.gear);
+      car.suspSet = normSusp(s.world && s.world.susp);   // AS11
     }
     s.car = car;
     s.world.car = car;
@@ -302,7 +319,7 @@ export function swapPhysics(slots) {
 // データ駆動化)。grid 未指定 (既存の全呼び出し) は従来どおり freeSpawn で算法計算＝byte 完全不変。
 export function rebuildSpawns(slots, course, grid) {
   const occupied = [];
-  const slopeCL = slopeCenterline(course);   // AP11: コース適用時に道追従 downhill 用中心線を更新 (非峠=null)
+  const road = roadFrame(course);   // AP11/AS10: コース適用時に路面フレームを更新 (平坦=null)
   const stMeta = { downhill: course.start.downhill || 0, grip: course.start.grip || 1 };
   if (course.start.muDecay != null) stMeta.muDecay = +course.start.muDecay;   // 路面 muDecay (§5・AO8・省略=タイヤ既定＝キー不追加で byte 不変)
   slots.forEach((s, i) => {
@@ -310,12 +327,12 @@ export function rebuildSpawns(slots, course, grid) {
     const sp = g ? { x: g.x, y: g.y, theta: g.theta, ...stMeta } : freeSpawn(course, occupied, i);
     occupied.push(sp);
     s.spawn = sp;
-    s._slopeCL = slopeCL;
+    s._road = road;
     s.world.walls = course.walls;
     s.world.start = sp;
     s.world._others = [];
     s.car.reset(sp);
-    s.lap.reset(course, { carType: s.carType, tire: s.world.tire, wear: s.world.wear });   // 練習記録はコース×車種別 (W2)・装備を記録へ刻む (AP2)
+    s.lap.reset(course, { carType: s.carType, tire: s.world.tire, wear: s.world.wear, gear: s.world.gear });   // 練習記録はコース×車種別 (W2)・装備を記録へ刻む (AP2/AS9)
     s.running = false; s.loopTimer = 0;
   });
 }
@@ -374,20 +391,72 @@ export function applyStartGate(slots, interact) {
 // =下り方向) を毎サブステップ car.slopeDir に与える。エンジン (physics_*.js の step) は AP10 が入れた
 // スカラー slopeDir 消費のまま**無改変** = downhill=0 (全非峠・全凍結 f0-f3・全オラクルゲート) は
 // gFwd=0 で完全 no-op = byte 不変。centerline は fitAndPlace が平行移動のみ (回転/拡縮なし) するため
-// car.x/y と同一世界系で直接使える。cl.length<2 のときは無効 (呼び出し側の _slopeCL 生成でガード)。
-function roadDownhillDir(cl, x, y) {
-  let best = Infinity, bi = 0;
-  const p = { x, y };
-  for (let i = 0; i < cl.length - 1; i++) {
-    const d = distToSeg(p, { x: cl[i][0], y: cl[i][1] }, { x: cl[i + 1][0], y: cl[i + 1][1] });
-    if (d < best) { best = d; bi = i; }
+// car.x/y と同一世界系で直接使える。cl.length<2 のときは無効 (下の roadFrame がガード)。
+// ── AS10: 道追従の「路面フレーム」(AP11 の slopeCenterline を勾配＋カントへ一般化) ─────────────
+// 面内重力は 2 成分ある — 道に沿う `downhill` (AP11) と 道に直交する `gLat` (カント=横勾配・AS10)。
+// どちらも「車の位置における道の向き」を基準にするので、中心線から **接線方向** と **正規化符号付き
+// 曲率** を1つのフレームとして持たせる。
+//   ・接線 (slopeDir) = 最近傍セグメントの向き。**AP11 の roadDownhillDir と同一式**ゆえ既存の峠の
+//     前方成分は byte 不変。
+//   ・カント = `course.bank`[度] を「最急コーナーでのバンク角」とし、他は |κ|/κmax に線形 (道路設計の
+//     スーパーエレベーション則 e ∝ v²κ/g)。**頂点ごとの曲率をセグメント内で線形補間**するので道に
+//     沿って連続 (段差のトルクを入れない)。符号付き曲率 κ=dθ/ds>0 (左旋回) → 内側は左 → gLat>0。
+// **非活性は null**: 中心線が無い (annulus/raw/loop)・または downhill も bank も 0 (=既存の全コース)
+// なら null を返し、呼び側は car.slopeDir/gLat を一切触らない = 完全 no-op = byte 不変。
+// **export は検証用** (常設ゲート `wf_as10_cant.mjs` が *本番の実装そのもの* を呼んで測るため。
+// AS2 の `drawCourseLayer`・AO10 の `probe` フックと同じ作法＝述語を検査側へ写し取らない・CI-8/CI-9)。
+export function roadFrame(course) {
+  const cl = course.centerline;
+  if (!Array.isArray(cl) || cl.length < 2) return null;
+  const bank = +(course.bank || 0), dh = +(course.downhill || 0);
+  if (dh === 0 && bank === 0) return null;
+  const closed = !course.touge;          // track は閉ループ (末尾→先頭も道)・峠は開いた片道
+  const n = cl.length;
+  const nSeg = closed ? n : n - 1;
+  const dir = new Float64Array(nSeg), len = new Float64Array(nSeg);
+  for (let i = 0; i < nSeg; i++) {
+    const a = cl[i], b = cl[(i + 1) % n];
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    dir[i] = Math.atan2(dy, dx); len[i] = Math.hypot(dx, dy);
   }
-  return Math.atan2(cl[bi + 1][1] - cl[bi][1], cl[bi + 1][0] - cl[bi][0]);
+  // 頂点 v (セグメント v−1 と v の継ぎ目) の符号付き曲率 κ=Δθ/ds。開いた道の両端は 0 (直線扱い)。
+  const kv = new Float64Array(n);
+  const wrap = (a) => { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; };
+  for (let v = 0; v < n; v++) {
+    const iPrev = v - 1, iCur = v % nSeg;
+    if (!closed && (v === 0 || v >= nSeg)) { kv[v] = 0; continue; }
+    const p = closed ? (iPrev + nSeg) % nSeg : iPrev;
+    const ds = 0.5 * (len[p] + len[iCur]);
+    kv[v] = ds > 1e-9 ? wrap(dir[iCur] - dir[p]) / ds : 0;
+  }
+  let kMax = 0;
+  for (let v = 0; v < n; v++) kMax = Math.max(kMax, Math.abs(kv[v]));
+  const wn = new Float64Array(n);
+  if (kMax > 1e-9) for (let v = 0; v < n; v++) wn[v] = kv[v] / kMax;
+  return { cl, n, nSeg, closed, dir, wn, bank, kMax };
 }
-// slot に道追従用の中心線を紐づける (峠かつ downhill≠0 のときだけ非 null=非峠は完全 no-op)。
-function slopeCenterline(course) {
-  return (course.touge && (course.downhill || 0) !== 0 && Array.isArray(course.centerline) && course.centerline.length >= 2)
-    ? course.centerline : null;
+
+// 車の位置における路面フレームを car へ書き込む (毎サブステップ)。rf=null は呼ばない (完全 no-op)。
+export function applyRoadFrame(car, rf) {
+  const cl = rf.cl, nSeg = rf.nSeg, n = rf.n;
+  let best = Infinity, bi = 0, bt = 0;
+  const px = car.x, py = car.y;
+  for (let i = 0; i < nSeg; i++) {
+    const a = cl[i], b = cl[(i + 1) % n];
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    const l2 = dx * dx + dy * dy;
+    let t = l2 < 1e-12 ? 0 : ((px - a[0]) * dx + (py - a[1]) * dy) / l2;
+    t = t < 0 ? 0 : (t > 1 ? 1 : t);
+    // **Math.hypot で比較する** (AP11 の distToSeg と同一の丸め) — 二乗距離で比べると、ほぼ等距離の
+    // 2 セグメントで argmin が入れ替わりうる。slopeDir は前方成分 gFwd を決めるので、AS10 が意図して
+    // 変える横成分以外は AP11 と同一の道筋を通す。
+    const d = Math.hypot(px - (a[0] + t * dx), py - (a[1] + t * dy));
+    if (d < best) { best = d; bi = i; bt = t; }
+  }
+  car.slopeDir = rf.dir[bi];
+  // 頂点曲率をセグメント内で線形補間 (道に沿って連続)。bank=0 なら gLatOf が 0 を返す。
+  const w = rf.wn[bi] + (rf.wn[(bi + 1) % n] - rf.wn[bi]) * bt;
+  car.gLat = gLatOf(DYN.g, rf.bank, w);
 }
 
 // 物理積分 + 衝突 + ラップ (1 台分)。
@@ -417,7 +486,7 @@ export function integrateSlot(slot, dt, others, walls, recover) {
     while (rem > 1e-6) {
       const s = Math.min(h, rem); rem -= s;
       const px = car.x, py = car.y, pth = car.theta, tlen = car.trail.length;
-      if (slot._slopeCL) car.slopeDir = roadDownhillDir(slot._slopeCL, car.x, car.y);   // AP11: 道追従 downhill 方向
+      if (slot._road) applyRoadFrame(car, slot._road);   // AP11/AS10: 道追従の勾配方向 slopeDir とカント gLat
       car.step(s);
       if (checkCollision(car, walls)) {
         if (recover && slot.running) {
@@ -523,7 +592,7 @@ export function integrateFleetV2(slots, dt, walls, recover, interact) {
       }
       const pb = car._contactBody();       // step 前 (prev) の CG
       const pcor = car.corners();           // step 前 (prev) の四隅 (掃引 CCD)
-      if (!isStatic && slot._slopeCL) car.slopeDir = roadDownhillDir(slot._slopeCL, car.x, car.y);   // AP11: 道追従 downhill 方向
+      if (!isStatic && slot._road) applyRoadFrame(car, slot._road);   // AP11/AS10: 道追従の勾配方向 slopeDir とカント gLat
       if (!isStatic) car.step(s);           // dynamic のみ積分 (crashed/held は不動)
       const nb = car._contactBody();        // step 後 (now) の CG・速度
       bodies.push({

@@ -1,7 +1,11 @@
 // Arduino C++ 風パーサ → 共通 AST。
 import { tokenize } from './lexer.js';
 
-const TYPES = ['int', 'float', 'double', 'void', 'bool', 'char', 'long', 'short', 'unsigned', 'auto', 'byte', 'uint8_t', 'uint16_t', 'int16_t'];
+// 型語と宣言修飾子。skipType() がまとめて読み飛ばす (この処理系は型を追跡しない)。
+// AS4: 修飾子 const/static/volatile/signed と幅つき整数型を追加。配列サイズ定数の定石
+//   `const int N = 72;` / `static int buf[8];` が従来は構文エラーだった (実測 C16/C23)。
+const TYPES = ['int', 'float', 'double', 'void', 'bool', 'char', 'long', 'short', 'unsigned', 'auto', 'byte', 'uint8_t', 'uint16_t', 'int16_t',
+  'const', 'static', 'volatile', 'signed', 'boolean', 'size_t', 'uint32_t', 'int32_t', 'int8_t'];
 
 export function parseC(src) {
   const toks = tokenize(src, 'c');
@@ -31,10 +35,13 @@ export function parseC(src) {
   function topLevel() {
     // 関数定義 or 変数宣言 or 文
     if (isType()) {
-      // 先読み: type ID '(' → 関数
-      if (peek(1).type === 'ID' && peek(2).type === 'PUNC' && peek(2).value === '(') {
-        return funcDef();
-      }
+      // 先読み: 型語(複数可)とポインタ '*' を読み飛ばした先が  ID '(' なら関数定義。
+      // AS4: 従来は 2 トークン固定の先読みだったため `static void loop()` や `unsigned int f()` を
+      //   変数宣言と誤判定して構文エラーになっていた (修飾子の追加で顕在化する経路)。
+      let k = 0;
+      while (peek(k).type === 'ID' && TYPES.includes(peek(k).value)) k++;
+      while (peek(k).type === 'OP' && peek(k).value === '*') k++;
+      if (peek(k).type === 'ID' && peek(k + 1).type === 'PUNC' && peek(k + 1).value === '(') return funcDef();
       return varDecl();
     }
     return statement();
@@ -55,6 +62,9 @@ export function parseC(src) {
       do {
         skipType();
         if (peek().type === 'ID') params.push(next().value);
+        // AS4: 配列仮引数 `int a[]` / `int a[N]`。次元は評価せず読み飛ばす＝実引数は JS 配列が
+        //   そのまま参照で渡る (C のポインタ減衰 `int *a` と同値。既存の `int *a` 経路と結果一致)。
+        while (isPunc('[')) { next(); if (!isPunc(']')) expr(); eat('PUNC', ']'); }
       } while (isPunc(',') && next());
     }
     eat('PUNC', ')');
@@ -241,6 +251,21 @@ export function parseC(src) {
   const multiplicative = () => binL(unary, ['*', '/', '%']);
 
   function unary() {
+    // AS4: sizeof。`sizeof(式)` / `sizeof(型名)` / `sizeof 式` の3形を受ける。
+    //   型名は要素1個ぶんとして畳む (この処理系は型を追跡しないため。意味論は evaluator の
+    //   'sizeof' ＝葉要素の総数モデル。実機のバイト数との差は docs/仕様欄に明記=利用者裁定)。
+    if (isKw('sizeof')) {
+      next();
+      if (isPunc('(')) {
+        next();
+        let a;
+        if (isType()) { skipType(); a = { t: 'num', v: 1 }; }
+        else a = expr();
+        eat('PUNC', ')');
+        return { t: 'sizeof', a };
+      }
+      return { t: 'sizeof', a: unary() };
+    }
     if (isOp('!') || isOp('-') || isOp('+') || isOp('~')) { const op = next().value; return { t: 'un', op, a: unary() }; }
     if (isOp('++') || isOp('--')) { const op = next().value; const a = unary(); return { t: 'preincr', op, a }; }
     return postfix();

@@ -78,6 +78,16 @@ ok(run(pyMain('print(5/2)'), 'py').out === '2.5', `H py 5/2 → 2.5(真除算)`)
 // C の 10<x<5 は左結合 ((10<x)<5)=(1<5)=真 のまま(parser_c 無改変・連鎖比較は py 限定)。
 ok(run(cLoop('int x=7; if(10<x<5){ Serial.println(1); } else { Serial.println(0); }'), 'c').out === '1',
   `H C 10<x<5 → 真(左結合 (10<x)<5 を維持=C 意味論)`);
+// AS4 H項 回帰記録【意味論の意図的な差・利用者裁定 2026-08-04】: sizeof は「葉要素の総数」モデル。
+//   実機 Arduino はバイト数を返すが、そのバイト数自体がボード依存 (sizeof(int) は AVR=2/ESP32=4) で
+//   一意でないため、定石 sizeof(a)/sizeof(a[0]) が要素数になる側を採った。差は docs/physics_model.md
+//   (ja/en) とアプリ内 spec.lang.subset に明記済。ここは「その選択が変わっていないこと」の回帰記録。
+ok(run(cLoop('int a[4]={1,2,3,4}; Serial.println(sizeof(a));'), 'c').out === '4',
+  `H C sizeof(a) → 4 (葉要素の総数モデル=実機のバイト数ではない・docs 明記)`);
+ok(run(cLoop('int a[4]={1,2,3,4}; Serial.println(sizeof(a)/sizeof(a[0]));'), 'c').out === '4',
+  `H C sizeof(a)/sizeof(a[0]) → 4 (Arduino の定石が要素数として成立)`);
+ok(run(cLoop('int m[2][3]; Serial.println(sizeof(m)/sizeof(m[0]));'), 'c').out === '2',
+  `H C 2 次元でも sizeof(m)/sizeof(m[0]) → 行数 2`);
 
 // ── criterion ②: 出荷サンプル(PROGRAMS + SAMPLES)回帰 ERR 0 ──────────────────────────
 console.log('\n[AP16] criterion ② — 出荷サンプル回帰(本番 buildController+setup+400tick+物理step)');

@@ -1,0 +1,146 @@
+[
+  {
+    "name": "bench-hairpin-R5-dry", "kind": "track", "shape": "stadium",
+    "L": 60, "rr": 5, "width": 6, "samples": 160,
+    "grip": 1.0, "muDecay": 0.75, "noRace": true,
+    "desc": "AO8 ベンチ: ヘアピン R5m ×直線60m・乾燥 (grip1.0/muDecay0.75)。R_min(実舵24°)≈5.84m 未満=幾何限界超=grip 追従不可。"
+  },
+  {
+    "name": "bench-hairpin-R5-low", "kind": "track", "shape": "stadium",
+    "L": 60, "rr": 5, "width": 6, "samples": 160,
+    "grip": 0.6, "muDecay": 0.92, "noRace": true,
+    "desc": "AO8 ベンチ: ヘアピン R5m ×直線60m・低μ (grip0.6/muDecay0.92)。グリップ低+滑らせても保持しやすい路面。"
+  },
+  {
+    "name": "bench-hairpin-R6.5-dry", "kind": "track", "shape": "stadium",
+    "L": 60, "rr": 6.5, "width": 6, "samples": 160,
+    "grip": 1.0, "muDecay": 0.75, "noRace": true,
+    "desc": "AO8 ベンチ: ヘアピン R6.5m ×直線60m・乾燥。R≈1.11·R_min=境界域 (§9.2 drift GO 判定閾 R<1.1·R_min の直上)。"
+  },
+  {
+    "name": "bench-hairpin-R6.5-low", "kind": "track", "shape": "stadium",
+    "L": 60, "rr": 6.5, "width": 6, "samples": 160,
+    "grip": 0.6, "muDecay": 0.92, "noRace": true,
+    "desc": "AO8 ベンチ: ヘアピン R6.5m ×直線60m・低μ (grip0.6/muDecay0.92)。"
+  },
+  {
+    "name": "bench-hairpin-R8-dry", "kind": "track", "shape": "stadium",
+    "L": 60, "rr": 8, "width": 7, "samples": 160,
+    "grip": 1.0, "muDecay": 0.75, "noRace": true,
+    "desc": "AO8 ベンチ: ヘアピン R8m ×直線60m・乾燥。R≈1.37·R_min=grip 追従可 (drift NO-GO 予測側)。"
+  },
+  {
+    "name": "bench-hairpin-R8-low", "kind": "track", "shape": "stadium",
+    "L": 60, "rr": 8, "width": 7, "samples": 160,
+    "grip": 0.6, "muDecay": 0.92, "noRace": true,
+    "desc": "AO8 ベンチ: ヘアピン R8m ×直線60m・低μ (grip0.6/muDecay0.92)。"
+  },
+  {
+    "name": "bench-mid-R50-dry", "kind": "track", "shape": "stadium",
+    "L": 80, "rr": 50, "width": 12, "samples": 200,
+    "grip": 1.0, "muDecay": 0.75, "noRace": true,
+    "desc": "AO8 ベンチ: 中速コーナー R50m ×直線80m・乾燥。v_grip≈26m/s (94km/h)・R≫R_min=grip 安定 (drift NO-GO 予測)。"
+  },
+  {
+    "name": "bench-mid-R50-low", "kind": "track", "shape": "stadium",
+    "L": 80, "rr": 50, "width": 12, "samples": 200,
+    "grip": 0.6, "muDecay": 0.92, "noRace": true,
+    "desc": "AO8 ベンチ: 中速コーナー R50m ×直線80m・低μ (grip0.6/muDecay0.92)。"
+  },
+  {
+    "name": "bench-high-R120-dry", "kind": "track", "shape": "stadium",
+    "L": 100, "rr": 120, "width": 14, "samples": 240,
+    "grip": 1.0, "muDecay": 0.75, "noRace": true,
+    "desc": "AO8 ベンチ: 高速コーナー R120m ×直線100m・乾燥。v_grip≈41m/s (146km/h)・R≫R_min=grip 安定 (drift NO-GO 予測)。"
+  },
+  {
+    "name": "bench-high-R120-low", "kind": "track", "shape": "stadium",
+    "L": 100, "rr": 120, "width": 14, "samples": 240,
+    "grip": 0.6, "muDecay": 0.92, "noRace": true,
+    "desc": "AO8 ベンチ: 高速コーナー R120m ×直線100m・低μ (grip0.6/muDecay0.92)。"
+  },
+  {
+    "name": "bench-wall-rr3.0-w4.3-dry", "kind": "track", "shape": "stadium",
+    "L": 60, "rr": 3, "width": 4.3, "samples": 160,
+    "grip": 1.0, "muDecay": 0.75, "noRace": true,
+    "cellKind": "forced",
+    "desc": "AP14 壁付きヘアピン(強制セル): 外径5.15<R_min5.84(grip 幾何不能) ∧ 廊下4.3>車体対角4.12(物理的に収まる)。乾燥。"
+  },
+  {
+    "name": "bench-wall-rr3.0-w5.0-dry", "kind": "track", "shape": "stadium",
+    "L": 60, "rr": 3, "width": 5, "samples": 160,
+    "grip": 1.0, "muDecay": 0.75, "noRace": true,
+    "cellKind": "forced",
+    "desc": "AP14 壁付きヘアピン(強制セル): 外径5.50<R_min5.84(grip 幾何不能) ∧ 廊下5>車体対角4.12(物理的に収まる)。乾燥。"
+  },
+  {
+    "name": "bench-wall-rr3.5-w4.3-dry", "kind": "track", "shape": "stadium",
+    "L": 60, "rr": 3.5, "width": 4.3, "samples": 160,
+    "grip": 1.0, "muDecay": 0.75, "noRace": true,
+    "cellKind": "forced",
+    "desc": "AP14 壁付きヘアピン(強制セル): 外径5.65<R_min5.84(grip 幾何不能) ∧ 廊下4.3>車体対角4.12(物理的に収まる)。乾燥。"
+  },
+  {
+    "name": "bench-wall-rr3.5-w4.6-dry", "kind": "track", "shape": "stadium",
+    "L": 60, "rr": 3.5, "width": 4.6, "samples": 160,
+    "grip": 1.0, "muDecay": 0.75, "noRace": true,
+    "cellKind": "forced",
+    "desc": "AP14 壁付きヘアピン(強制セル): 外径5.80<R_min5.84(grip 幾何不能) ∧ 廊下4.6>車体対角4.12(物理的に収まる)。乾燥。"
+  },
+  {
+    "name": "bench-wall-rr3.0-w4.3-low", "kind": "track", "shape": "stadium",
+    "L": 60, "rr": 3, "width": 4.3, "samples": 160,
+    "grip": 0.6, "muDecay": 0.92, "noRace": true,
+    "cellKind": "forced",
+    "desc": "AP14 壁付きヘアピン(強制セル): 外径5.15<R_min5.84(grip 幾何不能) ∧ 廊下4.3>車体対角4.12(物理的に収まる)。低μ(grip0.6/muDecay0.92)。"
+  },
+  {
+    "name": "bench-wall-rr3.0-w5.0-low", "kind": "track", "shape": "stadium",
+    "L": 60, "rr": 3, "width": 5, "samples": 160,
+    "grip": 0.6, "muDecay": 0.92, "noRace": true,
+    "cellKind": "forced",
+    "desc": "AP14 壁付きヘアピン(強制セル): 外径5.50<R_min5.84(grip 幾何不能) ∧ 廊下5>車体対角4.12(物理的に収まる)。低μ(grip0.6/muDecay0.92)。"
+  },
+  {
+    "name": "bench-wall-rr3.5-w5.0-dry", "kind": "track", "shape": "stadium",
+    "L": 60, "rr": 3.5, "width": 5, "samples": 160,
+    "grip": 1.0, "muDecay": 0.75, "noRace": true,
+    "cellKind": "intermediate",
+    "desc": "AP14 壁付きヘアピン(中間セル): 外径6.00≥R_min5.84(点経路可)だが車体外前隅7.37>外径で grip 不可。廊下5>車体対角4.12。乾燥。"
+  },
+  {
+    "name": "bench-wall-rr4.0-w5.0-dry", "kind": "track", "shape": "stadium",
+    "L": 60, "rr": 4, "width": 5, "samples": 160,
+    "grip": 1.0, "muDecay": 0.75, "noRace": true,
+    "cellKind": "intermediate",
+    "desc": "AP14 壁付きヘアピン(中間セル): 外径6.50≥R_min5.84(点経路可)だが車体外前隅7.37>外径で grip 不可。廊下5>車体対角4.12。乾燥。"
+  },
+  {
+    "name": "bench-wall-rr6.0-w5.0-dry", "kind": "track", "shape": "stadium",
+    "L": 60, "rr": 6, "width": 5, "samples": 160,
+    "grip": 1.0, "muDecay": 0.75, "noRace": true,
+    "cellKind": "control",
+    "desc": "AP14 壁付きヘアピン(対照セル): 外径8.50≥7.37(車体込みで grip 追従可)=ハーネス弁別性検証。廊下5。乾燥。"
+  },
+  {
+    "name": "bench-wall-rr7.0-w5.0-dry", "kind": "track", "shape": "stadium",
+    "L": 60, "rr": 7, "width": 5, "samples": 160,
+    "grip": 1.0, "muDecay": 0.75, "noRace": true,
+    "cellKind": "control",
+    "desc": "AP14 壁付きヘアピン(対照セル): 外径9.50≥7.37(車体込みで grip 追従可)=ハーネス弁別性検証。廊下5。乾燥。"
+  },
+  {
+    "name": "bench-schicane-r3.0-dry", "kind": "track", "shape": "lobed",
+    "rBase": 0.8, "amp": 0.05, "lobes": 16, "width": 0.32, "samples": 256,
+    "grip": 1.0, "muDecay": 0.75, "noRace": true,
+    "cellKind": "jig",
+    "desc": "AP26 S字ペンデュラム治具(間隔~2.9xrelLen): lobed 高周波スラローム。切返し間隔0.191m/relLen0.065=2.93 in[2,4](β持ち越し測定域)。廊下0.32>車体対角0.206。乾燥。"
+  },
+  {
+    "name": "bench-schicane-r3.9-dry", "kind": "track", "shape": "lobed",
+    "rBase": 0.9, "amp": 0.08, "lobes": 15, "width": 0.3, "samples": 240,
+    "grip": 1.0, "muDecay": 0.75, "noRace": true,
+    "cellKind": "jig",
+    "desc": "AP26 S字ペンデュラム治具(間隔~3.9xrelLen): lobed 高周波スラローム。切返し間隔0.255m/relLen0.065=3.92 in[2,4](β持ち越し測定域・緩め)。廊下0.30>車体対角0.206。乾燥。"
+  }
+]

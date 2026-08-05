@@ -178,7 +178,12 @@ function buildTrack(spec) {
     start = { x: p[0], y: p[1], theta: Math.atan2(b[1] - a[1], b[0] - a[0]) };
   }
   if (!finish) finish = { x1: outer[0][0], y1: outer[0][1], x2: inner[0][0], y2: inner[0][1] };
-  return fitAndPlace({ name: spec.name || 'トラック', walls, start, finish });
+  // AS10: 中心線をコースへ持たせる (カント gLat の道追従に使う。track は閉ループ)。fitAndPlace が
+  // 平行移動して car.x/y と同一世界系に揃える。**追加のみ**で既存の参照は無し (elev3d の立体プレビューは
+  // main.js が `c.touge && c.elev` で門番するので track では点かない)。
+  const c = fitAndPlace({ name: spec.name || 'トラック', walls, start, finish, centerline: cl });
+  c.bank = +(spec.bank || 0);          // 横勾配 (カント)[度]・未指定=0=完全 no-op (AS10)
+  return c;
 }
 
 // ===== annulus 型: 外周と内周を独立した形状で定義 (角度サンプリング) =====
@@ -281,6 +286,7 @@ function buildTouge(spec) {
   const c = fitAndPlace({ name: spec.name || '峠', walls, start, finish, centerline: cl });
   c.touge = true;
   c.downhill = +(spec.downhill || 0);
+  c.bank = +(spec.bank || 0);          // 横勾配 (カント)[度]・未指定=0=完全 no-op (AS10)
   c.elev = +(spec.elev || 0);          // 総高低差[m] (表示・立体プレビュー用)
   return c;
 }
@@ -429,7 +435,69 @@ export function screenToWorld(px, py, view) {
 export function snap(v) { return Math.round(v / GRID.step) * GRID.step; }
 
 // ===== 描画 =====
+// ── 静的コース層のオフスクリーンキャッシュ (Stage AS2) ────────────────────────────
+// 壁・グリッド・フィニッシュラインは「走行中ひとつも動かない」層なのに毎フレーム引き直していた。
+// 実測 (本番モジュール・実コースデータ・canvas 856x883): 最も壁の多い『ウェットテクニカル (雨)』
+// 960 壁で **2.44ms/フレーム** (grid 有 3.36ms)＝60fps の予算 16.7ms の約 15%。同じ絵になる条件が
+// 続く間はオフスクリーンへ 1 度だけ描いて貼るだけにすると **0.015ms** (実測・約 160 倍速)。
+//
+// 正しさの担保 (「速いが違う絵」を出さないための設計):
+//   ① **恒等変換のときだけ**使う。zoom/pan 中にビットマップを貼ると線が引き伸ばされて画素が変わる
+//      (拡大時はベクタで引き直すのが正)。→ 変換行列を実際に読んで判定する。
+//   ② 鍵には「描画結果を変えうるものを全部」入れる: コースの実内容 (壁/フィニッシュ/bounds を
+//      走査した指紋。コースエディタは walls を**その場で書き換える**ので参照比較では検出できない)、
+//      view (pxPerM/wPx/hPx/hM)、grid の有無、テーマで変わる色 (VIEW.bg/grid はテーマ切替で書き換わる)、
+//      壁の太さ、グリッド間隔。
+//   ③ 画素一致は常設ゲート `browser/check_course_layer.mjs` が実ブラウザで直接検証する
+//      (キャッシュ経路と直描き経路の ImageData を全画素比較・検出力テスト付き)。
+//
+// 保持数が 1 でない理由: コースを描くキャンバスは **同時に 3 つ**ありうる — 走行画面 (main.js:render)、
+// レース結果のミニマップ、ゴースト再生 (race_ui.js:189/778)。ゴースト再生中は走行画面の rAF も回るので、
+// 1 つしか持たないと毎フレーム互いを追い出し合って**必ずキャッシュミス**になり、素の描き直しより遅くなる。
+// 直近 3 つを MRU で保持し、あふれたら**キャンバスを使い回して**確保し直す (編集中の連続ミスでも新規確保しない)。
+const LAYERS = [];        // [{ cv, key }] 先頭が最直近
+const LAYER_MAX = 3;
+
+// コースの実内容の指紋。walls は 1000 本規模なので文字列化せず整数ハッシュで畳む (実測 0.02ms 未満)。
+function courseFingerprint(c) {
+  let h = 0x811c9dc5;
+  const mix = (v) => { h = Math.imul(h ^ ((v * 1e4) | 0), 0x01000193) >>> 0; };
+  for (const w of c.walls) { mix(w.x1); mix(w.y1); mix(w.x2); mix(w.y2); }
+  const f = c.finish;
+  if (f) { mix(f.x1); mix(f.y1); mix(f.x2); mix(f.y2); } else mix(-1);
+  mix(c.bounds.w); mix(c.bounds.h);
+  return c.walls.length + ':' + h;
+}
+
+function layerKey(c, view, opts) {
+  return [
+    courseFingerprint(c),
+    view.pxPerM, view.wPx, view.hPx, view.hM,
+    opts.grid ? 1 : 0,
+    VIEW.bg, VIEW.grid, VIEW.wall, VIEW.wallWidth, VIEW.finish, VIEW.finishAlt, GRID.step,
+  ].join('|');
+}
+
 export function drawCourse(ctx, course, view, opts = {}) {
+  // 恒等変換か? (render は zoom/pan を ctx へ乗せてから呼ぶ。既定は zoom=1/pan=0=恒等)
+  const m = ctx.getTransform ? ctx.getTransform() : null;
+  const identity = !!m && m.a === 1 && m.b === 0 && m.c === 0 && m.d === 1 && m.e === 0 && m.f === 0;
+  if (!identity || typeof document === 'undefined') { drawCourseLayer(ctx, course, view, opts); return; }
+  const key = layerKey(course, view, opts);
+  const i = LAYERS.findIndex((L) => L.key === key);
+  if (i < 0) {
+    const cv = LAYERS.length >= LAYER_MAX ? LAYERS.pop().cv : document.createElement('canvas');
+    cv.width = view.wPx; cv.height = view.hPx;   // 代入は内容クリアも兼ねる (前の絵が残らない)
+    drawCourseLayer(cv.getContext('2d'), course, view, opts);
+    LAYERS.unshift({ cv, key });
+  } else if (i > 0) {
+    LAYERS.unshift(LAYERS.splice(i, 1)[0]);      // 使ったものを最直近へ
+  }
+  ctx.drawImage(LAYERS[0].cv, 0, 0);
+}
+
+/** 静的コース層をその場で描く (キャッシュを通さない正の経路)。画素一致ゲートの比較対象でもある。 */
+export function drawCourseLayer(ctx, course, view, opts = {}) {
   ctx.save();
   ctx.fillStyle = VIEW.bg;
   ctx.fillRect(0, 0, view.wPx, view.hPx);

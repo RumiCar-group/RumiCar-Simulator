@@ -20,19 +20,53 @@ const classifiedMs = (f) => Math.round((f.totalTimeMs || 0) + (f.penaltiesSec ||
 const groupKey = (cls, course) => String(cls) + '::' + String(course);
 
 // 補充車 (filler) や著者不明は「ドライバー」ではない (称号の対象外)。
-function realAuthor(a) {
+export function realAuthor(a) {
   const s = String(a || '').trim();
   return (s && s !== '(filler)' && s.toLowerCase() !== 'filler') ? s : null;
 }
 
+// ── AS13: 記録の**プログラム言語**を引く (言語別ラダー用) ──────────────────────────
+// result.json (W_spec §6 schema) は言語を持たない。**持たせない**のが正しい: finishers に
+// フィールドを足すと wf_official_result の resultSha256 (pin) が動き、既に公開された result.json の
+// 再検証互換 (AS13 受け入れ基準②) に触れてしまう。言語は同じ PR に同梱される entries 側
+// (W_spec §1 の program.lang) に既にあるので、**そこから引けば schema 拡張はゼロで済む**。
+// 補充車 (filler) は entries に存在しない ⇒ 言語不明 (null) となり言語別ラダーから自然に外れる。
+function langOfEntry(e, progLang) {
+  if (!e) return null;
+  const l = (e.program && e.program.lang) || e.lang || null;
+  if (l) return String(l);
+  // progKey 参照エントリー (docs/phase_w/official_sample_event.json 形式) は呼出側の解決表で引く。
+  if (e.progKey && progLang) return progLang(e.progKey) || null;
+  return null;
+}
+
+// author (無ければ name) → entry の索引。author は W_spec §1 の一次識別子、name は表示名。
+function entryIndex(race) {
+  const byAuthor = new Map(), byName = new Map();
+  for (const e of ((race && race.entries) || [])) {
+    const a = String(e.author || '').trim();
+    const n = String(e.name || '').trim();
+    if (a && !byAuthor.has(a)) byAuthor.set(a, e);
+    if (n && !byName.has(n)) byName.set(n, e);
+  }
+  return { byAuthor, byName };
+}
+const entryOf = (ix, author, name) =>
+  (author && ix.byAuthor.get(String(author).trim())) || (name && ix.byName.get(String(name).trim())) || null;
+
 // 検証済レース群 → finisher レコードの平坦配列。各レコードは順位/著者/タイム/クラス/コース等を持つ。
-export function recordsFrom(races) {
+// AS13 で **season / lang / points** を追記 (いずれも event/entries 由来＝result.json は不変)。
+// opts.progLang(key) を渡すと progKey 参照エントリーの言語も解決する (省略可)。
+export function recordsFrom(races, opts = {}) {
   const recs = [];
   for (const race of (races || [])) {
     if (!isVerified(race)) continue;
     const r = race.result, ev = race.event || {};
     const cls = r.class || ev.class || 'open';
     const course = r.course || ev.course || '';
+    const season = String(ev.season || '');                 // 未指定 = 既定シーズン ('' で1つに束ねる)
+    const points = Array.isArray(ev.points) ? ev.points : null;   // イベント別の配点上書き (任意)
+    const ix = entryIndex(race);
     for (const f of (r.finishers || [])) {
       recs.push({
         eventId: r.eventId || ev.id || '', eventTitle: ev.title || r.eventId || ev.id || '',
@@ -43,10 +77,34 @@ export function recordsFrom(races) {
         bestLapMs: f.bestLapMs != null ? f.bestLapMs : null,
         penaltiesSec: f.penaltiesSec || 0, classifiedMs: classifiedMs(f),
         programRef: f.programRef || null,
+        season, points,
+        lang: langOfEntry(entryOf(ix, f.author, f.name), opts.progLang),
       });
     }
   }
   return recs;
+}
+
+// 検証済レース群 → **リタイア (DNF)** レコードの平坦配列。ラダー/称号には入れない (完走していない)。
+// チャンピオンシップの「出走数」を正直に数えるためだけに使う (完走のみ数えると出走が過小になる)。
+export function dnfsFrom(races, opts = {}) {
+  const out = [];
+  for (const race of (races || [])) {
+    if (!isVerified(race)) continue;
+    const r = race.result, ev = race.event || {};
+    const ix = entryIndex(race);
+    for (const d of (r.dnf || [])) {
+      out.push({
+        eventId: r.eventId || ev.id || '', eventTitle: ev.title || r.eventId || ev.id || '',
+        cls: r.class || ev.class || 'open', course: r.course || ev.course || '',
+        season: String(ev.season || ''), points: Array.isArray(ev.points) ? ev.points : null,
+        name: d.name, author: d.author || '', carType: d.carType || '',
+        lapsCompleted: d.lapsCompleted || 0, reason: d.reason || '',
+        lang: langOfEntry(entryOf(ix, d.author, d.name), opts.progLang),
+      });
+    }
+  }
+  return out;
 }
 
 // クラス×コース別リーダーボード。各グループ rows を classified time 昇順 (タイブレーク bestLap→name)
@@ -142,9 +200,11 @@ export function beatenChecks(records, me) {
 }
 
 // まとめて集計 (UI が1回で全部得る)。races = [{event,entries,result}]。
-export function aggregate(races) {
-  const records = recordsFrom(races);
+// AS13: dnfs (チャンピオンシップの出走数用) も同時に返す。既存の返りフィールドは不変 (追加のみ)。
+export function aggregate(races, opts = {}) {
+  const records = recordsFrom(races, opts);
   const boards = leaderboards(records);
   const drivers = profiles(records, boards);
-  return { records, boards, drivers, verifiedCount: (races || []).filter(isVerified).length };
+  return { records, dnfs: dnfsFrom(races, opts), boards, drivers,
+    verifiedCount: (races || []).filter(isVerified).length };
 }

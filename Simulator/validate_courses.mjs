@@ -5,6 +5,7 @@
 //   2. 隣接コーナーの折れ角が急すぎないか (内壁の折れ込みスパイク要因)。
 // 各コースの「最小自己間隔 / width」と「最大コーナー角」を出力する。
 import { readFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
 function sampleClosed(fn, n) { const p = []; for (let i = 0; i < n; i++) p.push(fn(2 * Math.PI * i / n)); return p; }
 function chaikin(pts, iters) {
@@ -73,25 +74,65 @@ function maxCornerAngle(loop) {
   return { mx, where };
 }
 
-const specs = JSON.parse(readFileSync(process.argv[2] || 'public/data/courses.json', 'utf8'));
-const onlyTracks = process.argv.includes('--circuits');
-let bad = 0;
-for (const s of specs) {
-  if (s.kind !== 'track') continue;
-  if (onlyTracks && s.shape !== 'polyline') continue;
-  let cl = makeCenterline(s);
-  if (s.smooth) cl = chaikin(cl, s.smooth === true ? 2 : +s.smooth);
-  const w = +s.width;
-  // win: スムージング後の点列で「隣接」とみなす窓。元の1辺は約 2^smooth 点に展開。
-  const win = Math.max(4, Math.round((s.smooth ? 2 ** (s.smooth === true ? 2 : +s.smooth) : 1) * 2));
-  const { mn, where } = minSelfDist(cl, win);
-  const { mx, where: cw } = maxCornerAngle(cl);
-  const ratio = mn / w;
-  // 致命: 自己間隔 < width (廊下が融合)。要注意: コーナー角 > 75度 (内壁折れ込み)。
-  const fatal = ratio < 1.0;
-  const warn = mx > 75;
-  if (fatal) bad++;
-  const mark = fatal ? 'NG ' : (warn ? 'warn' : 'ok ');
-  console.log(`[${mark}] ${s.name.padEnd(22)} selfDist/width=${ratio.toFixed(2)} (gap=${mn.toFixed(3)}m @${where}) maxCorner=${mx.toFixed(0)}° @${cw}`);
+// ── Stage AS10: フィールド検査 (スキーマ) ─────────────────────────────────────────────
+// 本スクリプトは長らく「track の幾何」だけを見ており、**フィールドの妥当性検査を1つも持たなかった**
+// (峠は `kind!=='track'` で丸ごと素通り)。AS10 で `bank` (横勾配・カント[度]) を足すにあたり、値域と
+// 適用可能な kind を機械検査する土台をここに置く。**幾何セクションの終了コードは従来どおり変えない**
+// (現状 13 コースが `selfDist/width<1` で NG 表示だが、いずれも実際には走行可能＝この閾値は保守的な
+// 目安であり、いま非0終了にすると既存の運用が壊れるため)。フィールドエラーだけが exit 1 を起こす。
+//
+// bank の意味 (course.js / physics_v2.js / physics_dyn.js を正とする):
+//   ・`bank` [度] = **そのコースの最急コーナーでのバンク角**。他の地点は局所曲率に線形比例する。
+//   ・正 = 路面がカーブ外側へ持ち上がる (旋回を助ける)。負 = 逆バンク。
+//   ・中心線を持つ kind (`track` / `touge`) のみ有効。`annulus`/`raw`/`loop` は中心線が無いので非対応。
+const BANK_KINDS = ['track', 'touge'];
+const BANK_MAX_DEG = 45;   // |bank|>45° は面内重力が法線荷重を上回り「停まっていても滑り落ちる」領域
+export function checkFields(specs) {
+  const errs = [];
+  for (const s of specs) {
+    const nm = s && s.name ? s.name : '(no name)';
+    if (s == null || typeof s !== 'object') { errs.push(`${nm}: コース定義がオブジェクトでない`); continue; }
+    if (s.bank === undefined) continue;                       // 未指定 = 0 = 完全 no-op (既存の全コース)
+    const b = s.bank;
+    if (typeof b !== 'number' || !Number.isFinite(b)) { errs.push(`${nm}: bank は有限の数値 (度) でなければならない: ${JSON.stringify(b)}`); continue; }
+    if (Math.abs(b) > BANK_MAX_DEG) errs.push(`${nm}: bank=${b}° が上限 ±${BANK_MAX_DEG}° を超えている (停止中でも滑り落ちる領域)`);
+    const kind = s.kind || 'loop';
+    if (!BANK_KINDS.includes(kind)) errs.push(`${nm}: kind="${kind}" は bank 非対応 (中心線を持つ ${BANK_KINDS.join('/')} のみ)`);
+  }
+  return errs;
 }
-console.log(`\n${bad} 件が致命的 (廊下融合の可能性)`);
+
+// ── CLI 実行部 (直接起動されたときだけ走る) ───────────────────────────────────────────
+// AS10: `checkFields` を常設ゲートから import できるようにするため、CLI の副作用 (読込・出力・
+// process.exit) を main ガードで包む。`node validate_courses.mjs [path]` の挙動は従来と同一。
+const isMain = process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url;
+if (isMain) {
+  const specs = JSON.parse(readFileSync(process.argv[2] || 'public/data/courses.json', 'utf8'));
+  const onlyTracks = process.argv.includes('--circuits');
+  let bad = 0;
+  for (const s of specs) {
+    if (s.kind !== 'track') continue;
+    if (onlyTracks && s.shape !== 'polyline') continue;
+    let cl = makeCenterline(s);
+    if (s.smooth) cl = chaikin(cl, s.smooth === true ? 2 : +s.smooth);
+    const w = +s.width;
+    // win: スムージング後の点列で「隣接」とみなす窓。元の1辺は約 2^smooth 点に展開。
+    const win = Math.max(4, Math.round((s.smooth ? 2 ** (s.smooth === true ? 2 : +s.smooth) : 1) * 2));
+    const { mn, where } = minSelfDist(cl, win);
+    const { mx, where: cw } = maxCornerAngle(cl);
+    const ratio = mn / w;
+    // 致命: 自己間隔 < width (廊下が融合)。要注意: コーナー角 > 75度 (内壁折れ込み)。
+    const fatal = ratio < 1.0;
+    const warn = mx > 75;
+    if (fatal) bad++;
+    const mark = fatal ? 'NG ' : (warn ? 'warn' : 'ok ');
+    console.log(`[${mark}] ${s.name.padEnd(22)} selfDist/width=${ratio.toFixed(2)} (gap=${mn.toFixed(3)}m @${where}) maxCorner=${mx.toFixed(0)}\u00b0 @${cw}`);
+  }
+  console.log(`\n${bad} 件が致命的 (廊下融合の可能性)`);
+
+  // フィールド検査 (AS10)。**ここだけが exit 1 を起こす** (幾何は従来どおり表示のみ)。
+  const fieldErrs = checkFields(specs);
+  console.log(`\nフィールド検査 (bank ほか): ${fieldErrs.length === 0 ? 'OK (0 件)' : fieldErrs.length + ' 件のエラー'}`);
+  for (const e of fieldErrs) console.error(`  [NG ] ${e}`);
+  if (fieldErrs.length > 0) process.exit(1);
+}

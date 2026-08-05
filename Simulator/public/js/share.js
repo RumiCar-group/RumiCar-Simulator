@@ -9,7 +9,9 @@
 // 設計方針 (実装前固定・CI-7):
 //  - 依存ゼロ (import なし)。本モジュールが「共有スキーマの単一ソース」。
 //  - 対象は AF1 の最小確定セット 8 フィールド＋Stage AO の任意 4 フィールド
-//    (physics/tire/recon/wear。既定値は捕捉側 null=省略で既存 URL byte 不変) = 計 12 (下記 SHARE_FIELDS)。
+//    (physics/tire/recon/wear) ＋ Stage AS9 の 1 フィールド (gear) ＋ Stage AS11 の 1 フィールド
+//    (susp) ＋ Stage AS12 の 1 フィールド (steerSet)。既定値は捕捉側 null=省略で既存 URL byte
+//    不変 = 計 15 (下記 SHARE_FIELDS)。
 //  - course/car/program/regime/theme/lang は「内容識別子」= 不透明な無害化文字列として
 //    扱い、実在判定 (組込 id / 自作名の解決) と既定フォールバック+通知は AF2 が
 //    レジストリ突き合わせで行う (AF2 受け入れ基準: 自作物は名前参照+フォールバック+通知)。
@@ -19,7 +21,7 @@
 //
 // hash 書式 (自己記述・key=value を & で連結・各値は encodeURIComponent):
 //   v=1&c=<course>&car=<carKey>&p=<progKey>&rg=<regime>&l=<laps>&n=<0|1>&th=<theme>&lg=<lang>
-//   (任意・非既定時のみ) &ph=<physics>&tr=<tire>&rc=<recon>&we=<0|1>
+//   (任意・非既定時のみ) &ph=<physics>&tr=<tire>&rc=<recon>&we=<0|1>&gr=<gear>&sp=<susp>&ss=<steerSet>
 //   先頭 'v' は将来のスキーマ移行用バージョン印 (decode は寛容に解釈)。
 
 export const SHARE_VERSION = 1;
@@ -36,9 +38,12 @@ export const SHARE_FIELDS = [
   { name: 'theme',   k: 'th',  type: 'str'  }, // テーマ: green|dark|light|glass|neon|paper|sunset|ocean|mono|lavender|carbon (AF2 で検証)
   { name: 'lang',    k: 'lg',  type: 'str'  }, // 言語: ja|en (AF2 で検証)
   { name: 'physics', k: 'ph',  type: 'str'  }, // 物理エンジン: standard|dynamic|v2 (Stage AO1・前方互換。既定 dynamic は捕捉側で null=省略ゆえ既存 hash byte 不変)
-  { name: 'tire',    k: 'tr',  type: 'str'  }, // v2 タイヤセット: normal|slip (Stage AO6・v2 専用。既定 normal は捕捉側で null=省略ゆえ既存 hash byte 不変)
+  { name: 'tire',    k: 'tr',  type: 'str'  }, // v2 タイヤセット: normal|slip|rain (Stage AO6/AS9・v2 専用。既定 normal は捕捉側で null=省略ゆえ既存 hash byte 不変)
   { name: 'recon',   k: 'rc',  type: 'int'  }, // 試走周回数 0..3 (Stage AO9・レース前の単独試走。既定 0 は捕捉側で null=省略ゆえ既存 hash byte 不変)
   { name: 'wear',    k: 'we',  type: 'bool' }, // タイヤ熱・摩耗 ON/OFF (Stage AO12・v2 専用の opt-in。既定 false は捕捉側で null=省略ゆえ既存 hash byte 不変)
+  { name: 'gear',    k: 'gr',  type: 'str'  }, // ギア比: direct|short|tall|auto2 (Stage AS9・v2 専用の任意装備。既定 direct は捕捉側で null=省略ゆえ既存 hash byte 不変)
+  { name: 'susp',    k: 'sp',  type: 'str'  }, // サス自由度: quasi|soft|balanced|stiff (Stage AS11・v2 専用の任意装備。既定 quasi は捕捉側で null=省略ゆえ既存 hash byte 不変)
+  { name: 'steerSet',k: 'ss',  type: 'str'  }, // 操舵サーボ: tri|prop (Stage AS12・**全エンジン共通**の任意装備。既定 tri=実機準拠の3値は捕捉側で null=省略ゆえ既存 hash byte 不変。car.steerSet と同名にして「同じ値が意味の違う複数箇所」を作らない=api.js の world.steerSet も同名)
 ];
 
 const MAX_STR = 200; // 文字列値の上限長 (自作名の暴走/巨大 hash を防ぐ安全弁)。

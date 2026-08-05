@@ -1,0 +1,33 @@
+{
+  "_doc": "AP20 公式レース正準実行ツール wf_official_result.mjs の正準イベント入力サンプル (実データ)。W_spec §1 イベント schema + §5 正準エンジンの入力。courseSpec=buildFromSpec 引数 (courses.json 同一値をインライン=再現性・wf_ab8_bench 同型)。entries は progKey で実 PROGRAMS を参照 (ツールが PROGRAM_BY_KEY で src へ展開=実データ)。ノイズ強制 OFF・固定60Hz・car index 昇順は runRace が保証。この入力を2回実行→verifyHash/全順位 完全一致 (決定論・受け入れ①)。",
+  "courseSpec": {
+    "name": "競技サーキット (フルスケール)",
+    "kind": "track",
+    "shape": "superellipse",
+    "rx": 360,
+    "ry": 230,
+    "k": 0.55,
+    "width": 28,
+    "samples": 160
+  },
+  "event": {
+    "id": "official-sample-circuit",
+    "title": "公式サンプル: 競技サーキット (フルスケール・v2)",
+    "course": "競技サーキット (フルスケール)",
+    "regime": "fullscale",
+    "physicsMode": "v2",
+    "laps": 1,
+    "class": "open",
+    "crashRule": { "rejoin": true, "penaltySec": 3 },
+    "interact": true,
+    "minField": 3,
+    "grid": "entryOrder",
+    "noise": false,
+    "maxSec": 200
+  },
+  "entries": [
+    { "name": "Circuit-FF",  "author": "sample", "progKey": "comp_circuit", "carType": "normal_ff",  "submittedAt": "2026-01-01T00:00:00Z" },
+    { "name": "Circuit-FR",  "author": "sample", "progKey": "comp_circuit", "carType": "normal_fr",  "submittedAt": "2026-01-01T00:00:01Z" },
+    { "name": "Circuit-AWD", "author": "sample", "progKey": "comp_circuit", "carType": "normal_awd", "submittedAt": "2026-01-01T00:00:02Z" }
+  ]
+}

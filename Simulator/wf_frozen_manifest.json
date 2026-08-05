@@ -2,11 +2,11 @@
   "_doc": "凍結回帰ハッシュの中央マニフェスト (Stage AP3・単一の真実源)。物理を意図的に変えた版では wf_refreeze.mjs で刻み直す (実行→差分→人間承認→書込・CI-11)。意図せぬ変化は 5 参照ゲート (ab8_bench/ak5_robustness/ao5_calib/collision_model/recover_model) が exit 1 で検出する。AP-0 方針: 卓上 byte 不変は 2026-07-10 に緩和され、f0〜f3 は『絶対不変ゲート』から『版付き回帰記録』へ降格 (旧版値は当時のエンジン版・条件の時点記録として history に保持)。",
   "schemaVersion": 1,
   "current": {
-    "appVersion": "v5.0.0",
-    "stampedAt": "2026-08-01",
+    "appVersion": "v6.0.0",
+    "stampedAt": "2026-08-04",
     "hashes": {
-      "f0": "4bbed0f4",
-      "f1": "2359a857",
+      "f0": "636ed39f",
+      "f1": "ae2f0753",
       "f2": "af5a68bd",
       "f3": "6bb96b8a"
     },
@@ -20,13 +20,24 @@
   "canonicalNode": {
     "node": "22.22.1",
     "v8": "12.4.254.21-node.35",
-    "resultSha256": "0e244a0c5c87dc0523d5fe1d0d4e53eeb7712053f3dc0d4017689f62ab1e4c7f",
-    "pinnedAt": "2026-08-02",
+    "resultSha256": "0e8215ed31b8e0fcaede22d489698a21e57e44eb1f24d3a0c495fe1a02e2907e",
+    "pinnedAt": "2026-08-05",
     "eventId": "official-sample-circuit",
-    "appVersion": "v5.1.0",
-    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: v5.1.0 版バンプ (サンプル参照の廃止置き場ガード追加・表示/取込制御のみ) に伴う resultSha256 再ピン。verifyHash は不変 (走行物理・順位・タイムとも同一) で、appVersion が engineFingerprint 経由で resultSha256 のみを変えたため (AQ-1 の運用どおり)。"
+    "appVersion": "v7.3.0",
+    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: AS13: v7.2.0→v7.3.0 バンプ (エンゲージメント機能群=シーズン/チャンピオンシップ・言語別ラダー・チャレンジ・区間別テレメトリ比較を追加。集計/表示専用で走行物理・result.json schema はいずれも不変)。appVersion が engineFingerprint 経由で resultSha256 を変えるため再ピン (AQ-1 セット手順)"
   },
   "history": [
+    {
+      "appVersion": "v6.0.0",
+      "stampedAt": "2026-08-04",
+      "hashes": {
+        "f0": "636ed39f",
+        "f1": "ae2f0753",
+        "f2": "af5a68bd",
+        "f3": "6bb96b8a"
+      },
+      "reason": "AS3: 既定3サンプル(normal_fr/awd/ff)へ行き止まり脱出(切り返し)と近い方の壁からの離脱を追加した意図的な挙動変更。f0/f1 は当該3サンプルで卓上オーバルを走らせた記録そのものゆえ変化する。f2/f3(comp_circuit/comp_slip)は不変・走行物理6ファイルとfleet.jsはdiff 0行・正準公式記録 verifyHash=c731ecce も不変。版 v6.0.0(MAJOR)"
+    },
     {
       "appVersion": "v5.0.0",
       "stampedAt": "2026-08-01",
