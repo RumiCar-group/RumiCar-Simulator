@@ -1,5 +1,7 @@
 # RumiCar Simulator
 
+**日本語** | [English](README.en.md)
+
 自動運転アルゴリズムをブラウザ上で開発・検証するシミュレータです。実車の RumiCar と同じセンサー構成 (前方3つの ToF 距離センサー + 車輪エンコーダ) を模擬し、C / Python / JavaScript で書いたプログラムをそのまま走らせて評価できます。
 
 **このリポジトリは単体で完結しています。** クローンして `deploy/standalone` で `docker compose up -d --build` すれば、それだけで動きます。手順は **[REBUILD.md](REBUILD.md)** にあります。
@@ -45,6 +47,8 @@ deploy/
 コース・走行プログラム・車種を「🌐 GitHubで共有」した場合や、「💬 質問・提案」から投稿した場合、**投稿先は既定でこのプロジェクトの上流リポジトリ [RumiCar-group/RumiCar](https://github.com/RumiCar-group/RumiCar) に固定されています**（プルリクエスト / Issue 作成という形で、投稿者自身の GitHub アカウントで行われます）。
 
 このリポジトリをクローンして自分のサーバーで動かす場合も、この投稿先は自動では変わりません。自分専用のコミュニティ投稿先に変更したい場合は `REBUILD.md` の「コミュニティ機能の投稿先について」を参照してください。
+
+Issue・プルリクエストは**英語でも日本語でも歓迎**します。 / Questions, bug reports, and pull requests are welcome in English or Japanese.
 
 ## 関連リポジトリ
 
