@@ -28,7 +28,7 @@ export LC_ALL=C
 
 # ── 公開してよいパス（新規追加ファイルに適用）───────────────────────────────
 # ここに無いパスの **新規追加** は拒否される。編集・削除は対象外。
-ALLOW='^(README\.md|LICENSE|REBUILD\.md)$
+ALLOW='^(README(\.en)?\.md|LICENSE|REBUILD\.md)$
 (^|/)\.gitignore$
 (^|/)\.githooks/
 ^deploy/
