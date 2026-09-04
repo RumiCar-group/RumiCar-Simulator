@@ -1,4 +1,4 @@
-// wf_ghlist_cache.mjs — コミュニティ一覧取得の常設ゲート (v7.4.0 / Stage AT)。
+// wf_ghlist_cache.mjs — コミュニティ一覧取得の常設ゲート (v7.4.0 / 会話ベース RATELIMIT-1)。
 //
 // 背景: 未認証の GitHub API は IP あたり 60 回/時。起動のたびに一覧を 4 回
 // (races/courses/programs/cars) 叩いていたため、教室のように 1 回線を大勢で共有すると
