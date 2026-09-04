@@ -20,11 +20,11 @@
   "canonicalNode": {
     "node": "22.22.1",
     "v8": "12.4.254.21-node.35",
-    "resultSha256": "0e8215ed31b8e0fcaede22d489698a21e57e44eb1f24d3a0c495fe1a02e2907e",
-    "pinnedAt": "2026-08-05",
+    "resultSha256": "bf15787c3eab25cdc4f3ec2561b386653da4a028807732e153ad6fc5565af83b",
+    "pinnedAt": "2026-09-03",
     "eventId": "official-sample-circuit",
-    "appVersion": "v7.3.0",
-    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: AS13: v7.2.0→v7.3.0 バンプ (エンゲージメント機能群=シーズン/チャンピオンシップ・言語別ラダー・チャレンジ・区間別テレメトリ比較を追加。集計/表示専用で走行物理・result.json schema はいずれも不変)。appVersion が engineFingerprint 経由で resultSha256 を変えるため再ピン (AQ-1 セット手順)"
+    "appVersion": "v7.4.0",
+    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: v7.4.0 への版バンプに伴う再ピン (APP_VERSION が engineFingerprint 経由で resultSha256 を変えるため。走行物理・レースロジックの変更なし: 今回の改修は GitHub 一覧取得のキャッシュとマニフェスト経路のみ)"
   },
   "history": [
     {

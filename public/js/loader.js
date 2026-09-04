@@ -100,22 +100,173 @@ export function readFile(file) {
 
 // ===== コミュニティコース (GitHub の courses/community/ で共有) =====
 // 利用者がエディタで作ったコースを PR で投稿し、全利用者がメニューから選べるようにする。
-// 読み取りは公開リポジトリなので認証不要 (ディレクトリ一覧のみ GitHub API、本文は raw)。
+// 読み取りは公開リポジトリなので認証不要 (一覧は index.json→GitHub API の順、本文は raw)。
 export const COURSE_REPO = SAMPLE_REPO;          // 同じ RumiCar-group/RumiCar
 const COMMUNITY_DIR = 'courses/community';
+
+// ===== 一覧取得の共通処理 (v7.4.0 / 2026-09-04) ==========================
+// 【背景 (実測)】未認証の GitHub API は **IP あたり 60 回/時**。一方このアプリは
+// 起動のたびに一覧を 4 回 (races / courses / programs / cars) 叩いていたため、
+// 同一 IP から 15 回開くと上限に達し、コミュニティ投稿が読めなくなっていた。
+// 教室の会場 Wi-Fi のように 1 つの IP を 10 人で共有する使い方では現実的な問題。
+// ETag による条件付き取得も試したが **304 でも 1 回消費する** ことを実測で確認
+// (57→56→55)。したがって「問い合わせ自体を減らす」しかない。
+//
+// 【対策 3 段】
+//  1. マニフェスト優先: 各ディレクトリの index.json を raw から読む。
+//     raw.githubusercontent.com には API のレート制限が無い (応答に x-ratelimit
+//     ヘッダが存在しないことを実測確認)。これが効けばファイル一覧の API 消費は 0 回。
+//     **ディレクトリ一覧 (races/) には使えない**: マニフェストはファイル名しか並べられず、
+//     置かれると「0 件・正常」に見えて大会一覧が無言で空になる。races は API のまま。
+//  2. API へフォールバック: マニフェストが無いリポジトリ (古いクローン・フォーク)
+//     でも従来どおり動く。互換性のために必ず残す。
+//  3. ブラウザ側キャッシュ: 成功も「未作成 (404)」も localStorage に置き、
+//     TTL の間は問い合わせない。リロードを繰り返す開発中の消費を 0 にする。
+//     レート制限 (403) や通信失敗は **キャッシュしない** (復帰したら即座に拾う)。
+// いずれもブラウザ内で完結する。サーバ側の仕組みは増やさない (README「このリポジトリは
+// 単体で完結しています」を崩さないため)。
+// 保持時間は「取得元がどれだけ貴重か」で変える。
+//  ・マニフェスト(raw)は無制限なので短く保つ = 新しい投稿がすぐ見える
+//  ・API は 60回/時 の希少資源なので長く保つ = 教室での枯渇を防ぐ
+//  ・未作成(404)も API 枠を 1 回食うので、同じだけ覚える
+// コミュニティ一覧 (courses/programs/cars) には「再読込」ボタンが無く起動時に 1 回読むだけなので、
+// マニフェスト経路の短い TTL がそのまま鮮度の担保になる。
+// races/ だけは事情が違う。「大会が始まった瞬間に 404 でなくなる」ディレクトリなので、
+// 未作成を長く覚えると開催初日に見えない時間ができる。TTL_MISS を API と同じ 1 時間に留め、
+// さらに公式レース/ランキング両方の「再読込」で clearListCache() して即座に取り直せるようにした。
+const TTL_MANIFEST = 5 * 60 * 1000;        // マニフェスト由来: 5分
+const TTL_API      = 60 * 60 * 1000;       // API 由来: 1時間
+const TTL_MISS     = 60 * 60 * 1000;       // 未作成(404): 1時間 (races の開催開始を待たせすぎない)
+const LIST_CACHE_NS = 'rcsim.ghlist.';     // localStorage のキー接頭辞
+
+// マニフェストの entries に許すファイル名。ディレクトリ区切りと相対参照を弾き、
+// index.json (マニフェスト自身) も一覧に出さない。entries はコミュニティ PR でも
+// 書き換わりうるので、素性を確かめていない文字列を URL とパスに通さないための門。
+const NAME_OK = (n) => typeof n === 'string' && /^[^/\\]+$/.test(n)
+  && n !== '.' && n !== '..' && n !== 'index.json';
+
+// raw の URL を組み立てる (download_url を API に頼らず自前で作るため)。
+// dir は呼び出し側がエンコード済みの前提 (fetchRace が eventId を encodeURIComponent する)。
+// ファイル名は投稿者が自由に付けられるので必ずここでエンコードする —
+// 素のまま繋ぐと `a#b.json` が「a を取ってフラグメント #b.json」になり別物を取りに行く
+// (従来は API が download_url をエンコード済みで返していた。自前生成でその保証が消えた)。
+function rawUrl(path) {
+  const { owner, repo, branch } = COURSE_REPO;
+  return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${path}`;
+}
+function rawFileUrl(dir, name) { return rawUrl(`${dir}/${encodeURIComponent(name)}`); }
+
+// 一覧項目を 1 つの形に揃える。マニフェスト経路と API 経路で同じ関数を通すことで、
+// 「片方の経路にだけ除外が掛かっている」という取りこぼしを構造的に起こさせない。
+// 後段が読むのは name/type/path/download_url の 4 つだけなので、API 応答の
+// sha/size/_links 等は捨てる (localStorage の消費も経路間で揃う)。
+function listItem(dir, name, dirs) {
+  return {
+    name, type: dirs ? 'dir' : 'file', path: `${dir}/${name}`,
+    download_url: dirs ? null : rawFileUrl(dir, name),
+  };
+}
+
+// キャッシュキーには取得元 (owner/repo/branch) と dirs 種別も入れる。
+// dir だけだと、別 fork 向けビルドを同じオリジンに置いたときに中身が入れ替わる。
+function cacheKey(dir, dirs) {
+  const { owner, repo, branch } = COURSE_REPO;
+  return `${owner}/${repo}@${branch}:${dirs ? 'd' : 'f'}:${dir}`;
+}
+
+function listCacheGet(key) {
+  try {
+    const s = localStorage.getItem(LIST_CACHE_NS + key);
+    if (!s) return null;
+    const o = JSON.parse(s);
+    if (!o || typeof o.at !== 'number') return null;
+    // 中身の形も見る。items が配列でなければ捨てる — 拡張機能や別版に汚された
+    // localStorage で undefined を返すと、呼び出し側の「失敗は null」契約が破れて
+    // 例外になり、しかも TTL の間ずっとそれが続く。
+    if (!o.miss && !Array.isArray(o.items)) return null;
+    const ttl = o.miss ? TTL_MISS : (o.src === 'manifest' ? TTL_MANIFEST : TTL_API);
+    const age = Date.now() - o.at;
+    if (age > ttl || age < 0) return null;     // age<0 = 端末の時計がずれている。信用しない
+    return o;                                  // { at, src, items | miss:true }
+  } catch (e) { return null; }                 // localStorage 不可 (プライベート等) は素通り
+}
+
+function listCacheSet(key, value) {
+  try { localStorage.setItem(LIST_CACHE_NS + key, JSON.stringify({ at: Date.now(), ...value })); }
+  catch (e) { /* 容量超過等は無視 = キャッシュ無しで動く */ }
+}
+
+/** 「再読込」操作用: 一覧キャッシュを捨てて次回に取り直させる。 */
+export function clearListCache() {
+  try {
+    const del = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(LIST_CACHE_NS)) del.push(k);
+    }
+    del.forEach((k) => localStorage.removeItem(k));
+  } catch (e) { /* 使えない環境では何もしない */ }
+}
+
+/**
+ * ディレクトリ一覧を「キャッシュ → マニフェスト(raw) → GitHub API」の順で取得する。
+ * 戻り値は API の contents と同じ形の配列 ({name,type,path,download_url})、
+ * 取得失敗は null (呼び出し側の Q1/V4 契約 = 失敗 null / 0 件 [] を保つ)。
+ *
+ * @param {string} dir   'courses/community' 等のディレクトリパス
+ * @param {boolean} dirs true ならディレクトリ一覧 (races 用)、false ならファイル一覧
+ */
+async function listDirCached(dir, dirs = false) {
+  const key = cacheKey(dir, dirs);
+  const cached = listCacheGet(key);
+  if (cached) return cached.miss ? null : cached.items;
+
+  // 1) マニフェスト (raw・レート制限なし)。無ければ 404 で素通りして API へ。
+  //    dirs=true (races 一覧) では使わない。マニフェストはファイル名しか並べられず、
+  //    生成器がディレクトリを列挙しないため、置かれると「0 件・正常」に見えて
+  //    大会一覧が理由の表示なしに空になる。ディレクトリ一覧は API のままにする。
+  if (!dirs) {
+    try {
+      const r = await fetch(rawUrl(`${dir}/index.json`), { cache: 'no-cache' });
+      if (r.ok) {
+        const j = await r.json();
+        const names = Array.isArray(j) ? j : (Array.isArray(j && j.entries) ? j.entries : null);
+        if (names) {
+          const items = names
+            .map((n) => (typeof n === 'string' ? n : (n && n.name)))
+            .filter(NAME_OK)
+            .map((n) => listItem(dir, n, false));
+          listCacheSet(key, { items, src: 'manifest' });
+          return items;
+        }
+      }
+    } catch (e) { /* マニフェスト無し・通信失敗 → API を試す */ }
+  }
+
+  // 2) GitHub API (従来経路)。
+  let res;
+  try { res = await fetch(`https://api.github.com/repos/${COURSE_REPO.owner}/${COURSE_REPO.repo}`
+    + `/contents/${dir}?ref=${COURSE_REPO.branch}`); } catch (e) { return null; }
+  if (res.status === 404) { listCacheSet(key, { miss: true }); return null; }  // 未作成は覚える
+  if (!res.ok) return null;                    // 403 (レート制限) 等は覚えない = 復帰後すぐ拾う
+  let items;
+  try { items = await res.json(); } catch (e) { return null; }
+  // API 経路もマニフェスト経路と同じ門・同じ形に通す。ここを共通にしておかないと、
+  // 上流にマニフェストを置いた途端 index.json が「投稿コース」として一覧に並ぶ
+  // (API 経路にしか通らない旧版クライアントで実際に起きる)。
+  const list = (Array.isArray(items) ? items : [])
+    .filter((f) => f && NAME_OK(f.name) && (dirs ? f.type === 'dir' : f.type === 'file'))
+    .map((f) => listItem(dir, f.name, dirs));
+  listCacheSet(key, { items: list, src: 'api' });
+  return list;
+}
 
 // 投稿コース一覧を取得。**取得失敗** (レート制限/オフライン/通信瞬断/JSON 異常) 時は `null` を、
 // **正常取得** 時は配列 (0 件なら `[]`) を返す。呼び出し側が失敗と 0 件を区別して通知できるよう
 // するため (Q1[B]・無言失敗で「コースが消えた」と誤解させない)。本体動作はどちらでも止めない。
 export async function listCommunityCourses() {
-  const { owner, repo, branch } = COURSE_REPO;
-  const api = `https://api.github.com/repos/${owner}/${repo}/contents/${COMMUNITY_DIR}?ref=${branch}`;
-  let res;
-  try { res = await fetch(api); } catch (e) { return null; }   // 取得失敗 (オフライン等)
-  if (!res.ok) return null;                                     // レート制限 (403) 等
-  let items;
-  try { items = await res.json(); } catch (e) { return null; }  // JSON 異常
-  const list = Array.isArray(items) ? items : [];
+  const list = await listDirCached(COMMUNITY_DIR);   // キャッシュ→マニフェスト→API
+  if (list === null) return null;                    // 取得失敗 (Q1[B] 契約は不変)
   return list
     .filter(f => f.type === 'file' && /\.json$/i.test(f.name))
     .map(f => ({ name: f.name.replace(/\.json$/i, ''), path: f.path, download_url: f.download_url }));
@@ -147,14 +298,8 @@ const COMMUNITY_PROGRAM_DIR = 'programs/community';
 // 投稿プログラム一覧を取得。**取得失敗**時は `null`・**正常取得**時は配列 (0 件なら `[]`) を返す
 // (Q1[B]・失敗と 0 件を区別)。本体動作はどちらでも止めない。loadable= 取込可能な拡張子。
 export async function listCommunityPrograms() {
-  const { owner, repo, branch } = COURSE_REPO;
-  const api = `https://api.github.com/repos/${owner}/${repo}/contents/${COMMUNITY_PROGRAM_DIR}?ref=${branch}`;
-  let res;
-  try { res = await fetch(api); } catch (e) { return null; }   // 取得失敗 (オフライン等)
-  if (!res.ok) return null;                                     // レート制限 (403) 等
-  let items;
-  try { items = await res.json(); } catch (e) { return null; }  // JSON 異常
-  const list = Array.isArray(items) ? items : [];
+  const list = await listDirCached(COMMUNITY_PROGRAM_DIR);   // キャッシュ→マニフェスト→API
+  if (list === null) return null;                            // 取得失敗 (Q1[B] 契約は不変)
   return list
     .filter(f => f.type === 'file' && langFromName(f.name))
     .map(f => ({
@@ -177,7 +322,7 @@ export function shareProgramUrl(code, name, lang = 'c') {
 
 // ===== コミュニティ車種 (GitHub の cars/community/ で共有・V4) =====
 // 利用者が作った車種 (key/name/物理パラメータ/drift の JSON) を PR で投稿し、全利用者が
-// 車種メニューから選べるようにする。読み取りは公開リポジトリなので認証不要 (一覧のみ API)。
+// 車種メニューから選べるようにする。読み取りは公開リポジトリなので認証不要 (一覧は index.json→API の順)。
 // 取得元ディレクトリ cars/community/ の作成・シードは人間承認 (CI-11)。未作成のうちは下記
 // listCommunityCars が null (取得失敗) を返し、呼び出し側が通知 1 行を出して本体は止めない。
 const COMMUNITY_CAR_DIR = 'cars/community';
@@ -186,14 +331,8 @@ const COMMUNITY_CAR_DIR = 'cars/community';
 // **正常取得** 時は配列 (0 件なら `[]`) を返す (Q1[B]・listCommunityCourses と同契約＝失敗と 0 件を
 // 区別)。本体動作はどちらでも止めない。未作成 (404) は取得失敗扱い＝通知 1 行 (Q1 と同方針)。
 export async function listCommunityCars() {
-  const { owner, repo, branch } = COURSE_REPO;
-  const api = `https://api.github.com/repos/${owner}/${repo}/contents/${COMMUNITY_CAR_DIR}?ref=${branch}`;
-  let res;
-  try { res = await fetch(api); } catch (e) { return null; }   // 取得失敗 (オフライン等)
-  if (!res.ok) return null;                                     // 未作成 (404)/レート制限 (403) 等
-  let items;
-  try { items = await res.json(); } catch (e) { return null; }  // JSON 異常
-  const list = Array.isArray(items) ? items : [];
+  const list = await listDirCached(COMMUNITY_CAR_DIR);   // キャッシュ→マニフェスト→API
+  if (list === null) return null;                        // 取得失敗 (Q1[B] 契約は不変)
   return list
     .filter(f => f.type === 'file' && /\.json$/i.test(f.name))
     .map(f => ({ name: f.name.replace(/\.json$/i, ''), path: f.path, download_url: f.download_url }));
@@ -237,14 +376,11 @@ function slugify(s, fallbackPrefix) {
 // 公式レース一覧を取得 (races/ 直下のディレクトリ = eventId)。**取得失敗** (未作成 404/レート制限
 // /オフライン/JSON 異常) 時は `null`・**正常取得** 時は配列 (0 件なら `[]`) を返す (Q1/V4 同契約)。
 export async function listOfficialRaces() {
-  const { owner, repo, branch } = COURSE_REPO;
-  const api = `https://api.github.com/repos/${owner}/${repo}/contents/${RACE_DIR}?ref=${branch}`;
-  let res;
-  try { res = await fetch(api); } catch (e) { return null; }   // 取得失敗 (オフライン等)
-  if (!res.ok) return null;                                     // 未作成 (404)/レート制限 (403) 等
-  let items;
-  try { items = await res.json(); } catch (e) { return null; }  // JSON 異常
-  const list = Array.isArray(items) ? items : [];
+  // races/ は「大会が始まるまで存在しない」ディレクトリで、これまで毎回 404 を
+  // 引きに行って API 枠を 1 回ずつ無駄にしていた。未作成は listDirCached が
+  // localStorage に覚えるので、TTL の間は問い合わせない (v7.4.0)。
+  const list = await listDirCached(RACE_DIR, true);   // true = ディレクトリ一覧
+  if (list === null) return null;                     // 取得失敗 (Q1/V4 契約は不変)
   return list.filter((f) => f.type === 'dir').map((f) => ({ id: f.name, path: f.path }));
 }
 
@@ -263,20 +399,19 @@ export async function fetchRace(eventId) {
     event = await r.json();
   } catch (e) { return null; }
   // エントリー (任意)。entries/ ディレクトリを一覧 → 各 JSON を取得。
+  // v7.4.0: ここも listDirCached を通す。以前は大会 1 件につき API を 1 回使っており、
+  // 起動時に全大会分が走るため、大会を 4 本開催すると起動あたり 4 回 = 改修前と同じ
+  // 消費に戻ってしまう。マニフェストとキャッシュを一覧取得の全経路に効かせる。
   const entries = [];
   try {
-    const api = `https://api.github.com/repos/${owner}/${repo}/contents/${dir}/entries?ref=${branch}`;
-    const r = await fetch(api);
-    if (r.ok) {
-      const items = await r.json();
-      const files = (Array.isArray(items) ? items : []).filter((f) => f.type === 'file' && /\.json$/i.test(f.name));
-      // v5.2.0: 逐次 await を並列取得へ (1 件失敗はスキップ=従来同値)。結果は files 一覧順に詰める
-      // が、確定順は呼び出し側 frozenField (submittedAt 昇順) が決めるため取得順は元々結果に非影響。
-      const fetched = await Promise.all(files.map(async (f) => {
-        try { return await (await fetch(f.download_url)).json(); } catch (e) { return null; /* 1 件失敗はスキップ */ }
-      }));
-      for (const j of fetched) if (j != null) entries.push(j);
-    }
+    const files = (await listDirCached(`${dir}/entries`)) || [];
+    const jsons = files.filter((f) => /\.json$/i.test(f.name));
+    // v5.2.0: 逐次 await を並列取得へ (1 件失敗はスキップ=従来同値)。結果は files 一覧順に詰める
+    // が、確定順は呼び出し側 frozenField (submittedAt 昇順) が決めるため取得順は元々結果に非影響。
+    const fetched = await Promise.all(jsons.map(async (f) => {
+      try { return await (await fetch(f.download_url)).json(); } catch (e) { return null; /* 1 件失敗はスキップ */ }
+    }));
+    for (const j of fetched) if (j != null) entries.push(j);
   } catch (e) { /* entries 無し = [] */ }
   // 確定結果 (任意・締切後のみ)。
   let result = null;

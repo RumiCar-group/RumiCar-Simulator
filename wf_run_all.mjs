@@ -44,6 +44,7 @@ const GATES = [
   'wf_carscale_determinism.mjs', 'wf_clearance.mjs', 'wf_collision_model.mjs', 'wf_recover_model.mjs', 'wf_ratio_audit.mjs',
   'wf_sprite_extent.mjs', 'wf_silhouette_fill.mjs', 'wf_share_check.mjs', 'wf_fmttime_check.mjs', 'wf_i18n_check.mjs',
   'wf_fan_render.mjs', 'wf_version_check.mjs', 'wf_ghostgap_cap.mjs', 'wf_modulepreload.mjs',
+  'wf_ghlist_cache.mjs',
   'wf_as3_samples.mjs', 'wf_as4_carray.mjs', 'wf_as5_calibrate.mjs', 'wf_as7_midscale.mjs', 'wf_as8_optics.mjs',
   'wf_as9_tire_gear.mjs', 'wf_as10_cant.mjs', 'wf_as11_susp.mjs', 'wf_as12_steer.mjs', 'wf_as13_engage.mjs',
 ].map((name) => ({ name, args: [] }));

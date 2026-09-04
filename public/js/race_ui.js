@@ -16,7 +16,7 @@ import { PROGRAM_BY_KEY } from './programs.js';                  // AS13: progKe
 import { fmtTime, loadBestRec } from './lap.js';
 import * as SFX from './sfx.js';
 import { drawCourse, worldToScreen } from './course.js';
-import { fetchRace, listOfficialRaces, shareEntryUrl } from './loader.js';
+import { fetchRace, listOfficialRaces, shareEntryUrl, clearListCache } from './loader.js';
 import { t, applyI18n } from './i18n.js';
 import { course } from './state.js';
 
@@ -266,8 +266,11 @@ function renderOfficialSelect() {
 }
 
 // 一覧を取り直す (再読込ボタン)。
+// v7.4.0: 一覧は localStorage に一時保存するようになったため、明示的な「再読込」では
+// キャッシュを捨ててから取りに行く (押しても古いままでは操作の意味が無くなる)。
 async function reloadOfficial() {
   $('ofMsg').textContent = t('official.loading');
+  clearListCache();
   await loadOfficialRaces();
   renderOfficialSelect();
   $('ofMsg').textContent = '';
@@ -570,6 +573,8 @@ function openRankingsDlg() {
 
 async function reloadRankings() {
   $('rankMsg').textContent = t('rank.loading');
+  clearListCache();                   // v7.4.0: 一覧キャッシュを捨ててから取り直す。これが無いと
+                                      // 「再読込」を押しても TTL の間は古い一覧のままになる
   await loadOfficialRaces();          // 一覧を取り直し
   await loadAllOfficialData(true);    // 詳細を再取得して再集計
   $('rankMsg').textContent = '';
