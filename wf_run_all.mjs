@@ -47,6 +47,8 @@ const GATES = [
   'wf_ghlist_cache.mjs',
   'wf_as3_samples.mjs', 'wf_as4_carray.mjs', 'wf_as5_calibrate.mjs', 'wf_as7_midscale.mjs', 'wf_as8_optics.mjs',
   'wf_as9_tire_gear.mjs', 'wf_as10_cant.mjs', 'wf_as11_susp.mjs', 'wf_as12_steer.mjs', 'wf_as13_engage.mjs',
+  // AU1: 逆ハン符号是正にともない probe(アサート無し) から常設ゲートへ昇格。
+  'wf_touge_drift_probe.mjs',
 ].map((name) => ({ name, args: [] }));
 
 // official_result は決定論2回照合→result.json 再検証→Node pin 照合の複合ゲート (AP20)。
@@ -56,7 +58,7 @@ GATES.push({ name: 'wf_official_result.mjs', args: ['--out', OFFICIAL_OUT] });
 
 // 意図的に非実行 (沈黙截断の禁止・CI-14 — 何を回さないかを明示する)。
 const EXCLUDED = {
-  'probe (常に exit0・計測のみ＝アサート無し)': ['wf_ab5_measure.mjs', 'wf_touge_drift_probe.mjs'],
+  'probe (常に exit0・計測のみ＝アサート無し)': ['wf_ab5_measure.mjs'],
   'library (単体実行不可・ゲートが import)': ['wf_i18n_hash.mjs', 'wf_frozen.mjs'],
   '変異ツール (product/manifest を書換＝non-変異証明のため除外)': ['wf_i18n_rehash.mjs', 'wf_refreeze.mjs'],
 };

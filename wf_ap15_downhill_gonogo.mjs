@@ -39,7 +39,15 @@
 //      docs/stage_ap/AP15_downhill_gonogo.md へ永続化。
 //   ③ 機序オラクル: ドリフト位相中（|β|>20°）の min(u) の dh 依存（連続量）＋ドリフト中 du/dt を併記。
 //
-// 出力: 機械アサート（決定論/dh=0 回帰=touge 全 NO-GO/min(u) の dh 単調性/slopeDir モデル頑健性）は緑/赤。
+// ── 【AU1 是正 2026-09-05・物理無改変】───────────────────────────────────────────────
+// 旧ドリフトドライバは逆ハンが **一度も発火していなかった**。左旋回のドリフトで β は **負** へ振れる
+// （AS12 D3 の実測 −77°）のに判定は `b > +DRIFT_BETA` と正側を見ていたため、カウンター分岐にも catch の
+// 減舵側にも入らず、実質「常にフル LEFT・全開」だった（出口安定化 `be < -15 → LEFT` も向きが逆）。
+// 是正は AS12 arm B と同型＝滑り量 sl=−β を基準にした比例則＋3値への理想デューティ量子化。**grip 側の
+// 制御則・進入速度・凍結述語・勾配モデルは一切変えない**（比較の土俵を動かさない）。旧ドライバで採った
+// 72 セル表は docs/stage_ap/AP15_downhill_gonogo.md に **時点記録として保持**する（AP-0）。
+//
+// 出力: 機械アサート（決定論/dh=0 回帰=touge 全 NO-GO/min(u) の dh 単調性/slopeDir モデル頑健性/逆ハン発火）は緑/赤。
 //       go/no-go 表は JSON(--json) で吐き docs/stage_ap/AP15_downhill_gonogo.md へ整形転記（版スタンプ=AP-0）。
 import { buildFromSpec } from './public/js/course.js';
 import { CarV2, tireParamsFor } from './public/js/physics_v2.js';
@@ -67,6 +75,25 @@ const DHS = [
 ];
 const SPIN_LIM = 115, REGRIP_BETA = 35, TIMEOUT = 1800, DRIFT_BETA = 35, EXIT_RUN_M = 20;
 const DRIFT_PHASE_BETA = 20;   // 機序オラクル: |β|>この値 を「ドリフト位相」とみなし min(u) を測る。
+const GAINS = { kp: 0.05, kd: 0.002 };   // AU1: AS12 arm B/C と同一 (kpD/kdD)
+const MX = CAR.maxSteer;
+// 逆ハン(印加目標舵角が旋回と逆符号)の発火計測 — AS12 D2『一度も発火しない』の逆述語。
+let counterFire = 0, counterTick = 0, wantMin = 0, steerMinReached = 0;   // wantMin=**指令**目標の最小 / steerMinReached=**到達**舵角の最小
+// **検出力のある逆ハン述語**: 「実測の滑りが *そのtickの目標* を超えているとき、逆ハンを当てているか」。
+//   滑りの真値は beta(car) から取る(ドライバ内部の符号変数を使わない)ので、符号を取り違えた実装では
+//   比例則が滑りを *増やす* 向きに舵を出し、この比率が 0 付近へ落ちる = 変異注入で赤くなる。
+//   (単なる `counterFire > 0` は一時的な正βで簡単に満たされ検出力が無い — 実測で確認済)
+let deepTick = 0, deepCounter = 0;
+function noteCounter(car, tgt, applied) {
+  const trueSlip = -beta(car);              // 左旋回ドリフトで正になる滑り量(真値)
+  if (trueSlip > tgt + 4) { deepTick++; if (applied < 0) deepCounter++; }
+}
+// 3値(tri)への理想デューティ量子化。norm は [-1,1] (正=LEFT)。AS12 arm B と同一。返り値=クランプ後の実印加。
+function applySteer(car, norm) {
+  const n = Math.max(-1, Math.min(1, norm));
+  car.steer = (car.steerAngle < n * MX) ? CONST.LEFT : CONST.RIGHT; car.steerAmt = null;
+  return n;
+}
 
 // AP15 勾配モデル: 毎フレーム car.slopeDir を設定（downhill=0 なら gFwd=0 で無影響）。
 //   'road'   = velocity course（進行方向＝AP11 road-tangent の自由空間等価。gFwd=downhill·cosβ）。
@@ -107,7 +134,7 @@ function runCorner(course, R, drive, strat, entryMul, headGate, driftEntryBase, 
   // 判別できない→ピボット判定は **符号付き car.u≤0** で行う。
   let uMinSlide = Infinity, uAt45 = null, slideOn = false, pivoted = false, burnSum = 0, burnN = 0, uPrev = car.u;
   let brakePulse = (strat === 'drift' && drive === 'fr') ? 9 : 0;
-  let gSteer = CONST.CENTER;
+  let gSteer = CONST.CENTER, prevSl = -beta(car);
   for (let i = 0; i < TIMEOUT; i++) {
     if (strat === 'grip') {
       const rStar = car.u / R;
@@ -116,24 +143,36 @@ function runCorner(course, R, drive, strat, entryMul, headGate, driftEntryBase, 
       car.steer = gSteer;
       holdSpeed(car, vEntry);
     } else {
-      // touge ドリフト: 回転(β≈35°保持) → 予見的回収(catch): 残回頭に応じ β目標を絞りカウンター＋
-      // スロットル調整で後輪グリップ復活（利用者指摘の回転制御）。counter 中も全開=u補給（ラリー AWD 技法）。
-      const b = beta(car);
+      // touge ドリフト: 回転(滑り 35°保持) → 予見的回収(catch): 残回頭に応じ滑り目標を絞りカウンター＋
+      // スロットル調整で後輪グリップ復活。counter 中も全開=u補給（ラリー AWD 技法）。
+      // 【AU1 是正】滑り量 sl = −β（左旋回ドリフトで β は負・AS12 D3）。旧実装は signed β を正側の閾値と
+      //   比べていたため逆ハン分岐に一度も入らなかった。スロットル水準・T_LEAD・目標の絞り方は不変。
+      const sl = -beta(car), sld = (sl - prevSl) / DT;
       const remaining = headGate - head;
       const T_LEAD = 0.9;
       const catchNow = remaining < Math.max(Math.abs(car.r), 0.5) * T_LEAD;
-      if (brakePulse > 0) { car.steer = CONST.LEFT; car.driveDir = CONST.BRAKE; car.pwm = 0; brakePulse--; }
+      let want, slTgtNow = DRIFT_BETA;
+      const braking = brakePulse > 0;      // 分岐前に確定（brakePulse-- が同じ tick で 1→0 になるため）
+      if (brakePulse > 0) { want = MX; car.driveDir = CONST.BRAKE; car.pwm = 0; brakePulse--; }
       else if (catchNow) {
-        const bTgt = Math.max(0, Math.min(DRIFT_BETA, 60 * remaining));
-        if (b > bTgt + 4) { car.steer = CONST.RIGHT; car.driveDir = CONST.FORWARD; car.pwm = 30; }
-        else if (b < bTgt - 4) { car.steer = CONST.LEFT; car.driveDir = CONST.FORWARD; car.pwm = 200; }
-        else { car.steer = CONST.CENTER; car.driveDir = CONST.FORWARD; car.pwm = 140; }
+        const slTgt = Math.max(0, Math.min(DRIFT_BETA, 60 * remaining));
+        slTgtNow = slTgt;
+        want = (GAINS.kp * (slTgt - sl) - GAINS.kd * sld) * MX;
+        car.driveDir = CONST.FORWARD;
+        car.pwm = (sl > slTgt + 4) ? 30 : (sl < slTgt - 4 ? 200 : 140);
+      } else {
+        want = (GAINS.kp * (DRIFT_BETA - sl) - GAINS.kd * sld) * MX;
+        car.driveDir = CONST.FORWARD; car.pwm = 255;
       }
-      else if (b > DRIFT_BETA) { car.steer = CONST.RIGHT; car.driveDir = CONST.FORWARD; car.pwm = 255; }
-      else { car.steer = CONST.LEFT; car.driveDir = CONST.FORWARD; car.pwm = 255; }
+      const applied = applySteer(car, want / MX);
+      counterTick++; if (applied < 0) counterFire++;
+      if (applied < wantMin) wantMin = applied;
+      if (!braking) noteCounter(car, slTgtNow, applied);   // ブレーキ相(全開LEFT が正しい)は除外
+      prevSl = sl;
     }
     setSlope(car, dh, model);
     car.step(DT); steps++;
+    if (strat === 'drift' && car.steerAngle / MX < steerMinReached) steerMinReached = car.steerAngle / MX;
     head += wrap(car.theta - prevTheta); prevTheta = car.theta;
     const ab = Math.abs(beta(car)); if (ab > betaPk) betaPk = ab;
     if (strat === 'drift') {                             // 発達中スライドの u（機序オラクル・criterion ③）
@@ -156,12 +195,14 @@ function runCorner(course, R, drive, strat, entryMul, headGate, driftEntryBase, 
   let tTotal = null, exitSpun = false, regripped = false, exitU = exitU0;
   if (done && !spun) {
     const x0 = car.x, y0 = car.y, hx = Math.cos(car.theta), hy = Math.sin(car.theta);
-    let k = 0;
+    let k = 0, prevSlExit = -beta(car);
     for (; k < TIMEOUT; k++) {
-      const be = beta(car);
-      if (be > 15) { car.steer = CONST.RIGHT; car.driveDir = CONST.FORWARD; car.pwm = 80; }
-      else if (be < -15) { car.steer = CONST.LEFT; car.driveDir = CONST.FORWARD; car.pwm = 80; }
-      else { car.steer = CONST.CENTER; car.driveDir = CONST.FORWARD; car.pwm = 255; }
+      // 【AU1 是正】旧実装は be<-15（=左旋回ドリフトの残滑り）で LEFT を当てており **向きが逆**だった。
+      const sl = -beta(car), sld = (sl - prevSlExit) / DT; prevSlExit = sl;
+      if (Math.abs(sl) > 15) {
+        const want = (GAINS.kp * (0 - sl) - GAINS.kd * sld) * MX;   // 滑り 0 へ能動回収
+        applySteer(car, want / MX); car.driveDir = CONST.FORWARD; car.pwm = 80;
+      } else { car.steer = CONST.CENTER; car.steerAmt = null; car.driveDir = CONST.FORWARD; car.pwm = 255; }
       setSlope(car, dh, model);
       car.step(DT);
       if (Math.abs(beta(car)) < REGRIP_BETA) regripped = true;   // 再グリップ成立
@@ -259,8 +300,12 @@ console.log(`\n[アサート]`);
   const course = buildFromSpec(benches.find(b => b.name === 'bench-hairpin-R5-low'));
   const a = runCorner(course, 5, 'awd', 'drift', 1.0, Math.PI, 1.15, DHS[2].dh, 'road');
   const b = runCorner(course, 5, 'awd', 'drift', 1.0, Math.PI, 1.15, DHS[2].dh, 'road');
-  ok(a.tGate === b.tGate && a.uMinDrift === b.uMinDrift && a.betaPk === b.betaPk,
-    `決定論: 同一セル2回 bit 一致 (tGate=${a.tGate}/${b.tGate} uMin=${a.uMinDrift}/${b.uMinDrift})`);
+  // 【AU1 是正】旧実装は `a.uMinDrift` を比較していたが runCorner の返り値は `uMinSlide` ゆえ
+  //   その項は undefined===undefined で **恒真**だった（3 連言のうち 1 項が空振り。tGate と betaPk の
+  //   比較は実効していたので「アサート全体が空振り」ではない）。実在フィールドで実効化し項も増やす。
+  ok(a.tGate === b.tGate && a.uMinSlide === b.uMinSlide && a.betaPk === b.betaPk
+     && a.tTotal === b.tTotal && a.clean === b.clean,
+    `決定論: 同一セル2回 bit 一致 (tGate=${a.tGate}/${b.tGate} uMinSlide=${a.uMinSlide}/${b.uMinSlide} tTot=${a.tTotal}/${b.tTotal})`);
 }
 // (2) dh=0 回帰: 全 NO-GO（touge 平地ベースライン＝AO8 と一致・凍結述語でも drift は grip を上回らない）。
 {
@@ -268,20 +313,92 @@ console.log(`\n[アサート]`);
   const flatGO = flat.filter(r => r.GO).length;
   ok(flatGO === 0, `dh=0 回帰: 全 NO-GO (${flat.length} セル中 GO=${flatGO}・touge 平地ベースラインと一致)`);
 }
-// (3) 機序（criterion ③）: 下り勾配は 180° 低μ ドリフトの「速度予算ピボット」を阻止しない、を実測（真の不変量）。
-//     忠実モデル gFwd=downhill·cos(β) ゆえ β→90°（ピボット）で前方重力補給が消える＝深い滑走を救えない。
-//     ⇒ 低μ 180° drift は dh∈{0,5°,10°} の全水準で依然ピボット(βpk≥85°)する。
-//     （pre-AP10 コンベアモデルの「uMin7.4=u 不枯渇」は補給が常時 +downhill だった時点記録＝現行では偽。）
+// (3) 機序（criterion ③）: 下り勾配が 180° 低μ ドリフトの「速度予算ピボット」をどこまで無効化するか。
+//     忠実モデル gFwd=downhill·cos(β) ゆえ β→90°（ピボット）で前方重力補給が消える。
+//   ── 時点記録（旧ドライバ・削除しない）: 逆ハンが一度も発火しない旧ドライバでは低μ180° の **18/18 が
+//      全 dh でピボット到達**し、「勾配は枯渇を無効化しない」と記録した（docs/stage_ap/AP15 旧表）。
+//   ── 【AU1 再測】符号を正した能動回収ドライバでは **駆動方式で分岐する**ことが実測で判明した:
+//      ・FR は全 dh でピボット到達（9/9）＝後軸だけでは滑走中に u を作れない。
+//      ・AWD は平地では全ピボット（3/3）だが、下り 5°/10° では **全て回避**（6/6）＝前輪駆動分＋gFwd の
+//        補給で u が残る（uMinSlide が dh とともに単調増加。10° で 0.06〜0.11 → 1.67〜2.04 m/s）。
+//      それでも GO は 0/72 のまま（下記 (2b)）＝「枯渇を免れても grip より速くはならない」。
 {
   const low180 = table.filter(r => r.ang === 180 && r.surf === 'low');
-  const total = low180.length, pivots = low180.filter(r => r.drift_pivoted).length;
-  ok(total > 0 && pivots === total,
-    `機序: 低μ 180° drift は全 dh で速度予算ピボット到達 (u→0: ${pivots}/${total}・勾配は枯渇を無効化しない)`);
+  const fr = low180.filter(r => r.drive === 'fr'), awd = low180.filter(r => r.drive === 'awd');
+  const frPiv = fr.filter(r => r.drift_pivoted).length;
+  ok(fr.length === 9 && frPiv === fr.length,
+    `機序A: 低μ180° FR は全 dh で速度予算ピボット到達 (u→0: ${frPiv}/${fr.length})`);
+  const awd0 = awd.filter(r => r.dh === '0deg'), awdG = awd.filter(r => r.dh !== '0deg');
+  const a0 = awd0.filter(r => r.drift_pivoted).length, aG = awdG.filter(r => !r.drift_pivoted).length;
+  // ⚠ 「ピボット」は **u ベースの定義**（`slideOn && car.u<=0.05`）。βpk 指標では同じセルが 86〜90° に達して
+  //   おり（＝深い滑りには入っている）、2 指標は食い違う。また当該セルは drift clean 0/3（DNF）で、
+  //   走り切っていない run の途中経過を見ている。∴ **主役は連続量の機序C/D** とし、本 B は
+  //   「u が枯渇したか」だけを言う限定的な述語として置く（旧 18/18 との対比を残すため）。
+  const awdBpk = awd.map(r => r.drift_bpk);
+  console.log(`         AWD 低μ180° の βpk = ${awdBpk.join('/')}°（u 枯渇は回避しても β は深い＝2 指標は別物）・drift clean = ${awd.map(r => r.drift_cleanN).join('/')}/3`);
+  ok(awd0.length === 3 && a0 === 3 && awdG.length === 6 && aG === 6,
+    `機序B(u ベース限定): 低μ180° AWD は平地で u 枯渇 (${a0}/3)・下り 5°/10° では回避 (${aG}/6)。※βpk は全水準で 86〜90°・当該 run は DNF`);
+  // 連続量（CI-14: 二値でなくマージンで）: AWD の滑走中 min(u) は dh とともに **単調増加**する。
+  let monoU = 0;
+  for (const cn of HAIRPINS) {
+    const v = DHS.map(d => (awd.find(r => r.corner === cn.key && r.dh === d.key) || {}).drift_uMinSlide);
+    if (v.every(x => x != null) && v[0] < v[1] && v[1] < v[2]) monoU++;
+    console.log(`         AWD ${cn.key.padEnd(13)} uMinSlide(0/5/10°) = ${v.map(x => x == null ? ' -- ' : x.toFixed(2)).join(' / ')} m/s`);
+  }
+  ok(monoU === HAIRPINS.length, `機序C: AWD の滑走中 min(u) は dh に対し単調増加 (${monoU}/${HAIRPINS.length} コーナー)`);
+  // 連続量: 浅い滑走（β=45°時点）の u は FR/AWD とも dh で単調増加＝勾配の補給は浅い滑走には効く。
+  let mono45 = 0, n45 = 0;
+  for (const cn of HAIRPINS) for (const dv of ['fr', 'awd']) {
+    const v = DHS.map(d => (low180.find(r => r.corner === cn.key && r.drive === dv && r.dh === d.key) || {}).drift_uAt45);
+    if (v.every(x => x != null)) { n45++; if (v[0] < v[1] && v[1] < v[2]) mono45++; }
+  }
+  ok(n45 === 6 && mono45 === 6, `機序D: u@β45° は 6 系列すべてで dh に対し単調増加 (${mono45}/${n45}) ＝補給は浅い滑走には効く`);
   const worstGfwd = Math.max(...low180.map(r => r.dhVal * Math.cos(r.drift_bpk * rad)));
-  console.log(`         （ピボット時 前方重力補給 gFwd=dh·cos(βpk) の最大 = ${worstGfwd.toFixed(3)} m/s² ≈ 0＝滑走深部で補給消失。u@β45° は dh とともに上昇＝浅い滑走では補給が効くが不十分）`);
+  console.log(`         （ピボット時 前方重力補給 gFwd=dh·cos(βpk) の最大 = ${worstGfwd.toFixed(3)} m/s² ≈ 0＝滑走深部で補給消失）`);
+}
+// (2b)【AU1】主結論の機械固定: 符号是正後も 72 セル全 NO-GO（＝旧結論は逆ハン不発の産物ではなかった）。
+//      連続量マージンも併記する（drift/grip 総合時間比の最小＝GO 閾値 0.98 までの余裕）。
+{
+  const ratios = table.map(r => r.ratio).filter(x => x != null);
+  const minRatio = ratios.length ? Math.min(...ratios) : null;
+  const cleanSum = table.reduce((a, r) => a + r.drift_cleanN, 0);
+  console.log(`  drift/grip 総合時間比の最小 = ${minRatio != null ? minRatio.toFixed(3) : '--'} (GO 閾値 0.98)・drift clean 合計 = ${cleanSum}/${table.length * 3}`);
+  ok(goN === 0, `AU1-3 符号是正後も GO=0/${table.length}（下り勾配でも drift は grip を清潔に上回らない）`);
+  ok(minRatio != null && minRatio >= 0.98, `AU1-3b 最小比 ${minRatio != null ? minRatio.toFixed(3) : '--'} ≥ 0.98 ＝ どのセルでも drift は grip 以下の時間にならない`);
 }
 // (4) 頑健性（criterion ①②の結論の代理量非依存）: generous モデルでも GO 数が road と同じ（＝0 のはず）。
 ok(goNGenerous === goN, `頑健性: generous(heading) モデルでも GO 数不変 (road GO=${goN}・generous GO=${goNGenerous})`);
+// (5)【AU1】逆ハン（印加目標舵角が旋回と逆符号）が **実際に発火する** — AS12 D2「一度も発火しない」の逆述語。
+console.log(`  逆ハン発火 ${counterFire}/${counterTick} tick・指令目標舵角の最大逆舵 ${(wantMin * 100).toFixed(0)}% of 全舵`);
+ok(counterFire > 0 && counterTick > 3000,
+   `AU1-1 逆ハン発火: ${counterFire}/${counterTick} tick（旧ドライバは 0/N＝符号の取り違えで一度も当て舵していなかった）`);
+// ⚠ AU1-1/1b は **符号バグに対する検出力が弱い**（AP14 では変異体でも緑になった実績）。符号を守るのは AU1-1c。
+ok(wantMin <= -0.5, `AU1-1b 逆ハンの深さ: **指令**目標 ${(wantMin * 100).toFixed(0)}% / **到達**舵角の最小 ${(steerMinReached * 100).toFixed(0)}% of 全舵`);
+{
+  const deepRatio = deepTick ? deepCounter / deepTick : 0;
+  console.log(`  滑り超過時の逆ハン率 = ${deepCounter}/${deepTick} = ${(deepRatio * 100).toFixed(1)}%（符号を取り違えると 0% 付近へ落ちる）`);
+  ok(deepTick >= 200 && deepRatio >= 0.8,
+     `AU1-1c **検出力のある逆ハン述語**: 滑りが目標超過の ${deepTick} tick 中 ${deepCounter} (${(deepRatio * 100).toFixed(1)}%) で逆ハン`);
+}
+// (6)【AU1】β の符号 — 通常の左旋回は正・ドリフトは負（旧 `β>+35` が原理的に発火しない機序そのもの）。
+{
+  const c = buildFromSpec(benches.find(b => b.name === 'bench-hairpin-R8-dry'));
+  const car = new CarV2({ ...c.start, x: 0, y: 0, theta: 0 }); car.type = 'normal_fr'; car.tireSet = 'normal';
+  toSpeed(car, 8, 0, 'road');
+  for (let i = 0; i < 120; i++) { car.steer = CONST.LEFT; car.steerAmt = null; holdSpeed(car, 8); car.step(DT); }
+  const bTurn = beta(car);
+  const c2 = buildFromSpec(benches.find(b => b.name === 'bench-hairpin-R8-low'));
+  const car2 = new CarV2({ ...c2.start, x: 0, y: 0, theta: 0 }); car2.type = 'normal_fr'; car2.tireSet = 'normal';
+  toSpeed(car2, 1.15 * Math.sqrt(Tn.mu0 * (car2.grip || 1) * DYN.g * 8), 0, 'road');
+  let bMin = 0;
+  for (let i = 0; i < 120; i++) {
+    if (i < 9) { car2.steer = CONST.LEFT; car2.driveDir = CONST.BRAKE; car2.pwm = 0; }
+    else { car2.steer = CONST.LEFT; car2.driveDir = CONST.FORWARD; car2.pwm = 255; }
+    car2.steerAmt = null; car2.step(DT); if (beta(car2) < bMin) bMin = beta(car2);
+  }
+  // ⚠ 定常旋回の β の符号は **速度依存**(tangent speed 前後で反転・R8-dry で約 12 m/s)。結論を支えるのは bMin<-30。
+  ok(bTurn > 0 && bMin < -30, `AU1-2 β の符号: 低速(U=8)の定常左旋回は正 (+${bTurn.toFixed(2)}°) / ドリフトは負 (${bMin.toFixed(1)}°)`);
+}
 
 // ── 人間可読表（dh グループごと）──────────────────────────────────────────────────
 for (const dhc of DHS) {
@@ -325,6 +442,8 @@ if (process.argv.includes('--json')) {
   console.log(JSON.stringify({
     appVersion: APP_VERSION, R_min: +R_MIN.toFixed(4),
     dhs: DHS.map(d => ({ key: d.key, deg: d.deg, dh: +d.dh.toFixed(4) })),
+    driver: 'AU1-sign-corrected', counterFire, counterTick, wantMin: +wantMin.toFixed(4), steerMinReached: +steerMinReached.toFixed(4),
+    deepTick, deepCounter, deepRatio: deepTick ? +(deepCounter / deepTick).toFixed(4) : 0,
     table, goN, goNGenerous, total: table.length, mech: global.__mech || [],
   }, null, 0));
 }
