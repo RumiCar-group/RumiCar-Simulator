@@ -85,10 +85,25 @@ function corridorCandidates(course, st, maxPts = 600) {
 // 重なり判定は「現在の車体寸法 (CAR) での矩形同士の交差チェック」= 車体スケールを変えても厳密。
 // 希望車間 (spawnSep) も寸法に追従する。フォールバックでも交差する点は決して採用しない。
 function spawnSep() { return Math.hypot(CAR.length, CAR.width) + 0.015; } // 向きを問わず非接触の中心距離+余白
+
+// ── 路面属性の一括受け渡し (Stage AV1 で 2 箇所の重複を1つの門へ集約) ───────────────────
+// spawn は `course.start` を丸ごと渡さず、車が読むフィールドだけを写す。この「写し」が
+// **freeSpawn と rebuildSpawns の 2 箇所に重複**していたため、AS10 以降にコース属性を足すたび
+// 片方だけ直す事故が起きうる状態だった (実測: AV1 の `surface` は実際に両方へ書き忘れ、node の
+// 単体検査は通るのに `runRace` の traceHash が変わらないという形で実ブラウザゲート T3-d が検出した)。
+// **経路を増やすときフィルタを片側にだけ書かない** (RATELIMIT-1 の教訓) ため、ここへ集約する。
+//   ・downhill/grip は常に持たせる (従来どおり)。
+//   ・muDecay/surface は **指定があるときだけキーを足す** = 未指定コースの spawn オブジェクトは
+//     従来と同一の形 ⇒ JSON 往復・凍結記録・byte 不変。
+function roadMeta(st) {
+  const m = { downhill: st.downhill || 0, grip: st.grip || 1 };
+  if (st.muDecay != null) m.muDecay = +st.muDecay;   // 路面 muDecay (§5・AO8・v2 のみ)
+  if (st.surface != null) m.surface = String(st.surface);   // 路面種別 (AV1・v2 のみ)
+  return m;
+}
 export function freeSpawn(course, occupied, idx) {
   const st = course.start;
-  const meta = { theta: st.theta, downhill: st.downhill || 0, grip: st.grip || 1 };
-  if (st.muDecay != null) meta.muDecay = +st.muDecay;   // 路面 muDecay (§5・AO8・v2 のみ・省略=タイヤ既定＝キー不追加で byte 不変)
+  const meta = { theta: st.theta, ...roadMeta(st) };   // AV1: 路面属性は roadMeta へ集約 (キー順・値とも従来と同一)
   const ch = Math.cos(st.theta), sh = Math.sin(st.theta);
   // スタート(または既に置いた車)まで壁を横切らずに見通せる = スタートと同じ走行廊下上にある。
   // 「壁に囲まれているか」だけの判定ではリング系コースの内側の島 (全方向が壁) を誤って許してしまう。
@@ -320,8 +335,7 @@ export function swapPhysics(slots) {
 export function rebuildSpawns(slots, course, grid) {
   const occupied = [];
   const road = roadFrame(course);   // AP11/AS10: コース適用時に路面フレームを更新 (平坦=null)
-  const stMeta = { downhill: course.start.downhill || 0, grip: course.start.grip || 1 };
-  if (course.start.muDecay != null) stMeta.muDecay = +course.start.muDecay;   // 路面 muDecay (§5・AO8・省略=タイヤ既定＝キー不追加で byte 不変)
+  const stMeta = roadMeta(course.start);   // AV1: 路面属性は roadMeta へ集約 (キー順・値とも従来と同一)
   slots.forEach((s, i) => {
     const g = grid && grid[i];
     const sp = g ? { x: g.x, y: g.y, theta: g.theta, ...stMeta } : freeSpawn(course, occupied, i);

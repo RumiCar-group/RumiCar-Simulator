@@ -347,6 +347,14 @@ export function buildFromSpec(spec) {
   // (dynamic/standard は無視=byte 不変)。値域は物理側 mfCoeffs で [0.35,0.95] にクランプ。低μ路面例:
   // ダート grip0.6×muDecay0.92 (グリップは低いが滑らせても保持しやすい)。
   if (spec.muDecay != null) { const d = +spec.muDecay; c.muDecay = d; c.start = { ...c.start, muDecay: d }; }
+  // 路面種別 (任意・'paved'|'loose'・省略時=paved=掘り込みなし)。Stage AV1: ルーズ路面 (砂利/ダート/雪)
+  // ではタイヤが表層へ潜って材料を押しのけるため、滑らせても横力が落ちない (むしろ深い滑り角で
+  // ピークを迎える)。grip/muDecay と同型に spawn 経由で v2 車へ伝える (**dynamic/standard は非対象**＝
+  // 掘り込みは「輪ごとの μ·Fz に対する比」なので単軌道近似には足す先が無い・config.js SURFACES 参照)。
+  // **文字列だけを受理する** (敵対的レビュー 軽13: 旧実装の String(spec.surface) は配列を素通しし
+  // `['loose']` が 'loose' として効いた。checkFields は同じ値を「文字列でない」と弾くので、自作コースだけ
+  // 検査をすり抜けていた)。非文字列は未指定と同じ扱い＝掘り込み無しへ縮退する。
+  if (typeof spec.surface === 'string') { const sf = spec.surface; c.surface = sf; c.start = { ...c.start, surface: sf }; }
   return c;
 }
 

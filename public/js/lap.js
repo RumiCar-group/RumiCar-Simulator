@@ -46,7 +46,10 @@ function bestKey(courseName, carType) { return 'rumicar.practice.' + courseName 
 // コース定義の指紋。壁1本の移動・フィニッシュ/スタート位置・峠フラグの変化で必ず変わり、無編集の
 // 再保存では不変（誤検知ゼロ）＝定義ドリフトの検出。値の配列で正規化（オブジェクト identity/キー順に
 // 依存しない）・表示専用/派生フィールドは含めない。
-function courseHashOf(course) {
+// AV1: 常設ゲートが **実関数を呼んで** 「この指紋に何が含まれ、何が含まれないか」を測れるように
+// export する（再実装＝CI-14 違反を避ける。physics_v2 の mfCoeffs/tireForceMF/effGrip と同じ扱い）。
+// 挙動は一切変わらない（純関数・module 内の呼び出しもそのまま）。
+export function courseHashOf(course) {
   if (!course) return '00000000';
   const walls = (course.walls || []).map(w => [w.x1, w.y1, w.x2, w.y2]);
   const f = course.finish;

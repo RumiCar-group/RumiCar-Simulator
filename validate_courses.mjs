@@ -6,6 +6,9 @@
 // 各コースの「最小自己間隔 / width」と「最大コーナー角」を出力する。
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
+// AV1: 路面種別の許容値は **config.js の SURFACES を単一真実源**にする (AS10 の BANK_KINDS のような
+// ローカル複製にすると、装備を足したときに検査側だけ取り残されて「知らない値を素通しする」)。
+import { SURFACES } from './public/js/config.js';
 
 function sampleClosed(fn, n) { const p = []; for (let i = 0; i < n; i++) p.push(fn(2 * Math.PI * i / n)); return p; }
 function chaikin(pts, iters) {
@@ -87,11 +90,23 @@ function maxCornerAngle(loop) {
 //   ・中心線を持つ kind (`track` / `touge`) のみ有効。`annulus`/`raw`/`loop` は中心線が無いので非対応。
 const BANK_KINDS = ['track', 'touge'];
 const BANK_MAX_DEG = 45;   // |bank|>45° は面内重力が法線荷重を上回り「停まっていても滑り落ちる」領域
+// surface の意味 (course.js / config.js SURFACES / physics_v2.js tireForceMF を正とする):
+//   ・`surface` = 路面種別。'paved' (既定・省略時) / 'loose' (砂利・ダート・雪＝掘り込み項あり)。
+//   ・**bank と違い kind を選ばない**: 中心線ではなくタイヤ力の式に効くので、全 kind で有効。
+//   ・精密 v2 エンジンでのみ効く (dynamic/standard は無視)。これは検査ではなく仕様 (📐 仕様に明記)。
+const SURFACE_KEYS = Object.keys(SURFACES);
 export function checkFields(specs) {
   const errs = [];
   for (const s of specs) {
     const nm = s && s.name ? s.name : '(no name)';
     if (s == null || typeof s !== 'object') { errs.push(`${nm}: コース定義がオブジェクトでない`); continue; }
+    // ── surface (AV1) ── bank と独立に検査する (どちらか一方だけを持つコースがありうる)。
+    if (s.surface !== undefined) {
+      const sf = s.surface;
+      if (typeof sf !== 'string') errs.push(`${nm}: surface は文字列でなければならない: ${JSON.stringify(sf)}`);
+      else if (!SURFACE_KEYS.includes(sf)) errs.push(`${nm}: surface="${sf}" は未知の路面種別 (${SURFACE_KEYS.join('/')} のみ)`);
+    }
+    // ── bank (AS10) ──
     if (s.bank === undefined) continue;                       // 未指定 = 0 = 完全 no-op (既存の全コース)
     const b = s.bank;
     if (typeof b !== 'number' || !Number.isFinite(b)) { errs.push(`${nm}: bank は有限の数値 (度) でなければならない: ${JSON.stringify(b)}`); continue; }
@@ -132,7 +147,7 @@ if (isMain) {
 
   // フィールド検査 (AS10)。**ここだけが exit 1 を起こす** (幾何は従来どおり表示のみ)。
   const fieldErrs = checkFields(specs);
-  console.log(`\nフィールド検査 (bank ほか): ${fieldErrs.length === 0 ? 'OK (0 件)' : fieldErrs.length + ' 件のエラー'}`);
+  console.log(`\nフィールド検査 (bank / surface ほか): ${fieldErrs.length === 0 ? 'OK (0 件)' : fieldErrs.length + ' 件のエラー'}`);
   for (const e of fieldErrs) console.error(`  [NG ] ${e}`);
   if (fieldErrs.length > 0) process.exit(1);
 }

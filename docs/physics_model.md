@@ -478,19 +478,6 @@ q̈ = ω²·(a − q) − 2ζω·q̇          ω = 固有角振動数, ζ = 減�
 - **数値的な扱い**: この 1 自由度系は線形で、係数は 1 ステップの間ずっと一定です。したがって**解析解をそのまま離散化**でき(遷移行列を毎ステップ 1 回だけ作る)、**数値減衰も振動数誤差もゼロ**、固有値の大きさは常に e^{−ζωh} < 1 なので**無条件安定**です。陽的に解いたときの発散境界 ω·h = 2 に対し、本番の最悪値は ω·h = 2.95×10⁻² (余裕 ×68)。
 - **既定では完全に無効**です。既定の「準静的」は自由度を持たず、従来の一次遅れの 2 行だけを通るので、過去の記録・凍結ハッシュ・公式レースは 1 バイトも変わりません。装備を選んだときだけ効き、その条件はレースの検証ハッシュの素に刻まれます。**精密 v2 エンジン専用**です(動力学・クラシックは無視)。
 
-## 14. 自分で調べる人へ — 索引
-
-**検索キーワード:** single-track / bicycle model, slip angle, Pacejka "Magic Formula", friction circle (traction circle), combined slip, longitudinal slip ratio, weight (load) transfer, understeer gradient, yaw moment, Froude number, dynamic similarity, aerodynamic downforce, range-flow / optical-flow odometry, observability, least squares (normal equations), time-of-flight (ToF), field of view (FoV) / sensor cone, VL53L0X, ground-plane constraint, two-track (double-track) model, open differential / limited-slip differential (LSD), tire relaxation length, impulse-based contact, continuous collision detection (CCD), sequential impulses / split impulse, tire thermal model / tire wear, histogram filter (Markov localization), loop closure, dead reckoning。
-
-**実装を読む:**
-- `public/js/physics_dyn.js` — 運動方程式・摩擦円・タイヤ曲線・車輪スリップ・空力・`applyRegime()`
-- `public/js/physics_v2.js`＋`public/js/contact_v2.js` — 精密 v2 エンジン(§13)
-- `public/js/config.js` — `REGIMES`(領域定数)、`DYN_DRIVE`(駆動方式パラメータ)、`scaleRegime()`(Froude 相似)、車種テーブル
-- `public/js/physics.js` — クラシック(キネマティック)版
-- `public/js/sensors.js` — ToF 測距(`readSensor`/`readRear`・扇内最近)、`public/js/geom.js` — `coneNearest()`(視野コーンの解析的最近点)
-
-**走行ロジック側:** 各定数を「どう使って速く走らせるか」は GitHub の `programs/README.md` と各プログラム(`programs.js` / .ino)冒頭コメント(「なぜこの設定にしたか」)。
-
 ### 13.14 連続舵(任意装備・v7.2.0 / Stage AS12)— 舵の「分解能」と「帯域」を分ける
 
 実機 RumiCar の操舵は **左 / 中立 / 右 の3値**で、これは学習 API の不変条件(D-1)そのものである。本節の装備は
@@ -525,6 +512,33 @@ q̈ = ω²·(a − q) − 2ζω·q̇          ω = 固有角振動数, ζ = 減�
 **実装**: 目標舵角は `steerTargetOf(指令, δ_max, 装備, 強さ)` の 1 か所で決まり、既定(`tri`)または強さ未指定なら
 **旧式と同一の double** を早期 return する(3エンジン共通・byte 不変)。`255/255` は IEEE754 で厳密に 1.0 なので
 「全舵」は3値と **bit 一致**する。装備は共有 URL(`ss=`)と公式記録の canon へ**非既定のときだけ**刻まれる。
+
+### 13.15 ルーズ路面(コース属性・v7.6.0 / Stage AV1)— 滑らせても横力が落ちない路面
+
+砂利・ダート・雪の上では、タイヤが表層へ潜り、**進む先に材料の土手を作って押しのけます**(掘り込み / bulldozing)。このぶんの力は Coulomb 摩擦ではなく「押しのけた材料の量」で決まるので、**滑らせるほど積み上がります**。舗装路の最適スリップ角が 5〜10° なのにダートでは 20〜30° になるのもこれが理由です。コース定義の任意フィールド `surface`(`"paved"`(既定) / `"loose"`)でこれを表現します。
+
+- **なぜ既存の路面属性では足りなかったか**: これまで路面は `grip`(ピークの倍率)と `muDecay`(ピーク後の漸近比)の2つで表していましたが、どちらも**「滑るほど落ちる」曲線しか作れません**。タイヤ曲線 g(σ)=sin(C·atan(Bp·σ)) の漸近比は実装で [0.35, 0.95] にクランプされるため、`muDecay` に 1.0 を書いてもクランプされて 0.95 になり、σ>1 では必ず単調に減ります(たとえば `muDecay=0.92` の低μ路面で g(1)=1.000 → g(4)=0.956)。**「落ちない」は表現の外側**でした。
+- **式**: 輪ごとの合力の大きさに、正規化スリップ σ に比例して上限で止まる項を足します。`F = μ·Fz·[ g(σ) + dig·min(σ/digSat, 1) ]`、実効摩擦円は `μ_eff = μ·(1 + dig)`。`dig` は土手が満載のときに足せる力(ピーク摩擦に対する比)、`digSat` はそれ以上滑らせても土手が育たなくなる σ です。既定のルーズ路面は `dig=0.30 / digSat=3`。**`μ_eff` は上界であって最小上界ではありません** — 実際に到達できる最大は `g(digSat)+dig`(既定値で `μ_eff` の 91.9%)で、残りは掘り込みが σ 比例で立ち上がるぶんの余裕です。
+- **物理の不変条件は1つも壊れません**: **力の向き(正規化スリップの逆向き)は変えず大きさだけを足す**ので、定常タイヤ力の接地スリップに対する仕事率は `F·v_slip = −(F·denom/σ)·(κ²/κP + tanα²/αP) ≤ 0` のまま(常に散逸的)、摩擦円も `|F| ≤ μ_eff·Fz` を構造的に保証します。常設ゲートは**この定常タイヤ力について**、全格子・全 trace で連続量マージンとして機械検査します。<br>なお**実際に車体へ適用される力**は、横力の緩和長(一次遅れ)と半径クランプを通したあとの量で、こちらは**舗装でも散逸性が保証されません**(カーカス撓みのエネルギー蓄積という緩和長モデルの既知の性質で、ルーズ路面で新しく生じたものではありません)。
+- **何が起きるか(実測)**: ピークが `σ=1`(α=8.0°)から `σ=3`(α=22.8°)へ移り、横力/ピーク比は舗装の 0.94/0.89/0.86(σ=2/3/4)に対しルーズでは 1.14/1.19/1.16 になります。**σ=digSat までは上がり続け、それを超えると舗装と同じ形で緩やかに減りますが、どこまで滑らせても舗装のピークを下回りません**。σ=8 まで滑らせても掘り込みの寄与は 0.300 で止まります(クランプが無いと 0.800 まで伸びて摩擦円が破れます)。
+- **ドリフトへの効き方は素直ではありません(正直な測定結果)**: 低μベンチ(grip 0.6)をルーズ化すると、ドリフト走行が破綻せずに回れる解は **38 → 202 run(×5.3)** に増え、舗装ではどう試しても回れなかったヘアピンが1つ**回れるようになりました**(この効果は掃引の粗さを変えても ×5.3〜5.4 で安定しています)。一方、着手時に見込んでいた**2つの予想はどちらも確かめられませんでした** — ①「drift/grip の所要時間比が舗装より下がる」は**掃引格子を変えると符号が反転**します(β 格子 3 点では 0.876→0.875、2 点および 5 点では逆転)。②「深い滑り(βpk≥20°)で回れる解が増える」は**合計では成り立ちません**(28 → 18)。セルごとに増える所と減る所があり、**その機序は特定できていません**(最小回転半径は判別境界になっていません: R=6.5m は最小回転半径 5.84m より大きいのに、舗装にあった深い解が消えます)。掃引したセルが 6 と少なく、格子にも依存します。
+- **「滑りやすさ」は作りません**: 同じ `grip` に掘り込みを足せば路面は**一様にグリップが上がります**。実在のダートが「滑りやすい」のは `grip` が低いからであって掘り込みのせいではありません。ダートらしさを出すには `grip` を下げたうえで `surface:"loose"` を併用してください。
+- **HUD の「摩擦円使用率」の読み方が変わります**: この表示は正規化スリップ σ をそのまま百分率にしたもので、舗装ではピークが σ=1 なので「100%＝限界」と読めます。**ルーズ路面ではピークが σ=3 なので、最大グリップで走っている車が 300% と表示されます**。表示層だけの話で物理は変わりませんが、「100% 超＝限界突破」という読み方はルーズ路面では成り立ちません。
+- **どのエンジンが解釈するか**: **精密v2 だけ**です。理由は「他のエンジンがタイヤ曲線を持たないから」ではありません(動力学エンジンも簡易 Pacejka のピーク＋緩やかな減衰と摩擦楕円を持っています)。掘り込み項を **「輪ごとのピーク摩擦 μ·Fz に対する比」として、v2 の結合スリップ σ=√((κ/κP)²+(tanα/αP)²) の上で**定義しているためで、単軌道(自転車)近似の動力学エンジンは輪ごとの μ·Fz を持たず(軸ごとの摩擦楕円半径)、スリップの正規化も別物(|α|/alphaPeak)なので**足す先がありません**。クラシックはさらに横方向の自由度も持ちません。別モデルから導出し直さずに足すのは「実体のない差の注入」になるため、非対象と明記し常設ゲートで機械固定しています。`bank` と違い **kind を選びません**(中心線を必要としないため `track`/`touge`/`annulus`/`raw` のすべてで有効)。
+- **既定では 1 バイトも変わりません**。`surface` 未指定・`"paved"`・未知の値はいずれも掘り込みの項が**式に入らない**(guarded branch)ので、凍結ベンチ f0〜f3・公式レースの `verifyHash`・既存の全記録は不変です。
+
+## 14. 自分で調べる人へ — 索引
+
+**検索キーワード:** single-track / bicycle model, slip angle, Pacejka "Magic Formula", friction circle (traction circle), combined slip, longitudinal slip ratio, weight (load) transfer, understeer gradient, yaw moment, Froude number, dynamic similarity, aerodynamic downforce, range-flow / optical-flow odometry, observability, least squares (normal equations), time-of-flight (ToF), field of view (FoV) / sensor cone, VL53L0X, ground-plane constraint, two-track (double-track) model, open differential / limited-slip differential (LSD), tire relaxation length, impulse-based contact, continuous collision detection (CCD), sequential impulses / split impulse, tire thermal model / tire wear, histogram filter (Markov localization), loop closure, dead reckoning。
+
+**実装を読む:**
+- `public/js/physics_dyn.js` — 運動方程式・摩擦円・タイヤ曲線・車輪スリップ・空力・`applyRegime()`
+- `public/js/physics_v2.js`＋`public/js/contact_v2.js` — 精密 v2 エンジン(§13)
+- `public/js/config.js` — `REGIMES`(領域定数)、`DYN_DRIVE`(駆動方式パラメータ)、`scaleRegime()`(Froude 相似)、車種テーブル
+- `public/js/physics.js` — クラシック(キネマティック)版
+- `public/js/sensors.js` — ToF 測距(`readSensor`/`readRear`・扇内最近)、`public/js/geom.js` — `coneNearest()`(視野コーンの解析的最近点)
+
+**走行ロジック側:** 各定数を「どう使って速く走らせるか」は GitHub の `programs/README.md` と各プログラム(`programs.js` / .ino)冒頭コメント(「なぜこの設定にしたか」)。
 
 ---
 

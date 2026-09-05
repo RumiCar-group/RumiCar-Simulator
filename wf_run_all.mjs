@@ -54,6 +54,9 @@ const GATES = [
   //   ※ 既定と --full で **結論が変わらない**ことは AU3 で確認済み(縮小格子が --full の唯一の GO を
   //     見つけられるよう β=35/pCatch=110 を含めてある)。所要はゲート自身が Part 別に印字する。
   'wf_drift_reexam.mjs',
+  // AV1: ルーズ路面属性 course.surface='loose'（掘り込み項）の受け入れゲート。
+  //   既定=縮小掃引。--full は docs 転記用で長い。Part C（実走 go/no-go）が所要の大半を占める。
+  'wf_av1_loose.mjs',
 ].map((name) => ({ name, args: [] }));
 
 // official_result は決定論2回照合→result.json 再検証→Node pin 照合の複合ゲート (AP20)。

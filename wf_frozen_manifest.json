@@ -20,11 +20,11 @@
   "canonicalNode": {
     "node": "22.22.1",
     "v8": "12.4.254.21-node.35",
-    "resultSha256": "157a4b81c1e4253245ea40b8450d36bf54821d80d8e94060b52bda29b5034b84",
+    "resultSha256": "657bb0f9f79952d7602984a2370f10335f2a94cd207c7abe50c2d6d79ccd119f",
     "pinnedAt": "2026-09-05",
     "eventId": "official-sample-circuit",
-    "appVersion": "v7.5.0",
-    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: v7.5.0 への版バンプに伴う再ピン (APP_VERSION が engineFingerprint 経由で resultSha256 を変えるため。走行物理・レースロジックの変更なし: Stage AU の改修は測定ドライバの逆ハン符号是正・go/no-go 表の取り直し・常設ゲート wf_drift_reexam.mjs の新設・physics_model/i18n の記述是正のみで、physics*.js/contact_v2.js は diff 0 行・verifyHash c731ecce 不変)"
+    "appVersion": "v7.6.0",
+    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: AV1: 版 v7.5.0→v7.6.0 (MINOR・ルーズ路面属性 course.surface='loose' の追加)。appVersion が engineFingerprint 経由で resultSha256 を変えるための再ピン (AQ-1 セット)。verifyHash は不変＝走行物理・レースロジックは無改変。"
   },
   "history": [
     {

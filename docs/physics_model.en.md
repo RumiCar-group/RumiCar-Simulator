@@ -481,21 +481,6 @@ q̈ = ω²·(a − q) − 2ζω·q̇          ω = natural frequency, ζ = dampi
 - **Numerics**: this one-DOF system is linear and its coefficients are constant throughout a step, so **the analytic solution is used directly as the discrete update** (the transition matrix is built once per step). That gives **zero numerical damping and zero frequency error**, and the eigenvalue magnitude is always e^{−ζωh} < 1, i.e. **unconditionally stable**. Against the ω·h = 2 divergence boundary of an explicit scheme, the worst production value is ω·h = 2.95×10⁻² (a margin of ×68).
 - **It is completely inactive by default.** The default "quasi-static" setting carries no degree of freedom and runs only the previous two-line first-order lag, so past records, frozen hashes and official races are unchanged to the byte. It applies only when equipped, and that condition is stamped into the source of the race verification hash. **Precise v2 engine only** (the dynamics and classic engines ignore it).
 
-## 14. For Those Who Want to Dig Deeper — Index
-
-**Search keywords:** single-track / bicycle model, slip angle, Pacejka "Magic Formula", friction circle (traction circle), combined slip, longitudinal slip ratio, weight (load) transfer, understeer gradient, yaw moment, Froude number, dynamic similarity, aerodynamic downforce, range-flow / optical-flow odometry, observability, least squares (normal equations), time-of-flight (ToF), field of view (FoV) / sensor cone, VL53L0X, ground-plane constraint, two-track (double-track) model, open differential / limited-slip differential (LSD), tire relaxation length, impulse-based contact, continuous collision detection (CCD), sequential impulses / split impulse, tire thermal model / tire wear, histogram filter (Markov localization), loop closure, dead reckoning.
-
-**Read the implementation:**
-- `public/js/physics_dyn.js` — equations of motion, friction circle, tire curve, wheel slip, aero, `applyRegime()`
-- `public/js/physics_v2.js` + `public/js/contact_v2.js` — the precise v2 engine (§13)
-- `public/js/config.js` — `REGIMES` (regime constants), `DYN_DRIVE` (drivetrain parameters), `scaleRegime()` (Froude similarity), car table
-- `public/js/physics.js` — classic (kinematic) version
-- `public/js/sensors.js` — ToF ranging (`readSensor`/`readRear`, nearest-in-fan), `public/js/geom.js` — `coneNearest()` (analytic nearest point in the FoV cone)
-
-**On the driving-logic side:** how to use each constant "to drive fast" is in GitHub's `programs/README.md` and the header comments ("why this setting") of each program (`programs.js` / .ino).
-
----
-
 ### 13.14 Continuous steering (optional equipment, v7.2.0 / Stage AS12) — separating steering *resolution* from *bandwidth*
 
 The real RumiCar steers with **three states — left / centre / right** — and that is an invariant of the learning API
@@ -540,6 +525,35 @@ amount)`, which early-returns **the identical double as the old expression** whe
 amount was given (shared by all three engines; byte-invariant). `255/255` is exactly 1.0 in IEEE 754, so "full lock"
 is **bit-identical** to the three-state call. The equipment is stamped into the share URL (`ss=`) and into the canon
 of official records **only when it is not the default**.
+
+### 13.15 Loose surfaces (course attribute, v7.6.0 / Stage AV1) — a road where sliding does not cost you grip
+
+On gravel, dirt or snow the tire sinks into the top layer and **builds a bank of material ahead of itself and pushes it aside** (digging / bulldozing). That part of the force is set not by Coulomb friction but by *how much material was displaced*, so it **grows the more you slide**. This is why the optimal slip angle on tarmac is 5–10° but 20–30° on dirt, and why rally cars corner at large slip angles. The optional course field `surface` (`"paved"` (default) / `"loose"`) expresses it.
+
+- **Why the existing surface fields were not enough:** a surface used to be described by `grip` (peak multiplier) and `muDecay` (post-peak asymptote), and **both can only produce a curve that falls as you slide**. The asymptote of the tire curve g(σ)=sin(C·atan(Bp·σ)) is clamped to [0.35, 0.95] in the implementation, so writing `muDecay: 1.0` still clamps to 0.95 and the curve still decreases monotonically for σ>1 (for instance on a low-μ surface with `muDecay=0.92`, g(1)=1.000 → g(4)=0.956). **"Does not fall" was outside what the model could say.**
+- **The equation:** to the magnitude of each wheel's resultant force we add a term that grows in proportion to the normalized slip σ and then stops at a cap: `F = μ·Fz·[ g(σ) + dig·min(σ/digSat, 1) ]`, with an effective friction circle of `μ_eff = μ·(1 + dig)`. `dig` is the force the fully built bank can add (as a ratio of peak friction) and `digSat` is the σ beyond which the bank stops growing. The built-in loose surface uses `dig=0.30 / digSat=3`. **`μ_eff` is an upper bound, not the least upper bound** — the largest force actually reachable is `g(digSat)+dig`, which at the built-in constants is 91.9% of `μ_eff`; the remainder is headroom for the digging term ramping up in proportion to σ.
+- **No physical invariant is broken:** the term **changes only the magnitude, never the direction (which stays opposite the normalized slip)**, so the power of the *steady-state* tire force against ground slip stays `F·v_slip = −(F·denom/σ)·(κ²/κP + tanα²/αP) ≤ 0` (always dissipative) and the friction circle `|F| ≤ μ_eff·Fz` is guaranteed structurally. A standing gate checks **that steady-state force** as continuous margins over the whole grid and over whole traces.<br>Note that the force **actually applied to the body** is that quantity after the lateral-force relaxation length (a first-order lag) and the radius clamp, and for it dissipativity is **not guaranteed even on tarmac** — a known property of the relaxation-length model (energy stored in carcass deflection), not something loose surfaces introduced.
+- **What actually happens (measured):** the peak moves from `σ=1` (α=8.0°) to `σ=3` (α=22.8°), and the lateral-force-to-peak ratio at σ=2/3/4 goes from 0.94/0.89/0.86 on tarmac to 1.14/1.19/1.16 on loose. **It keeps rising up to σ=digSat and then decays gently in the same shape as tarmac, but never drops below the tarmac peak however far you slide.** Sliding all the way to σ=8 still caps the digging contribution at 0.300 (without the cap it would grow to 0.800 and break the friction circle).
+- **Its effect on drifting is not straightforward (an honest measurement):** making the low-μ benchmark (grip 0.6) loose increased the number of drift runs that get round without breaking from **38 to 202 (×5.3)**, and one hairpin that no drift line could clear on tarmac **became clearable** (this effect stays at ×5.3–5.4 when the sweep is made coarser or finer). But **neither of the two expectations we started from was confirmed**: ① "the drift/grip lap-time ratio drops on loose" **flips sign when the sweep grid changes** (with a three-point β grid it is 0.876→0.875; with two points and with five points it reverses). ② "more solutions get round with deep slip (βpk≥20°)" **does not hold in aggregate** (28 → 18). Some cells gain and some lose, and **we have not identified the mechanism** (the minimum turning radius is not the dividing line: R=6.5 m is larger than the 5.84 m minimum radius, yet the deep solutions tarmac had there disappear). Only 6 cells were swept and the result depends on the grid.
+- **It does not make a surface "slippery":** adding digging to the same `grip` makes the surface **uniformly grippier**. Real dirt being slippery comes from its low `grip`, not from digging. To get dirt-like behaviour, lower `grip` *and* set `surface:"loose"`.
+- **The HUD "friction-circle usage" reads differently:** that display is the normalized slip σ shown as a percentage, and on tarmac the peak is at σ=1, so "100% = at the limit" reads correctly. **On a loose surface the peak is at σ=3, so a car running at maximum grip displays 300%.** This is a display-layer matter and the physics is unchanged, but "over 100% = beyond the limit" does not hold on loose surfaces.
+- **Which engines interpret it:** **precision v2 only.** The reason is *not* that the other engines lack a tire curve — the dynamics engine does have a simplified Pacejka peak-with-gentle-decay and a friction ellipse. It is that the digging term is defined **as a ratio of each wheel's peak friction μ·Fz, on v2's combined slip σ=√((κ/κP)²+(tanα/αP)²)**, and the single-track (bicycle) dynamics engine has no per-wheel μ·Fz (only per-axle friction-ellipse radii) and normalizes slip differently (|α|/alphaPeak), so **there is nothing to add it to**. Classic additionally has no lateral degree of freedom. Adding it without re-deriving it for those models would be injecting a difference with no substance, so they are declared out of scope and a standing gate machine-fixes that. Unlike `bank`, it **does not care about `kind`** (it needs no centerline, so it works for `track`/`touge`/`annulus`/`raw` alike).
+- **Nothing changes by default.** An omitted `surface`, `"paved"`, and unknown values all keep the digging term **out of the expression** (a guarded branch), so the frozen benchmarks f0–f3, the official race `verifyHash` and every existing record are unchanged.
+
+## 14. For Those Who Want to Dig Deeper — Index
+
+**Search keywords:** single-track / bicycle model, slip angle, Pacejka "Magic Formula", friction circle (traction circle), combined slip, longitudinal slip ratio, weight (load) transfer, understeer gradient, yaw moment, Froude number, dynamic similarity, aerodynamic downforce, range-flow / optical-flow odometry, observability, least squares (normal equations), time-of-flight (ToF), field of view (FoV) / sensor cone, VL53L0X, ground-plane constraint, two-track (double-track) model, open differential / limited-slip differential (LSD), tire relaxation length, impulse-based contact, continuous collision detection (CCD), sequential impulses / split impulse, tire thermal model / tire wear, histogram filter (Markov localization), loop closure, dead reckoning.
+
+**Read the implementation:**
+- `public/js/physics_dyn.js` — equations of motion, friction circle, tire curve, wheel slip, aero, `applyRegime()`
+- `public/js/physics_v2.js` + `public/js/contact_v2.js` — the precise v2 engine (§13)
+- `public/js/config.js` — `REGIMES` (regime constants), `DYN_DRIVE` (drivetrain parameters), `scaleRegime()` (Froude similarity), car table
+- `public/js/physics.js` — classic (kinematic) version
+- `public/js/sensors.js` — ToF ranging (`readSensor`/`readRear`, nearest-in-fan), `public/js/geom.js` — `coneNearest()` (analytic nearest point in the FoV cone)
+
+**On the driving-logic side:** how to use each constant "to drive fast" is in GitHub's `programs/README.md` and the header comments ("why this setting") of each program (`programs.js` / .ino).
+
+---
 
 ## Credits
 

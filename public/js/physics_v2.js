@@ -26,7 +26,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 import { DynCar, DYN, DYN_DRIVE, dynDriveKey } from './physics_dyn.js';
 import { CAR, CONST, MASS, MASS_REF, REGIMES, registerRegimeHook, gPlane, gNormal, GEARS, GEAR_DEFAULT,
-         SUSPS, SUSP_DEFAULT, steerTargetOf } from './config.js';
+         SUSPS, SUSP_DEFAULT, SURFACES, SURFACE_DEFAULT, steerTargetOf } from './config.js';
 
 // 駆動方式キーは physics_dyn.js の dynDriveKey を共用する (AP22 で旧 driveKeyOf の再実装を 2→1 統合)。
 
@@ -137,6 +137,19 @@ export function suspParamsFor(suspSet) {
   return s || null;
 }
 
+// ── 路面種別の解決 (Stage AV1・コース任意属性) ────────────────────────────────────
+// course.surface ('paved'|'loose') から SURFACES の定義を引く (未知/未指定は paved)。
+// paved (null) は「掘り込みなし」= 呼び側が dig=null で全ブロックを飛ばす = byte 不変
+// (suspParamsFor の quasi・gearParamsFor の direct と同じ作法)。
+export function surfaceParamsFor(surface) {
+  const s = Object.prototype.hasOwnProperty.call(SURFACES, surface) ? SURFACES[surface] : SURFACES[SURFACE_DEFAULT];
+  // 値域の防御 (AV1 敵対的レビュー 軽6): digSat<=0 は CBpD=Infinity → kD=Infinity → 車輪面速度が
+  // 例外を出さずに凍結する **沈黙する故障** になる。dig<0 は F_ss<0 で散逸性の証明 (F_ss≥0) が崩れる。
+  // 定義が壊れているエントリは **掘り込み無し (null) へ縮退**させる (既定へ落ちる方が安全)。
+  if (!s) return null;
+  return (Number.isFinite(s.dig) && s.dig > 0 && Number.isFinite(s.digSat) && s.digSat > 0) ? s : null;
+}
+
 // v2 の領域別較正を V2 holder / _tireCal へ適用する (Stage AO5/AO6・applyRegime の choke point からフック
 // 起動)。**DYN/CAR は applyRegime が既に設定済** (g/空力/長さスケール) — 本関数は v2 専用パラメータ
 // (定出力ドライブトレイン＋タイヤセット) のみを書く。引数は REGIMES キー文字列 or applyRegime が渡す領域
@@ -212,17 +225,26 @@ export function mfCoeffs(gInf) {
 // kP/aP=ピークスリップ。返り {fx, fy, sigma}: fx=縦力/fy=横力 (車輪系・mass-norm), sigma=正規化スリップ長。
 // **|(fx,fy)| = muFz·g(σ) ≤ muFz を構造保証** (摩擦円不変条件)。σ<ε は線形勾配 C·Bp で接続。
 // **接地スリップに対し常に散逸的** (fx·(−κ) ≤0 かつ fy·ta ≤0 = エネルギー非注入・§2.3)。
-export function tireForceMF(kappa, ta, muFz, C, Bp, kP, aP) {
+//
+// ── Stage AV1: ルーズ路面の掘り込み項 (opt-in・第8引数 dig) ────────────────────────
+// dig = {dig, digSat} (config.js SURFACES) が渡ると 合力の**大きさだけ**に σ 比例・上限付きの
+// 項を足す: F_ss = muFz·[g(σ) + dig·min(σ/digSat, 1)]。**向き (正規化スリップの逆向き) は
+// 変えない**ので散逸性 F·v_slip = −(F_ss·denom/σ)·(κ²/κP+tanα²/αP) ≤ 0 は恒等的に保たれ、
+// 摩擦円は |F| ≤ muFz·(1+dig) = μ_eff·Fz を構造保証する (呼び側が同じ μ_eff でクランプする)。
+// σ<ε の線形域では掘り込みも σ 比例ゆえ勾配へ dig/digSat が加わる (曲線は原点で連続)。
+// **dig が falsy (既定 paved) のときは掘り込みの項が式に一切入らない** = 旧式と同一 double
+// = f0〜f3・verifyHash・全既存記録が byte 不変 (effGrip/AP10/AO12 と同じ guarded branch の作法)。
+export function tireForceMF(kappa, ta, muFz, C, Bp, kP, aP, dig) {
   const nk = kappa / kP, na = ta / aP;
   const sigma = Math.hypot(nk, na);
   const EPS = 1e-6;
   if (muFz <= 0) return { fx: 0, fy: 0, sigma };
   if (sigma < EPS) {
-    const lin = muFz * C * Bp;   // σ→0 の線形勾配 (縦横共通)
+    const lin = dig ? muFz * (C * Bp + dig.dig / dig.digSat) : muFz * C * Bp;   // σ→0 の線形勾配 (縦横共通)
     return { fx: lin * nk, fy: -lin * na, sigma };
   }
   const g = Math.sin(C * Math.atan(Bp * sigma));   // ∈(0,1]・g(1)=1・g(∞)=gInf
-  const Fss = muFz * g;                            // 合力 |F| = Fss ≤ muFz
+  const Fss = dig ? muFz * (g + dig.dig * Math.min(sigma / dig.digSat, 1)) : muFz * g;   // |F| = Fss ≤ μ_eff·Fz
   return { fx: Fss * nk / sigma, fy: -Fss * na / sigma, sigma };
 }
 
@@ -245,6 +267,10 @@ export class CarV2 extends DynCar {
     // タイヤセット既定 (T.muDecay) を上書きする。null=上書きなし (既定=タイヤ値)。低μ路面の忘れ物
     // 防止に reset のたび再評価 (grip と同型・grip は super.reset が設定)。
     this.muDecay = (start && start.muDecay != null) ? +start.muDecay : null;
+    // 路面種別 (Stage AV1)。course.surface (buildFromSpec→spawn 経由) が 'loose' なら掘り込み項が
+    // 効く。null/'paved' = 掘り込みなし = byte 不変。grip/muDecay と同型に reset のたび再評価する
+    // (**車の装備ではなく路面の属性**なので tireSet/gearSet/suspSet のように reset をまたいで保持しない)。
+    this.surface = (start && start.surface != null) ? String(start.surface) : null;
     this._axF = 0;         // 前後加速度の1次 LPF 状態 (荷重移動用・タイヤ縦力 accel)
     this._ayF = 0;         // 横加速度の1次 LPF 状態 (荷重移動用・タイヤ横力 accel)
     // ── Stage AS11: サスペンション自由度 (opt-in)。装備時のみ _axF/_ayF は「1次 LPF の状態」でなく
@@ -365,6 +391,12 @@ export class CarV2 extends DynCar {
     // コストは substep あたり 4 乗算 (後退 Euler の除算より安い)・超越関数は step に1回 (AP12 巻き上げ)。
     // 不動点は (q,v)=(a,0) ＝ 現行 LPF と同一 ⇒ **定常の荷重移動は不変・変わるのは過渡だけ**。
     // 既定 quasi は susp=null で ⑪ が旧2行へ入る (式・double とも同一) = byte 不変。
+    // AV1: 路面の掘り込み係数 (per-step 不変。this.surface は step 実行中に変わらない)。
+    // paved/未指定は null ⇒ tireForceMF・μ_eff・剛性見積りのすべてで掘り込みの項が式に入らない。
+    const dig = surfaceParamsFor(this.surface);
+    // 掘り込み込みの σ→0 線形勾配。舗装 (dig=null) は CBp と**同一 double** ゆえ これを使う式は
+    // すべて旧式と bit 一致する (車輪 ODE の半陰的剛性 kD・REVERSE 半陰の横剛性 CaF/CaR)。
+    const CBpD = dig ? CBp + dig.dig / dig.digSat : CBp;
     const S = suspParamsFor(this.suspSet);
     let susp = null;
     if (S) {
@@ -386,7 +418,7 @@ export class CarV2 extends DynCar {
     const gearN = ratios.length;
     const shiftSec = (G.shiftSec0 || 0) * Math.sqrt(L / 0.13);
     return { p, dk, g, gN, grip, m, massK, L, a, b, tw, halfT, hCG, iz, maxV,
-             C, Bp, CBp, kP, aP, vLow, muOf, doWear, relLen, lsd, kf, kth, susp,
+             C, Bp, CBp, CBpD, kP, aP, vLow, muOf, doWear, relLen, lsd, kf, kth, susp, dig,
              geared, ratios, gearN, upAt: G.upAt || 0, downAt: G.downAt || 0, shiftSec };
   }
 
@@ -405,14 +437,20 @@ export class CarV2 extends DynCar {
     // AS9: nSub の剛性見積りも「そのタイヤが実際に使えるグリップ」で行う (排水で μ が戻る rain は
     // 実際に横剛性が高い)。normal/slip は gripEff===grip の同一 double ゆえ nSub は byte 不変。
     const gripE = effGrip(this.grip || 1, T);
-    const CaTot = 2 * T.mu0 * DYN.g * gripE * C * Bp / T.alphaP;
+    // AV1: 掘り込みは σ→0 の線形勾配を C·Bp → C·Bp+dig/digSat へ上げるので、陽的横積分の
+    // 安定条件に使う剛性見積りも同じだけ上げる (nSub が増える＝安全側)。舗装 (dig=null) は
+    // 三項演算子の else が **旧式と厳密に同一の式** ゆえ nSub は byte 不変。
+    const digS = surfaceParamsFor(this.surface);
+    const CaTot = digS ? 2 * T.mu0 * DYN.g * gripE * (C * Bp + digS.dig / digS.digSat) / T.alphaP
+                       : 2 * T.mu0 * DYN.g * gripE * C * Bp / T.alphaP;
     let need = Math.ceil(CaTot * dt / (Math.max(1.2, DYN.subSafety) * absU));
     // 車輪 ODE 陽的剛性条件 needW = ceil(2·λ·μFz·C·Bp/(κP·denom)·dt) (h·eig<0.5)。縦タイヤ剛性が車輪応答 λ で
     // 増幅され陽的発散する低速域を刻む。μFz は輪荷重上限 (前後左右移動＋ダウンフォース込)×μ、denom=|u| フロア。
     const q = (DYN.rho > 0 && DYN.frontalArea > 0) ? 0.5 * DYN.rho * DYN.frontalArea / (p.mass || MASS_REF) : 0;
     const fDownEst = DYN.Cl * q * absU * absU;                              // 高速ダウンフォース (mass-norm)
     const muFzMax = T.mu0 * gripE * (0.7 * DYN.g + fDownEst);   // per-wheel μ·Fz 上限 (AS9: 実効グリップ)
-    const dFxdvw = muFzMax * C * Bp / (T.kappaP * absU);
+    // 縦も同じ (∂fx/∂vw の最大は σ→0 の勾配。掘り込みぶんを足すのが正しい上界)。
+    const dFxdvw = (digS ? muFzMax * (C * Bp + digS.dig / digS.digSat) : muFzMax * C * Bp) / (T.kappaP * absU);
     const needW = Math.ceil(2 * V2.wheelLambda * dFxdvw * dt);
     // ── 半陰的化の適用境界 (AP13): 「構造的に低速な領域 かつ grip 十分」なときだけ nSub を削減する ──────
     // AO3 車輪 ODE を半陰的化 (_substep ⑥・無条件安定) すれば、上の陽的 needW (低速 1/absU で発散し nSub を上限
@@ -447,7 +485,7 @@ export class CarV2 extends DynCar {
     // していた (driveKeyOf 正規表現/mfCoeffs/muOf クロージャ/Math.sqrt/不変スカラー群)。sc の各値は旧 substep
     // 内の式と同一・同一入力ゆえ byte 同一 (f0-f3/S1/S4 verifyHash・traceHash 不変)。dt(=h) は引数のまま。
     const { p, dk, g, gN, grip, m, massK, L, a, b, tw, halfT, hCG, iz, maxV,
-            C, Bp, CBp, kP, aP, vLow, muOf, doWear, relLen, lsd, kf, kth, siWheel } = sc;
+            C, Bp, CBp, CBpD, kP, aP, vLow, muOf, doWear, relLen, lsd, kf, kth, dig, siWheel } = sc;
 
     // ── ⓪ 変速機 (Stage AS9・任意装備)。gr = 減速比 (モータートルク ×gr・車輪回転数 ÷gr)。
     //    既定 direct は sc.geared=false でこのブロックへ入らず gr=1 ⇒ 以降の式は旧経路と同一 double
@@ -628,8 +666,11 @@ export class CarV2 extends DynCar {
       const denom = Math.max(Math.abs(vcx), vLow);
       let muFz = muOf(w.n, w.n0) * w.n;   // μ_i·Fz_i (mass-norm)
       if (doWear) muFz *= fTW[w.idx];        // AO12: 熱・摩耗変調 (OFF は乗じない=byte 不変)
-      latCap += muFz;                        // 横グリップ容量 Σμ_i·Fz_i (定常円ゲート)
-      if (w.idx <= 1) latCapF += muFz;       // AS11: 前軸ぶん (過渡の前後バランス。物理は読まない診断量)
+      // AV1: **この路面でこの輪が出せる力の上限** = 摩擦円の半径。舗装 (dig=null) は muFz そのもの
+      // (同一 double) ゆえ以降の全式が byte 不変。ルーズ路面は掘り込みぶん μ_eff=μ·(1+dig) へ広がる。
+      const muFzEff = dig ? muFz * (1 + dig.dig) : muFz;
+      latCap += muFzEff;                     // 横グリップ容量 Σμ_eff,i·Fz_i (定常円ゲート)
+      if (w.idx <= 1) latCapF += muFzEff;    // AS11: 前軸ぶん (過渡の前後バランス。物理は読まない診断量)
       // 縦スリップ率 κ (§2.4・AO3 = 車輪 ODE 状態から)。駆動輪は面速度 vw_i と接地縦速 vcx の差、
       // 非駆動/惰行輪は接地追従 (κ=0=自由転動)。±クランプ (物理スリップ上限＋数値安定)。飽和で空転/ロック創発。
       const wheelDriven = activeDrive && w.split > 0;
@@ -638,11 +679,11 @@ export class CarV2 extends DynCar {
         kappa = Math.max(-V2.kappaClamp, Math.min(V2.kappaClamp, (this._vw[w.idx] - vcx) / denom));
       }
       const ta = Math.max(-V2.tanAClamp, Math.min(V2.tanAClamp, vcy / denom));
-      const F = tireForceMF(kappa, ta, muFz, C, Bp, kP, aP);
+      const F = tireForceMF(kappa, ta, muFz, C, Bp, kP, aP, dig);   // AV1: dig=null (舗装) は旧式と同一 double
       // 定常 MF 力 (fx,fy) の摩擦円マージン (構造的に |F|=μFz·g(σ)≤μFz) と 接地スリップ散逸性
       // (fx·vslx+fy·vsly≤0 を構造保証)。**§2.3 の不変条件を測る連続量オラクル (再実装でなく実力を読む)**。
       const vslx = -kappa * denom, vsly = vcy;   // v_slip (車輪系): 縦 vcx−vw=−κ·denom, 横 vcy
-      fcMarginSS = Math.max(fcMarginSS, Math.hypot(F.fx, F.fy) - muFz);
+      fcMarginSS = Math.max(fcMarginSS, Math.hypot(F.fx, F.fy) - muFzEff);
       slipPowSS = Math.max(slipPowSS, F.fx * vslx + F.fy * vsly);
       // 横力緩和長 (§2.3): 陰的 Euler (無条件安定)。τ=relLen/denom。fx は瞬時 (車輪動特性は AO3)。
       const tau = relLen / denom;
@@ -654,11 +695,11 @@ export class CarV2 extends DynCar {
       // ので (fx,fyDyn) を μFz へ半径クランプ (線形域では |F|≪μFz で不発 ⇒ fx≈需要は不変)。
       let fxA = F.fx, fyA = fyDyn;
       const Fapp = Math.hypot(fxA, fyA);
-      if (Fapp > muFz && Fapp > 1e-12) { const s = muFz / Fapp; fxA *= s; fyA *= s; }
-      fcMarginApp = Math.max(fcMarginApp, Math.hypot(fxA, fyA) - muFz);
+      if (Fapp > muFzEff && Fapp > 1e-12) { const s = muFzEff / Fapp; fxA *= s; fyA *= s; }
+      fcMarginApp = Math.max(fcMarginApp, Math.hypot(fxA, fyA) - muFzEff);
       // ── AO12: 輪ごと摩擦円利用率 |F|/μFz∈[0,1] (HUD・表示層のみ・物理非読取)＋滑り仕事率 P (熱/摩耗駆動量)。
       //    P = 利用率×正規化スリップ速 (|v_slip|/maxV) = **無次元＝相似スケール不変** (卓上⇔実機で同尺度・CI-14)。──
-      const utilW = muFz > 1e-12 ? Math.hypot(fxA, fyA) / muFz : 0;
+      const utilW = muFzEff > 1e-12 ? Math.hypot(fxA, fyA) / muFzEff : 0;
       this._muUse4[w.idx] = utilW;
       if (doWear) wSlipP[w.idx] = utilW * (Math.hypot(vslx, vsly) / Math.max(maxV, 1e-6));
       // 車輪系 → 車体系 (前輪は δ_i で回転)
@@ -682,7 +723,7 @@ export class CarV2 extends DynCar {
         //  explicit: 原 vw'=v0+λ·(fApp−fxA)·dt (低グリップは step() が needW を復元し高 nSub で走る=byte 保存)。
         let vwNew;
         if (siWheel) {
-          const kD = muFz * CBp / (kP * denom);   // 縦タイヤ剛性 ∂fx/∂vw (線形域・安全側)
+          const kD = muFz * CBpD / (kP * denom);   // 縦タイヤ剛性 ∂fx/∂vw (線形域・安全側。AV1: CBpD は掘り込み込み)
           vwNew = v0 + V2.wheelLambda * (fApp[w.idx] - fxA) * dt / (1 + V2.wheelLambda * kD * dt);
         } else {
           vwNew = v0 + V2.wheelLambda * (fApp[w.idx] - fxA) * dt;   // 原 explicit (低グリップ保存・byte 不変)
@@ -739,11 +780,11 @@ export class CarV2 extends DynCar {
       const cd0 = Math.cos(delta);
       let CaF, CaR;
       if (doWear) {   // AO12: 熱・摩耗で低下した μ を後退時の横剛性推定にも反映 (OFF は下の else=byte 不変)
-        CaF = (muOf(nFL, nF0) * fTW[0] * nFL + muOf(nFR, nF0) * fTW[1] * nFR) * CBp / aP;
-        CaR = (muOf(nRL, nR0) * fTW[2] * nRL + muOf(nRR, nR0) * fTW[3] * nRR) * CBp / aP;
+        CaF = (muOf(nFL, nF0) * fTW[0] * nFL + muOf(nFR, nF0) * fTW[1] * nFR) * CBpD / aP;
+        CaR = (muOf(nRL, nR0) * fTW[2] * nRL + muOf(nRR, nR0) * fTW[3] * nRR) * CBpD / aP;
       } else {
-        CaF = (muOf(nFL, nF0) * nFL + muOf(nFR, nF0) * nFR) * CBp / aP;
-        CaR = (muOf(nRL, nR0) * nRL + muOf(nRR, nR0) * nRR) * CBp / aP;
+        CaF = (muOf(nFL, nF0) * nFL + muOf(nFR, nF0) * nFR) * CBpD / aP;
+        CaR = (muOf(nRL, nR0) * nRL + muOf(nRR, nR0) * nRR) * CBpD / aP;
       }
       const kLat = (CaF * cd0 * cd0 + CaR) / absU;
       const ayNoLat = ay - sumFyTire;   // 横タイヤ力を除いた横 accel (Coriolis+空力)
