@@ -16,7 +16,7 @@ import { buildApi } from './api.js';
 import { buildController } from './runner.js';
 import {
   makeSlot, rebuildSpawns, integrateSlot, integrateFleetV2, tickSlot, othersFor, releaseDrive, swapPhysics, fitsAllCars, minClearance, applyStartGate,
-  normTire, normGear, normSusp, normSteer,   // AS9/AS11/AS12: 装備値の正規化 (白リスト外は既定へ) — UI/共有 URL/レース field で単一実装
+  normTire, normGear, normSusp, normSteer, normBrake,   // AS9/AS11/AS12/AV2: 装備値の正規化 (白リスト外は既定へ) — UI/共有 URL/レース field で単一実装
   // (driveableCapN は capacity.js から別 import)
 } from './fleet.js';
 import { driveableCapN } from './capacity.js';   // Stage AK7: 実態容量 (実走で「走り出せる最大台数」)
@@ -172,6 +172,7 @@ let tireSet = 'normal';   // v2 タイヤセット (normal|slip|rain)。既定 n
 let gearSet = 'direct';   // v2 ギア比 (direct|short|tall|auto2・Stage AS9 任意装備)。既定 direct=直結=byte 不変。v2 のみ物理反映
 let suspSet = 'quasi';    // v2 サス自由度 (quasi|soft|balanced|stiff・Stage AS11 任意装備)。既定 quasi=自由度なし=byte 不変。v2 のみ物理反映
 let steerSet = 'tri';     // 操舵サーボ (tri|prop・Stage AS12 任意装備)。既定 tri=実機準拠の3値=byte 不変。**3エンジン共通**で物理反映
+let brakeSet = 'motor';   // 制動装置 (motor|friction|frictionFront|frictionRear・Stage AV2 任意装備)。既定 motor=駆動軸のみ=byte 不変。v2 のみ物理反映
 let wearOn = false;       // タイヤ熱・摩耗モデル (Stage AO12・v2 専用 opt-in)。既定 OFF=byte 不変。ドリフトは後輪を消耗=戦略資源
 const keys = {};
 const opts = { rays: true, labels: false, grid: false, timestamp: false, depth: true };
@@ -512,7 +513,7 @@ function entryCarLabel(carType, carDef) {
 function buildRaceField() {
   return slots.map((s) => ({
     name: s.name, lang: s.lang, src: s.src,
-    carType: s.carType, rear: rearOn, encoder: encoderOn, tire: tireSet, gear: gearSet, susp: suspSet, steerSet,
+    carType: s.carType, rear: rearOn, encoder: encoderOn, tire: tireSet, gear: gearSet, susp: suspSet, steerSet, brake: brakeSet,
   }));
 }
 
@@ -1077,7 +1078,7 @@ function addCar() {
   slots.push(newSlot(i, prog.lang, prog.code));
   slots[slots.length - 1].world.rear = rearOn;
   slots[slots.length - 1].world.encoder = encoderOn;
-  { const s = slots[slots.length - 1]; s.world.tire = tireSet; s.world.wear = wearOn; s.world.gear = gearSet; s.world.susp = suspSet; s.world.steerSet = steerSet; s.car.steerSet = steerSet; if (s.car.engine === 'v2') { s.car.tireSet = tireSet; s.car.wear = wearOn; s.car.gearSet = gearSet; s.car.suspSet = suspSet; } }
+  { const s = slots[slots.length - 1]; s.world.tire = tireSet; s.world.wear = wearOn; s.world.gear = gearSet; s.world.susp = suspSet; s.world.brake = brakeSet; s.world.steerSet = steerSet; s.car.steerSet = steerSet; if (s.car.engine === 'v2') { s.car.tireSet = tireSet; s.car.wear = wearOn; s.car.gearSet = gearSet; s.car.suspSet = suspSet; s.car.brakeSet = brakeSet; } }
   rebuildSpawns(slots, course);
   buildFleetColumns();
   selectCar(slots.length - 1);
@@ -1710,6 +1711,19 @@ if (optSteerEl) optSteerEl.addEventListener('change', (e) => {
   running = false; paused = false;
   syncButtons();
   logLine(t('log.steer.' + steerSet));
+});
+// 制動装置 切替 (Stage AV2・任意装備)。既定 motor=駆動軸のモーターブレーキ=従来と完全一致。v2 エンジンのみ
+// 物理へ反映 (旧エンジンは無視=byte 不変)。4輪摩擦を選ぶと同じ総制動力が前後配分で 4 輪へ配られ、ロックが
+// 輪ごとに創発する。装備変更は全車へ適用し初期位置へリセット (ブレーキ交換=挙動が変わる)。
+const optBrakeEl = $('optBrake');
+if (optBrakeEl) optBrakeEl.addEventListener('change', (e) => {
+  brakeSet = normBrake(e.target.value);
+  slots.forEach(s => { s.world.brake = brakeSet; if (s.car.engine === 'v2') s.car.brakeSet = brakeSet; });
+  rebuildSpawns(slots, course);
+  running = false; paused = false;
+  syncButtons();
+  const v2 = (PHYSICS.mode === 'v2');
+  logLine(t('log.brake.' + brakeSet, { note: v2 ? '' : t('log.tire.v2only') }));
 });
 // タイヤ熱・摩耗トグル (Stage AO12)。opt-in=既定 OFF。v2 エンジンのみ物理へ反映 (旧エンジンは無視=byte 不変)。
 // ON にするとドリフト等の激しい滑りが後輪を消耗し、長丁場でグリップが目減りする「戦略資源」になる。装備変更=
@@ -2536,6 +2550,8 @@ function currentShareState() {
     susp: ($('optSusp') && $('optSusp').value !== 'quasi') ? $('optSusp').value : null,
     // 操舵サーボ (Stage AS12): 既定 tri のときは null=hash に載せない=既存共有 URL byte 不変。
     steerSet: ($('optSteer') && $('optSteer').value !== 'tri') ? $('optSteer').value : null,
+    // 制動装置 (Stage AV2): 既定 motor のときは null=hash に載せない=既存共有 URL byte 不変。
+    brake: ($('optBrake') && $('optBrake').value !== 'motor') ? $('optBrake').value : null,
     // 試走周回数 (Stage AO9): 既定 0 のときは null=hash に載せない=既存共有 URL byte 不変。
     recon: reconLapsOf('raceRecon') > 0 ? reconLapsOf('raceRecon') : null,
     // タイヤ熱・摩耗 (Stage AO12): 既定 false のときは null=hash に載せない=既存共有 URL byte 不変。
@@ -2631,6 +2647,13 @@ function applyShareState(st) {
       sel.value = st.steerSet; fireChange(sel);
     }
   }
+  // ②'''' 制動装置 (Stage AV2・optBrake change → brakeSet 適用 + reset=既存経路)。既定 motor は捕捉側で省略ゆえ通常 null。
+  if (st.brake != null) {
+    const sel = $('optBrake');
+    if (sel && [...sel.options].some(o => o.value === st.brake) && sel.value !== st.brake) {
+      sel.value = st.brake; fireChange(sel);
+    }
+  }
   // ②''' タイヤ熱・摩耗 (Stage AO12・optWear change → wearOn 適用 + reset=既存経路)。既定 false は捕捉側で省略ゆえ通常 null。
   if (st.wear != null) {
     const el = $('optWear');
@@ -2675,7 +2698,7 @@ function applyShareState(st) {
 }
 
 // 設定変更 → hash 更新の配線 (既存ハンドラに後追いの第2リスナを足す=非侵襲)。
-for (const id of ['courseSel', 'regimeSel', 'optNoise', 'themeSel', 'raceLaps', 'optPhysMode', 'optTire', 'raceRecon', 'optWear', 'optGear', 'optSusp', 'optSteer']) {
+for (const id of ['courseSel', 'regimeSel', 'optNoise', 'themeSel', 'raceLaps', 'optPhysMode', 'optTire', 'raceRecon', 'optWear', 'optGear', 'optSusp', 'optSteer', 'optBrake']) {
   const el = $(id); if (el) el.addEventListener('change', updateShareHash);
 }
 // 車種/プログラム/アクティブ車の変更は fleetCols 委譲 change と selectCar から拾う (下記参照)。

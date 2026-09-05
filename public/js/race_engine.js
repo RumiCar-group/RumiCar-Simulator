@@ -18,7 +18,7 @@
 import { SIM, CONST, SENSOR_NOISE, SENSOR_HOLD, SENSOR_OPTICS, REGIME_STATE, REGIMES, registerCarType, SCALE_STATE, setCarScale, APP_VERSION, PHYSICS, setPhysicsMode } from './config.js';
 import { applyRegime } from './physics_dyn.js';
 import { carEdges } from './physics.js';
-import { makeSlot, rebuildSpawns, integrateSlot, integrateFleetV2, tickSlot, othersFor, releaseDrive, applyStartGate, fitsAllCars, normTire, normGear, normSusp, normSteer } from './fleet.js';
+import { makeSlot, rebuildSpawns, integrateSlot, integrateFleetV2, tickSlot, othersFor, releaseDrive, applyStartGate, fitsAllCars, normTire, normGear, normSusp, normSteer, normBrake } from './fleet.js';
 import { buildController } from './runner.js';
 import { buildApi } from './api.js';
 
@@ -132,7 +132,7 @@ export function computeRaceTimeout({ course, laps = 3, regime = null }) {
 //   course   : 走行可能なコースオブジェクト (course.buildFromSpec の出力。純データ = JSON 往復可)。
 //   regime   : 'tabletop'|'midscale'|'fullscale'|null。指定時 applyRegime で物理スケールを適用。
 //   laps     : 完了に要する周回数 (>=1)。
-//   field    : [{ name, lang:'c'|'py'|'js', src, carType?, carDef?, rear?, encoder?, tire?, gear?, susp?, steerSet? }]。グリッド=配列順。
+//   field    : [{ name, lang:'c'|'py'|'js', src, carType?, carDef?, rear?, encoder?, tire?, gear?, susp?, steerSet?, brake? }]。グリッド=配列順。
 //              tire='slip'|'rain' は v2 エンジンのタイヤセット (Stage AO6/AS9・v2 のみ参照・既定 normal)。
 //              gear='short'|'tall'|'auto2' は v2 の任意装備ギア比 (Stage AS9・v2 のみ参照・既定 direct=直結)。
 //              carDef を与えると registerCarType で登録 (持ち込み車種=full JSON・W_spec §1)。
@@ -231,6 +231,9 @@ export function runRace(spec) {
       // AS11: サスペンション自由度 (任意装備・v2 のみ物理反映)。既定 quasi=自由度なし=従来と同一。
       slot.world.susp = normSusp(e.susp);
       if (slot.car.engine === 'v2') slot.car.suspSet = slot.world.susp;
+      // AV2: 制動装置 (任意装備・v2 のみ物理反映)。既定 motor=駆動軸のモーターブレーキ=従来と同一。
+      slot.world.brake = normBrake(e.brake);
+      if (slot.car.engine === 'v2') slot.car.brakeSet = slot.world.brake;
       // AS12: 操舵サーボ (任意装備)。**全エンジン共通** (サーボは Car の共通機構) ゆえ v2 判定を通さない。
       // world.steerSet は api.js が RC_steer の第2引数を受理するかの判定に使う (未装備なら 0 を返す)。
       slot.world.steerSet = normSteer(e.steerSet);
@@ -464,6 +467,11 @@ export function runRace(spec) {
     // これが W_spec §5 の「装備条件を記録の素へ刻む」= 連続舵で出した記録は3値の記録と別ハッシュになる。
     const steers = fitField.map((e) => normSteer(e && e.steerSet));
     if (steers.some((st) => st !== 'tri')) canonObj.steerSet = steers;
+    // AV2: 制動装置を canon に含めるのは **非既定 (motor 以外) の装備車が居るときだけ**。全車 motor は
+    // 末尾キーを付けない = 既存の全ハッシュ (f0/f1/f2/f3・全公式記録) が byte 完全不変 (gear/susp/steerSet と同型)。
+    // 摩擦ブレーキで出した記録はモーターブレーキの記録と別ハッシュになり、再実行検証で区別できる (W_spec §5)。
+    const brakes = fitField.map((e) => normBrake(e && e.brake));
+    if (brakes.some((bb) => bb !== 'motor')) canonObj.brake = brakes;
     // AO9: 試走 (spec.recon) を canon に含めるのは N>0 のときだけ (physics/tire/grid 前例と同型・末尾追加)。
     // 未指定/0 は末尾キーを付けない = 既存全ハッシュ (f0/f1/f2/f3) byte 完全不変。recon>0 は学習地図で
     // 本番挙動が変わり別ハッシュ (同コースでも別結果=正しい)、再実行で照合できる (自己記述的・§7)。

@@ -21,7 +21,14 @@ function noThrow(fn, msg) {
   catch (e) { fail++; fails.push(msg + ' — THREW: ' + (e && e.message)); return false; }
 }
 
-const ALL_NULL = { course: null, car: null, program: null, regime: null, laps: null, noise: null, theme: null, lang: null, physics: null, tire: null, recon: null, wear: null, gear: null, susp: null, steerSet: null };
+// 【AV2 是正】ALL_NULL は SHARE_FIELDS から **導出** する。以前はフィールド名を書き写したリテラルで、
+// スキーマへ 1 行足すたび③/⑦の 5 アサートが「値が違う」で落ちる第2真実源になっていた
+// (AV1 で SURFACE_KINDS に同じ是正をした型)。**フィールド集合そのものの検出力**は下の
+// スキーマ節 (件数・短縮キー一意・状態キー一意) と、直下の期待名リストが担う。
+const ALL_NULL = Object.fromEntries(SHARE_FIELDS.map(f => [f.name, null]));
+// 期待するフィールド名の明示リスト (導出化で検出力が消えないための固定点。スキーマを変えたらここも直す)。
+const EXPECT_NAMES = ['course', 'car', 'program', 'regime', 'laps', 'noise', 'theme', 'lang',
+                      'physics', 'tire', 'recon', 'wear', 'gear', 'susp', 'steerSet', 'brake'];
 
 // ---- 代表状態マトリクス (round-trip / 冪等) -------------------------------------
 const STATES = [
@@ -131,9 +138,11 @@ ok(hasShareState({}) === false, 'hasShareState: 空');
 ok(hasShareState({ course: '   ' }) === false, 'hasShareState: 無害化後空');
 
 // ---- スキーマ健全性 -----------------------------------------------------------
-ok(SHARE_FIELDS.length === 15, 'スキーマ 15 フィールド (Stage AO1: physics / AO6: tire / AO9: recon / AO12: wear / AS9: gear / AS11: susp / AS12: steerSet 追加)');
-ok(new Set(SHARE_FIELDS.map(f => f.k)).size === 15, '短縮キー一意');
-ok(new Set(SHARE_FIELDS.map(f => f.name)).size === 15, '状態キー一意');
+ok(SHARE_FIELDS.map(f => f.name).join(',') === EXPECT_NAMES.join(','),
+   'スキーマのフィールド名が期待どおり (順序込み): ' + SHARE_FIELDS.map(f => f.name).join(','));
+ok(SHARE_FIELDS.length === 16, 'スキーマ 16 フィールド (Stage AO1: physics / AO6: tire / AO9: recon / AO12: wear / AS9: gear / AS11: susp / AS12: steerSet / AV2: brake 追加)');
+ok(new Set(SHARE_FIELDS.map(f => f.k)).size === 16, '短縮キー一意');
+ok(new Set(SHARE_FIELDS.map(f => f.name)).size === 16, '状態キー一意');
 ok(SHARE_VERSION === 1, 'SHARE_VERSION=1');
 
 // ---- AO1 前方互換の byte 不変: physics 未指定の従来状態は 'ph=' を一切出さない (既存共有 URL 不変) ----

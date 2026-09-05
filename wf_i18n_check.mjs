@@ -154,7 +154,7 @@ try {
 //   race.summary./race.reason./official.status./store.what. は suffix が実行時データ駆動で単一ソース列挙
 //   不能＝対象外 (存在するキーの ja/en 空は ① が既に担保)。
 const { PROGRAMS } = await import('./public/js/programs.js');
-const { CAR_PARAM_DOC, REGIMES, TIRE_SETS, GEAR_SETS, SUSP_SETS, SUSP_DEFAULT, STEER_SETS, STEER_DEFAULT } = await import('./public/js/config.js'); // CHANGELOG/APP_VERSION と同モジュール
+const { CAR_PARAM_DOC, REGIMES, TIRE_SETS, GEAR_SETS, SUSP_SETS, SUSP_DEFAULT, STEER_SETS, STEER_DEFAULT, BRAKE_SETS, BRAKE_DEFAULT } = await import('./public/js/config.js'); // CHANGELOG/APP_VERSION と同モジュール
 const { DIFF_LEVELS } = await import('./public/js/challenge.js');   // AS13: チャレンジのバッジ suffix ドメイン
 const errSubs = new Set(['line', 'stepLimit']); // line=" (行 N)" 接尾ヘルパ / stepLimit=StepLimit クラス sub
 try {
@@ -185,6 +185,11 @@ const dynFamilies = [
   { prefix: 'log.steer.', keys: STEER_SETS, src: `STEER_SETS (${STEER_SETS.length})` },
   { prefix: 'fleet.steer.', keys: STEER_SETS, src: `STEER_SETS (${STEER_SETS.length})` },
   { prefix: 'hud.lb.steer.', keys: STEER_SETS.filter((k) => k !== STEER_DEFAULT), src: `STEER_SETS 非既定 (${STEER_SETS.length - 1})` },
+  // AV2: 制動装置も同型 (main.js が t('log.brake.'+brakeSet)、hud.js が t('hud.lb.brake.'+…))。
+  // HUD は非既定のときだけバッジを出すので既定 (motor) のラベルは持たない。
+  { prefix: 'log.brake.', keys: BRAKE_SETS, src: `BRAKE_SETS (${BRAKE_SETS.length})` },
+  { prefix: 'fleet.brake.', keys: BRAKE_SETS, src: `BRAKE_SETS (${BRAKE_SETS.length})` },
+  { prefix: 'hud.lb.brake.', keys: BRAKE_SETS.filter((k) => k !== BRAKE_DEFAULT), src: `BRAKE_SETS 非既定 (${BRAKE_SETS.length - 1})` },
   // AS13: チャレンジのバッジ/状態は main.js が t('chal.badge.'+key) / t('chal.state.'+state) で動的構築する。
   // suffix ドメインの権威は challenge.js の DIFF_LEVELS (バッジは first + 難度ごと + all) と 3 状態の enum
   // ⇒ 難度の刻みを増やしたらラベル付け忘れで必ず落ちる (TIRE_SETS と同型)。

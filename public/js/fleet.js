@@ -1,6 +1,6 @@
 // 車両スロット = 1台分の実行単位 (プログラム・物理・ラップ計測)。
 // スロットの生成・グリッド配置・物理積分・プログラム tick を main (UI/ループ) から分離。
-import { FLEET, CAR_TYPE_DEFAULT, CONST, SIM, CAR, PHYSICS, TIRE_SETS, TIRE_DEFAULT, GEAR_SETS, GEAR_DEFAULT, SUSP_SETS, SUSP_DEFAULT, STEER_SETS, STEER_DEFAULT, gLatOf } from './config.js';
+import { FLEET, CAR_TYPE_DEFAULT, CONST, SIM, CAR, PHYSICS, TIRE_SETS, TIRE_DEFAULT, GEAR_SETS, GEAR_DEFAULT, SUSP_SETS, SUSP_DEFAULT, STEER_SETS, STEER_DEFAULT, BRAKE_SETS, BRAKE_DEFAULT, gLatOf } from './config.js';
 
 // 装備値の正規化 (Stage AO6/AS9)。白リスト外・未指定は既定へ落とす **単一の実装** (UI・共有 URL・
 // レース field・swapPhysics が同じ規則を通る=「同じ値が意味の違う複数箇所」でズレない)。
@@ -9,6 +9,7 @@ export function normTire(v) { return TIRE_SETS.includes(v) ? v : TIRE_DEFAULT; }
 export function normGear(v) { return GEAR_SETS.includes(v) ? v : GEAR_DEFAULT; }
 export function normSusp(v) { return SUSP_SETS.includes(v) ? v : SUSP_DEFAULT; }   // AS11
 export function normSteer(v) { return STEER_SETS.includes(v) ? v : STEER_DEFAULT; } // AS12 (3エンジン共通)
+export function normBrake(v) { return BRAKE_SETS.includes(v) ? v : BRAKE_DEFAULT; } // AV2 (v2 のみ)
 import { Car, checkCollision, carEdges } from './physics.js';
 import { DynCar, DYN } from './physics_dyn.js';
 import { CarV2 } from './physics_v2.js';
@@ -295,12 +296,13 @@ export function makeSlot({ i, lang, src, course, slotCount, logFor }) {
     wear: false,      // AO12: タイヤ熱・摩耗 opt-in。v2 車のみ car.wear へ反映 (旧エンジンは無視)。
     gear: GEAR_DEFAULT,  // AS9: ギア比 (任意装備・既定 direct=直結)。v2 車のみ car.gearSet へ反映 (旧エンジンは無視)。
     susp: SUSP_DEFAULT,  // AS11: サス自由度 (任意装備・既定 quasi=自由度なし)。v2 車のみ car.suspSet へ反映 (旧エンジンは無視)。
+    brake: BRAKE_DEFAULT, // AV2: 制動装置 (任意装備・既定 motor=駆動軸のみ)。v2 車のみ car.brakeSet へ反映 (旧エンジンは無視)。
     // AS12: 操舵サーボ (任意装備・既定 tri=実機準拠の3値)。**3エンジン共通** (サーボは Car が持つ共通機構ゆえ
     // v2 専用の上3つと違い standard/dynamic でも効く)。api.js が world.steerSet を見て第2引数を受理する。
     steerSet: STEER_DEFAULT,
   };
   car.steerSet = slot.world.steerSet;   // AS12: 全エンジン (Car/DynCar/CarV2 が共通で持つ)
-  if (car.engine === 'v2') { car.tireSet = slot.world.tire; car.wear = slot.world.wear; car.gearSet = slot.world.gear; car.suspSet = slot.world.susp; }
+  if (car.engine === 'v2') { car.tireSet = slot.world.tire; car.wear = slot.world.wear; car.gearSet = slot.world.gear; car.suspSet = slot.world.susp; car.brakeSet = slot.world.brake; }
   slot._road = roadFrame(course);   // AP11/AS10: 道追従の路面フレーム (勾配+カント。平坦コース=null=no-op)
   slot.hostEnv = buildApi(slot.world);
   return slot;
@@ -321,6 +323,7 @@ export function swapPhysics(slots) {
       car.wear = !!(s.world && s.world.wear);
       car.gearSet = normGear(s.world && s.world.gear);
       car.suspSet = normSusp(s.world && s.world.susp);   // AS11
+      car.brakeSet = normBrake(s.world && s.world.brake); // AV2
     }
     s.car = car;
     s.world.car = car;

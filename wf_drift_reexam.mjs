@@ -42,6 +42,11 @@
 //   node wf_drift_reexam.mjs           # 既定=縮小掃引。アサート緑/赤で exit 0/1
 //   node wf_drift_reexam.mjs --full    # 全表(Part1 36セル系統掃引ほか)。docs 転記用
 //   node wf_drift_reexam.mjs --json    # 表を JSON で吐く(internal の docs/stage_au/reexam_result.md へ整形転記)
+//   node wf_drift_reexam.mjs --brake=friction   # AV2 の 4輪摩擦ブレーキを積んで同じ表を取り直す
+//     （**未指定なら car.brakeSet を一切書かない**＝AU3 時点と byte 不変。回帰フックの片側）
+//     **注意: --brake= を付けた実行は必ず赤で終わる**（exit 1）。本ゲートのアサートは AU3 の結論＝
+//     「**既定装備での**話」を固定しているので、装備を替えれば P1-1/P1-2/AU3-b1 等が崩れる。
+//     それが測定結果であってゲートの故障ではない。`wf_run_all` は --brake を渡さない（既定で緑）。
 // 所要は末尾に Part 別で印字する(ホスト依存ゆえ本文に固定値を書かない)。
 // ══════════════════════════════════════════════════════════════════════════════════════
 import { buildFromSpec } from './public/js/course.js';
@@ -59,6 +64,10 @@ import { dirname, join } from 'node:path';
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const FULL = process.argv.includes('--full');
 const WANT_JSON = process.argv.includes('--json');
+// 【AV2 追加 2026-09-05】制動装置を差し替えて同じ表を取り直すためのオプション（回帰フック）。
+// **既定は 'motor'（＝実装の既定）で、指定しなければ car.brakeSet を一切書かない**ので
+// AU3 時点と 1 バイトも変わらない（下の mkCar/Part3 の guarded branch）。
+const BRAKE_ARG = (process.argv.find(a => a.startsWith('--brake=')) || '').slice(8) || null;
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ✓ ' + m); } else { fail++; console.log('  ✗ ' + m); } };
 
@@ -73,6 +82,7 @@ const R_MIN = CAR.wheelBase / Math.tan(CAR.maxSteer);
 const HALF_W_CAR = CAR.width / 2;
 console.log(`\n[AU3] ドリフト再検証プローブ  APP=${APP_VERSION}  fullscale v2  R_min=${R_MIN.toFixed(3)}m  車体 ${CAR.length}x${CAR.width}m`);
 console.log(`  掃引: ${FULL ? '系統(--full・docs 転記用)' : '既定 縮小'}   ドライバ=AU3(符号是正＋catch 単位是正＋後退ガード)`);
+if (BRAKE_ARG) console.log(`  ⚙ 制動装置 = ${BRAKE_ARG}（AV2 の任意装備。--brake= 未指定なら car.brakeSet を書かず AU3 と byte 不変）`);
 
 // ── 共通ドライバ部品(AP14/AP15/touge と同型) ──────────────────────────────────────────
 // v2 の pwm は「目標速度 = pwm/255·maxV」(physics_v2.js)。低 pwm でも全トルク指令になりうるので、
@@ -99,6 +109,7 @@ function applySteer(car, prop, norm) {
 function mkCar(course, type, prop, x = 0, y = 0, th = 0) {
   const car = new CarV2({ ...course.start, x, y, theta: th });
   car.type = type; car.tireSet = 'normal'; car.steerSet = prop ? 'prop' : 'tri';
+  if (BRAKE_ARG) car.brakeSet = BRAKE_ARG;   // AV2: 未指定なら書かない = AU3 と byte 不変
   return car;
 }
 // 助走で U まで上げてから原点へ戻す(速度状態は保持)。意図線の中心 (0,R) と整合させる。
@@ -487,6 +498,7 @@ function race(S, modeL, laps, gapM) {
   };
   const mkSlot = (x, y, th) => {
     const car = new CarV2({ ...S.course.start, x, y, theta: th }); car.type = 'normal_fr'; car.tireSet = 'normal';
+    if (BRAKE_ARG) car.brakeSet = BRAKE_ARG;   // AV2: 未指定なら書かない = AU3 と byte 不変
     return { car, lap: new LapTracker(S.course, { persist: false }), world: { log: () => {} }, running: true, _road: null, spawn: { x, y, theta: th } };
   };
   const s0 = 5, cL = S.centerAt(s0), cF = S.centerAt(s0 - gapM);

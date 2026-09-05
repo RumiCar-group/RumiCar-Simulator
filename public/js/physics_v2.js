@@ -26,7 +26,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 import { DynCar, DYN, DYN_DRIVE, dynDriveKey } from './physics_dyn.js';
 import { CAR, CONST, MASS, MASS_REF, REGIMES, registerRegimeHook, gPlane, gNormal, GEARS, GEAR_DEFAULT,
-         SUSPS, SUSP_DEFAULT, SURFACES, SURFACE_DEFAULT, steerTargetOf } from './config.js';
+         SUSPS, SUSP_DEFAULT, SURFACES, SURFACE_DEFAULT, BRAKES, BRAKE_DEFAULT, steerTargetOf } from './config.js';
 
 // 駆動方式キーは physics_dyn.js の dynDriveKey を共用する (AP22 で旧 driveKeyOf の再実装を 2→1 統合)。
 
@@ -150,6 +150,19 @@ export function surfaceParamsFor(surface) {
   return (Number.isFinite(s.dig) && s.dig > 0 && Number.isFinite(s.digSat) && s.digSat > 0) ? s : null;
 }
 
+// ── 制動装置の解決 (Stage AV2・車両の任意装備) ────────────────────────────────────
+// car.brakeSet ('motor'|'friction'|'frictionFront'|'frictionRear') から BRAKES の定義を引く
+// (未知/未指定は motor)。motor (null) は「4輪摩擦ブレーキなし」= 呼び側が brk=null で配分ブロックを
+// 飛ばし駆動軸 split の従来経路をそのまま通る = byte 不変
+// (surfaceParamsFor の paved・suspParamsFor の quasi・gearParamsFor の direct と同じ作法)。
+export function brakeParamsFor(brakeSet) {
+  const b = Object.prototype.hasOwnProperty.call(BRAKES, brakeSet) ? BRAKES[brakeSet] : BRAKES[BRAKE_DEFAULT];
+  // 値域の防御 (AV1 軽6 と同型): biasF が [0,1] の外や非有限だと片軸へ負の制動力 (=加速) が流れ、
+  // 「総量は fCmd のまま配分だけ変える」という不変条件が壊れる。壊れた定義は **既定 (null) へ縮退**。
+  if (!b) return null;
+  return (Number.isFinite(b.biasF) && b.biasF >= 0 && b.biasF <= 1) ? b : null;
+}
+
 // v2 の領域別較正を V2 holder / _tireCal へ適用する (Stage AO5/AO6・applyRegime の choke point からフック
 // 起動)。**DYN/CAR は applyRegime が既に設定済** (g/空力/長さスケール) — 本関数は v2 専用パラメータ
 // (定出力ドライブトレイン＋タイヤセット) のみを書く。引数は REGIMES キー文字列 or applyRegime が渡す領域
@@ -258,6 +271,7 @@ export class CarV2 extends DynCar {
     this.wear = false;     // タイヤ熱・摩耗モデル (Stage AO12・opt-in)。tireSet 同様 外部設定・reset で不変。
     this.gearSet = GEAR_DEFAULT;  // 装備ギア (Stage AS9・opt-in)。既定 'direct'=直結=byte 不変。tireSet 同様 reset で不変。
     this.suspSet = SUSP_DEFAULT;  // 装備サス (Stage AS11・opt-in)。既定 'quasi'=自由度なし=byte 不変。reset で不変。
+    this.brakeSet = BRAKE_DEFAULT; // 装備ブレーキ (Stage AV2・opt-in)。既定 'motor'=駆動軸のみ=byte 不変。reset で不変。
   }
 
   // v2 状態フィールドを追加 (DynCar の公開面は super.reset で全て初期化)。
@@ -294,6 +308,12 @@ export class CarV2 extends DynCar {
     this._temp = [TH.t0, TH.t0, TH.t0, TH.t0];  // 輪ごと温度 (熱状態・冷間 t0 始動・§6)
     this._wear = [0, 0, 0, 0];                  // 輪ごと摩耗量 (単調増加=資源枯渇・§6)
     this._muUse4 = [0, 0, 0, 0];  // 輪ごと摩擦円利用率 |F|/μFz∈[0,1] (HUD #AO12・表示層のみ・物理非読取)
+    // ── Stage AV2: 制動/駆動の輪ごと診断量 (**表示・ゲート専用・物理は一切読み戻さない**・_muUse4 と同じ作法)。
+    // ゲートが「実装が実際にどう配分し、どれだけの縦力を出したか」を **外から** 読むための量。
+    // (AV1 の敵対的検証で「不変条件をゲート側で再計算すると実装を 2 倍にしても緑のまま」が実証された
+    //  ため、AV2 では配分と力の両方を実装の側から読む述語を置く。)
+    this._fAppWheel = [0, 0, 0, 0];  // 輪へ指令した縦力 fApp (制動は負・駆動は正・非駆動/惰行輪は 0)
+    this._fxWheel = [0, 0, 0, 0];    // 輪が実際に路面へ出した縦力 fxA (車輪系・緩和/半径クランプ後)
     // ── Stage AS9: 変速機の状態 (発走ごとに 1速・変速中でない)。direct 装備では参照されない (=byte 不変) ──
     this._gearIdx = 0;     // 現在の段 (GEARS[gearSet].ratios の添字)
     this._shiftT = 0;      // 変速で駆動が切れている残り時間 [s] (>0 の間 駆動トルク 0)
@@ -397,6 +417,9 @@ export class CarV2 extends DynCar {
     // 掘り込み込みの σ→0 線形勾配。舗装 (dig=null) は CBp と**同一 double** ゆえ これを使う式は
     // すべて旧式と bit 一致する (車輪 ODE の半陰的剛性 kD・REVERSE 半陰の横剛性 CaF/CaR)。
     const CBpD = dig ? CBp + dig.dig / dig.digSat : CBp;
+    // AV2: 制動装置 (per-step 不変。this.brakeSet は step 実行中に変わらない)。
+    // motor/未指定は null ⇒ 差動ブロックも wheelDriven も旧経路と同一 = byte 不変。
+    const brk = brakeParamsFor(this.brakeSet);
     const S = suspParamsFor(this.suspSet);
     let susp = null;
     if (S) {
@@ -418,7 +441,7 @@ export class CarV2 extends DynCar {
     const gearN = ratios.length;
     const shiftSec = (G.shiftSec0 || 0) * Math.sqrt(L / 0.13);
     return { p, dk, g, gN, grip, m, massK, L, a, b, tw, halfT, hCG, iz, maxV,
-             C, Bp, CBp, CBpD, kP, aP, vLow, muOf, doWear, relLen, lsd, kf, kth, susp, dig,
+             C, Bp, CBp, CBpD, kP, aP, vLow, muOf, doWear, relLen, lsd, kf, kth, susp, dig, brk,
              geared, ratios, gearN, upAt: G.upAt || 0, downAt: G.downAt || 0, shiftSec };
   }
 
@@ -485,7 +508,7 @@ export class CarV2 extends DynCar {
     // していた (driveKeyOf 正規表現/mfCoeffs/muOf クロージャ/Math.sqrt/不変スカラー群)。sc の各値は旧 substep
     // 内の式と同一・同一入力ゆえ byte 同一 (f0-f3/S1/S4 verifyHash・traceHash 不変)。dt(=h) は引数のまま。
     const { p, dk, g, gN, grip, m, massK, L, a, b, tw, halfT, hCG, iz, maxV,
-            C, Bp, CBp, CBpD, kP, aP, vLow, muOf, doWear, relLen, lsd, kf, kth, dig, siWheel } = sc;
+            C, Bp, CBp, CBpD, kP, aP, vLow, muOf, doWear, relLen, lsd, kf, kth, dig, brk, siWheel } = sc;
 
     // ── ⓪ 変速機 (Stage AS9・任意装備)。gr = 減速比 (モータートルク ×gr・車輪回転数 ÷gr)。
     //    既定 direct は sc.geared=false でこのブロックへ入らず gr=1 ⇒ 以降の式は旧経路と同一 double
@@ -632,8 +655,25 @@ export class CarV2 extends DynCar {
 
     // ── 差動 (§2.4): 軸指令 fCmd·split を左右輪へ配分。open=等分、LSD=Δvw で移送 (総軸力は不変=ヨーのみ) ──
     // relLen・lsd は sc へ巻き上げ済。
+    // ── Stage AV2: 4輪摩擦ブレーキ (opt-in)。装備車が BRAKE を出している substep だけ、制動力の配分を
+    //    「駆動軸 split」から「前後 biasF 配分」へ差し替える。**総量 fCmd は変えない** (配分だけの比較)。
+    //    ロックは車輪 ODE から創発する (下の wheelDriven で非駆動軸も ODE に参加する)。
+    //    brk が null (既定 motor) なら fricBrake は常に false ⇒ 下は旧経路そのもの = byte 不変。
+    const fricBrake = brk !== null && braking;
     const fApp = [0, 0, 0, 0];   // [FL,FR,RL,RR] への適用力 (mass-norm・非駆動/惰行輪は 0)
-    if (activeDrive) {
+    if (fricBrake) {
+      // 前軸へ biasF・後軸へ (1−biasF)。各軸内は左右等分。**駆動軸だけは左右がデフで結合**している
+      // ので LSD の移送 Tt を従来どおり適用する (総軸力は不変=ヨーのみ変える)。非駆動軸のブレーキ
+      // キャリパは輪ごとに独立ゆえ結合しない (lsd=0 の車は どちらでも Tt=0 で同じ)。
+      for (let ax = 0; ax < 2; ax++) {
+        const wl = ax === 0 ? 0 : 2, wr = ax === 0 ? 1 : 3;   // 左/右輪 idx
+        const fAxle = fCmd * (ax === 0 ? brk.biasF : 1 - brk.biasF);
+        const half = 0.5 * fAxle;
+        const Tt = dk.split[ax] > 0 ? lsdTorque(this._vw[wl] - this._vw[wr], fAxle, lsd) : 0;
+        fApp[wl] = half - Tt;
+        fApp[wr] = half + Tt;
+      }
+    } else if (activeDrive) {
       for (let ax = 0; ax < 2; ax++) {
         const share = dk.split[ax];
         if (share <= 0) continue;               // 非駆動軸: fApp=0 (接地追従)
@@ -673,7 +713,10 @@ export class CarV2 extends DynCar {
       if (w.idx <= 1) latCapF += muFzEff;    // AS11: 前軸ぶん (過渡の前後バランス。物理は読まない診断量)
       // 縦スリップ率 κ (§2.4・AO3 = 車輪 ODE 状態から)。駆動輪は面速度 vw_i と接地縦速 vcx の差、
       // 非駆動/惰行輪は接地追従 (κ=0=自由転動)。±クランプ (物理スリップ上限＋数値安定)。飽和で空転/ロック創発。
-      const wheelDriven = activeDrive && w.split > 0;
+      // AV2: 摩擦ブレーキ作動中は **非駆動輪にも制動力が掛かる** ので車輪 ODE に参加させる
+      // (κ が 0 でなくなり、fApp が縦力容量を超えた輪から順にロックが創発する)。
+      // fricBrake=false (既定 motor・非制動) は旧式と同一 = byte 不変。
+      const wheelDriven = fricBrake || (activeDrive && w.split > 0);
       let kappa = 0;
       if (wheelDriven) {
         kappa = Math.max(-V2.kappaClamp, Math.min(V2.kappaClamp, (this._vw[w.idx] - vcx) / denom));
@@ -701,6 +744,8 @@ export class CarV2 extends DynCar {
       //    P = 利用率×正規化スリップ速 (|v_slip|/maxV) = **無次元＝相似スケール不変** (卓上⇔実機で同尺度・CI-14)。──
       const utilW = muFzEff > 1e-12 ? Math.hypot(fxA, fyA) / muFzEff : 0;
       this._muUse4[w.idx] = utilW;
+      this._fxWheel[w.idx] = fxA;            // AV2: 実際に出た縦力 (診断・物理非読取)
+      this._fAppWheel[w.idx] = fApp[w.idx];  // AV2: 指令した縦力 = 配分の実測点 (診断・物理非読取)
       if (doWear) wSlipP[w.idx] = utilW * (Math.hypot(vslx, vsly) / Math.max(maxV, 1e-6));
       // 車輪系 → 車体系 (前輪は δ_i で回転)
       const fxB = fxA * cD - fyA * sD;

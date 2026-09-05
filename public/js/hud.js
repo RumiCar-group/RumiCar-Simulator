@@ -203,6 +203,7 @@ export function drawFleetHud(ctx, slots, view, activeIdx) {
     if (c.tireSet && c.tireSet !== 'normal') equip.push(t('hud.lb.tire.' + c.tireSet));
     if (c.gearSet && c.gearSet !== 'direct') equip.push(t('hud.lb.gear.' + c.gearSet));
     if (c.suspSet && c.suspSet !== 'quasi') equip.push(t('hud.lb.susp.' + c.suspSet));   // AS11
+    if (c.brakeSet && c.brakeSet !== 'motor') equip.push(t('hud.lb.brake.' + c.brakeSet));  // AV2
   }
   if (equip.length) note += '  [' + [...new Set(equip)].join('/') + ']';
   // AS1: 注記の実測幅にパネル幅を合わせる。固定幅 268px では注記が枠を越えて canvas の外へ

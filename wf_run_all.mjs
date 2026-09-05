@@ -57,6 +57,9 @@ const GATES = [
   // AV1: ルーズ路面属性 course.surface='loose'（掘り込み項）の受け入れゲート。
   //   既定=縮小掃引。--full は docs 転記用で長い。Part C（実走 go/no-go）が所要の大半を占める。
   'wf_av1_loose.mjs',
+  // AV2: 4輪摩擦ブレーキ brakeSet（車両の任意装備）の受け入れゲート。
+  //   既定=縮小掃引（D 章の格子2 を 32 セルへ）。--full は docs 転記用で 288 セルへ広げる。
+  'wf_av2_brake.mjs',
 ].map((name) => ({ name, args: [] }));
 
 // official_result は決定論2回照合→result.json 再検証→Node pin 照合の複合ゲート (AP20)。

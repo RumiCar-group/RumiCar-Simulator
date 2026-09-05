@@ -10,8 +10,8 @@
 //  - 依存ゼロ (import なし)。本モジュールが「共有スキーマの単一ソース」。
 //  - 対象は AF1 の最小確定セット 8 フィールド＋Stage AO の任意 4 フィールド
 //    (physics/tire/recon/wear) ＋ Stage AS9 の 1 フィールド (gear) ＋ Stage AS11 の 1 フィールド
-//    (susp) ＋ Stage AS12 の 1 フィールド (steerSet)。既定値は捕捉側 null=省略で既存 URL byte
-//    不変 = 計 15 (下記 SHARE_FIELDS)。
+//    (susp) ＋ Stage AS12 の 1 フィールド (steerSet) ＋ Stage AV2 の 1 フィールド (brake)。
+//    既定値は捕捉側 null=省略で既存 URL byte 不変 = 計 16 (下記 SHARE_FIELDS)。
 //  - course/car/program/regime/theme/lang は「内容識別子」= 不透明な無害化文字列として
 //    扱い、実在判定 (組込 id / 自作名の解決) と既定フォールバック+通知は AF2 が
 //    レジストリ突き合わせで行う (AF2 受け入れ基準: 自作物は名前参照+フォールバック+通知)。
@@ -21,7 +21,7 @@
 //
 // hash 書式 (自己記述・key=value を & で連結・各値は encodeURIComponent):
 //   v=1&c=<course>&car=<carKey>&p=<progKey>&rg=<regime>&l=<laps>&n=<0|1>&th=<theme>&lg=<lang>
-//   (任意・非既定時のみ) &ph=<physics>&tr=<tire>&rc=<recon>&we=<0|1>&gr=<gear>&sp=<susp>&ss=<steerSet>
+//   (任意・非既定時のみ) &ph=<physics>&tr=<tire>&rc=<recon>&we=<0|1>&gr=<gear>&sp=<susp>&ss=<steerSet>&bk=<brake>
 //   先頭 'v' は将来のスキーマ移行用バージョン印 (decode は寛容に解釈)。
 
 export const SHARE_VERSION = 1;
@@ -44,6 +44,7 @@ export const SHARE_FIELDS = [
   { name: 'gear',    k: 'gr',  type: 'str'  }, // ギア比: direct|short|tall|auto2 (Stage AS9・v2 専用の任意装備。既定 direct は捕捉側で null=省略ゆえ既存 hash byte 不変)
   { name: 'susp',    k: 'sp',  type: 'str'  }, // サス自由度: quasi|soft|balanced|stiff (Stage AS11・v2 専用の任意装備。既定 quasi は捕捉側で null=省略ゆえ既存 hash byte 不変)
   { name: 'steerSet',k: 'ss',  type: 'str'  }, // 操舵サーボ: tri|prop (Stage AS12・**全エンジン共通**の任意装備。既定 tri=実機準拠の3値は捕捉側で null=省略ゆえ既存 hash byte 不変。car.steerSet と同名にして「同じ値が意味の違う複数箇所」を作らない=api.js の world.steerSet も同名)
+  { name: 'brake',   k: 'bk',  type: 'str'  }, // 制動装置: motor|friction|frictionFront|frictionRear (Stage AV2・v2 専用の任意装備。既定 motor=駆動軸のモーターブレーキは捕捉側で null=省略ゆえ既存 hash byte 不変)
 ];
 
 const MAX_STR = 200; // 文字列値の上限長 (自作名の暴走/巨大 hash を防ぐ安全弁)。
@@ -71,7 +72,7 @@ function coerceByType(type, v) {
   return coerceStr(v);
 }
 
-// 任意入力 → SHARE_FIELDS 全 12 キーを持つ正規化状態 (各キーは値 or null)。冪等。入力は変更しない。
+// 任意入力 → SHARE_FIELDS 全 16 キーを持つ正規化状態 (各キーは値 or null)。冪等。入力は変更しない。
 export function normalizeState(raw) {
   const src = (raw && typeof raw === 'object') ? raw : {};
   const out = {};
