@@ -45,7 +45,17 @@
 // 壁不侵犯は AU1 の要求どおり **poseClearance≥0 ∧ checkCollision=false の両方**で判定する
 // (旧実装は poseClearance の hit を計算しながら GO 判定に接続していなかった)。
 //
-// 出力: 機械アサート(幾何/criterion①②/弁別性/決定論/逆ハン発火/動的 GO) は緑/赤。go/no-go 表は JSON(--json)
+// ── 【AU3 追補 2026-09-05・物理無改変】──────────────────────────────────────────────
+// (a') **grip の動的アーム**を追加した。AU1 は「grip の動的実走は未測定」という札を残していた
+//      (criterion ① は定常円弧の幾何掃引で、直線区間を使う非定常な grip 線は探索対象外)。
+//      実 CarV2.step で grip 走行(意図的な滑りを作らない)を同じ廊下で走らせ、forced/intermediate では
+//      180°完走＋壁不侵犯が **0/16 行** であること、かつ **同じドライバが対照セルでは 2/2 で完走する**
+//      こと(弁別性)を機械固定する。後者が無いと「grip では通れない」は反証不能になる。
+// (i)  **catch 相の単位不一致を是正**（下の該当箇所を参照）。**(i) だけを入れた中間状態では** GO 3→6/8。
+// (iv) **ターンイン判定を後軸 x → 車体前端 x** へ（下の該当箇所を参照）。lead=0 の run が助走中に
+//      破断して掃引が半減していた欠陥の是正。(i)(iv) 併せて GO は **3 → 5/8**・クリアランス余裕も改善。
+//
+// 出力: 機械アサート(幾何/criterion①②/弁別性/決定論/逆ハン発火/動的 GO/grip 動的) は緑/赤。go/no-go 表は JSON(--json)
 //        で吐き docs/stage_ap/AP14_wallhairpin.md へ整形転記する(版スタンプ=AP-0)。
 //        既定は縮小掃引(128 点/セル・駆動)。`--full` で系統掃引(576 点)＝スクラッチ再検証と同一格子。
 
@@ -220,8 +230,14 @@ function dynDriftReach(g, drive, prm) {
     return s;
   };
   // phase 0: 直線助走(steer=CENTER)で ターンイン点(cap の lead m 手前)まで vEntry へ。
+  // 【AU3 是正 2026-09-05・持ち越し(iv)】ターンイン判定を **後軸 x → 車体前端 x** へ変えた。
+  //   insideCorridor は x≥capX で直線帯判定から円判定へ切り替わる。前端は後軸より (length−rearToBack)
+  //   =3.2m 前にあるので、後軸基準の lead=0 では **助走の直進中に前端が円判定域へ入り外径を超えて破断**し、
+  //   lead=0 の run が全滅＝実効掃引が半減していた(AU1 の敵対的レビュー指摘 (iv)・全 best 行が lead=4 だった)。
+  //   前端基準なら lead=0 は「鼻がキャップ入口に来た瞬間にターンイン」という幾何的に意味のある点になる。
+  const frontX = () => { let m = -1e9; for (const p of car.corners()) if (p.x > m) m = p.x; return m; };
   let guard = 0;
-  while (car.x < g.capX - prm.lead && guard++ < 4000) {
+  while (frontX() < g.capX - prm.lead && guard++ < 4000) {
     car.steer = CONST.CENTER; car.steerAmt = null;
     if (car.u < vEntry) { car.driveDir = CONST.FORWARD; car.pwm = 255; } else holdSpeed(car, vEntry);
     car.step(DT); measure();
@@ -246,12 +262,15 @@ function dynDriftReach(g, drive, prm) {
       car.driveDir = CONST.FORWARD; car.pwm = (sl > prm.beta + 4) ? prm.pHold : tcPwm(car, 255, 0.6);
       noteCounter(car, prm.beta, applied);
     } else {
-      // ⚠ 実測: remaining は rad・deg=57.3 ゆえ catchGain*remaining*deg は残 0.33° を切るまで β を超える。
-      //   ∴ この式では **滑り目標の絞りは実質 no-op** で、catch 相は hold 相とスロットル規則しか違わない。
-      //   移植元スクラッチ(drift_reexam.mjs:222)に忠実＝AU-0 の実測値を再現するためこのまま残す。
-      //   touge/AP15 は `60 * remaining`(deg 掛けなし)で残 33° から実際に絞る＝**同族3本で単位が不一致**。
-      //   どちらを正とするかは AU3 で決める(結論を変えうるので AU1 では触らない)。
-      const slTgt = Math.max(0, Math.min(prm.beta, prm.catchGain * remaining * deg));
+      // 【AU3 是正 2026-09-05・持ち越し(i)】catch 相の滑り目標を touge/AP15 と同じ `catchGain * remaining` へ揃えた。
+      //   旧式 `catchGain * remaining * deg` は次元が deg²/rad で **不整合**(remaining は rad・catchGain は deg/rad)。
+      //   数値でも 残 0.33° を切るまで目標が β を超え続ける＝**絞りが実質 no-op** だった(AU1 が実測して残した札)。
+      //   是正で catch 相は残 33°(=beta/catchGain rad) から滑り目標を線形に 0 へ絞る＝コメントの意図どおりになる。
+      //   実測の影響: 壁付き forced/intermediate の normal_fr GO が **3 → 6/8** に増え、GO 行の最小クリアランスも
+      //   0.00〜0.01m(壁と面一)から改善した（**(i) 単独の中間値**。(i)(iv) を併せた最終値は GO 5/8・
+      //   最小クリアランス 0.03〜0.71m で、下の表と AU3-1a〜1d が印字する）。旧式の表は internal の
+      //   docs/stage_ap/AP14_wallhairpin.md に時点記録として保持。
+      const slTgt = Math.max(0, Math.min(prm.beta, prm.catchGain * remaining));
       const want = (prm.kp * (slTgt - sl) - prm.kd * sld) * MX;
       applied = applySteer(car, prm.prop, want / MX);
       car.driveDir = CONST.FORWARD; car.pwm = (sl > slTgt + 4) ? prm.pCatch : tcPwm(car, 200, 0.3);
@@ -316,11 +335,112 @@ function dynDriftBest(g, drive) {
   return best;
 }
 
+// ── 【AU3 (a')】grip の動的アーム ────────────────────────────────────────────────────
+// AU1 が残した札: 「grip の**動的**実走は本ゲート未測定＝『後輪ドリフトが唯一の通過手段』とは言えない」。
+// criterion ① が測るのは grip の **幾何**最善線(定常円弧・β=0)であって、直線区間を使う非定常な grip 線
+// (低速で進入して実舵下限まで曲げる・遅いターンイン等)は探索対象外だった。
+// ∴ ここで **実 CarV2.step の grip 走行**(意図的な滑りを作らない＝逆ハンもブレーキドリフトも使わない)を
+// 同じ廊下で走らせ、forced/intermediate では 180°完走＋壁不侵犯が成立しないことを機械固定する。
+//
+// steelman: grip に有利な条件を掃引して与える —
+//   ① 進入速度を大きく下げる(低速ほど横力要求が減り実効半径は運動学的下限 R_min に近づく)
+//   ② ターンイン位置(lead)・進入横位置(d)・舵種(3値/連続)
+//   ③ 舵の出し方 2 通り: 'lock'=全舵 LEFT を維持(最もタイトな線) / 'radius'=目標半径 Rg をヨーレート帰還で保持
+//      (後者は AO8/touge/AP15 の grip ドライバと同型＝既存オラクルの再利用)
+// **弁別性(必須)**: 同じドライバが対照セル(grip 幾何が収まる rr6.0/rr7.0)では 180°完走することを確認する。
+//   これが無いと「grip では通れない」は反証不能になる — AU-0 の敵対的レビューは旧ドリフトドライバについて
+//   まさにこの失敗(対照セルすら破断していた＝戦略の限界でなくドライバの欠陥)を実証している。
+function dynGripReach(g, drive, prm) {
+  const car = new CarV2({ ...g.course.start, x: g.capX - RUNUP, y: g.capY - prm.d, theta: 0 });
+  car.type = (drive === 'fr') ? 'normal_fr' : 'normal_awd';
+  car.tireSet = 'normal'; car.steerSet = prm.prop ? 'prop' : 'tri';
+  let minClr = 1e9, head = 0, spun = false, done = false, brokeOut = false, hitAny = false;
+  let sustainedRad = 0, breached = false, betaPk = 0, t = 0;
+  const measure = () => {
+    const { s, hit } = poseClearance(car, g);
+    if (hit) hitAny = true;
+    const ab = Math.abs(betaOf(car)); if (ab > betaPk) betaPk = ab;
+    if (s < minClr) minClr = s;
+    if (s < 0 && !breached) { breached = true; sustainedRad = head; }
+    return s;
+  };
+  const frontX = () => { let m = -1e9; for (const p of car.corners()) if (p.x > m) m = p.x; return m; };
+  // phase 0: 直線助走 — 目標速度 U まで上げ(または落とし)てからターンイン(前端基準・AU3 持ち越し(iv) と同じ)。
+  let guard = 0;
+  while (frontX() < g.capX - prm.lead && guard++ < 6000) {
+    car.steer = CONST.CENTER; car.steerAmt = null;
+    if (car.u < prm.U - 0.1) { car.driveDir = CONST.FORWARD; car.pwm = 255; } else holdSpeed(car, prm.U);
+    car.step(DT); measure();
+  }
+  // phase 1: 旋回 — 意図的な滑りを作らない grip 走行のまま 180°回頭を試みる。
+  let prevTheta = car.theta, gSteer = CONST.CENTER;
+  const A = Math.PI;
+  for (let i = 0; i < TIMEOUT; i++) {
+    if (prm.mode === 'lock') {
+      if (prm.prop) { car.steer = CONST.LEFT; car.steerAmt = 255; }        // 連続舵: 全舵 LEFT
+      else { car.steer = CONST.LEFT; car.steerAmt = null; }                 // 3値: LEFT 保持
+    } else {
+      const rStar = car.u / prm.Rg;                                          // AO8/touge grip と同型のヨーレート帰還
+      if (car.r < rStar * 0.98) gSteer = CONST.LEFT;
+      else if (car.r > rStar * 1.02) gSteer = CONST.CENTER;
+      car.steer = gSteer; car.steerAmt = null;
+    }
+    holdSpeed(car, prm.U);
+    car.step(DT); t += DT;
+    head += wrap(car.theta - prevTheta); prevTheta = car.theta;
+    const s = measure();
+    if (s <= HARDOUT) { brokeOut = true; break; }
+    if (Math.abs(betaOf(car)) > SPIN_LIM || car.u < -0.5) { spun = true; break; }
+    if (head >= A) { done = true; break; }
+  }
+  if (!breached) sustainedRad = head;
+  // 出口: 180° 到達後さらに EXIT_M を廊下内で走れるか(drift アームと同一の合格条件)。
+  let exitOK = false;
+  if (done && !spun && minClr >= 0) {
+    const x0 = car.x;
+    for (let k = 0; k < 900; k++) {
+      const herr = wrap(Math.PI - car.theta);
+      applySteer(car, prm.prop, Math.max(-1, Math.min(1, herr * 3)));
+      holdSpeed(car, prm.U);
+      car.step(DT); t += DT;
+      const s = measure();
+      if (s < 0 || Math.abs(betaOf(car)) > SPIN_LIM) break;
+      if (x0 - car.x >= EXIT_M) { exitOK = true; break; }
+    }
+  }
+  const dynGO = done && !spun && !brokeOut && minClr >= 0 && !hitAny && exitOK;
+  return { minClr, sustainedDeg: sustainedRad * deg, done, spun, brokeOut, hitAny, exitOK, betaPk, t, dynGO };
+}
+// 助走は全アーム共通の 25m 固定(RUNUP)。**進入直線を短縮すると測定値がわずかに動く**ことを実測した
+// (U 比例へ変えると 20 行中 12 行で minClr が最大 0.05m・保持角が最大 2.6° 動く。判定 20/20 は不変だった)。
+// 機序＝ターンイン判定が tick 離散で、助走長が変わると交差の位相と holdSpeed のバンバン帯の位相が変わる。
+// ∴ NO-GO 行の連続量マージンは ±0.05m 程度の分解能で読むこと(GO/NO-GO の判定はこの揺れでは変わらない)。
+function gripGridFor(g) {
+  const ds = [(g.innerR + g.outerR) / 2, Math.max(g.innerR + 1.0, g.outerR - 0.9)];
+  const Us = FULL ? [2, 3, 4, 5, 6, 8] : [2, 4, 6, 8];
+  const out = [];
+  for (const d of ds) for (const U of Us) for (const lead of [0, 4]) for (const prop of [false, true]) {
+    out.push({ d, U, lead, prop, mode: 'lock', Rg: null });
+    out.push({ d, U, lead, prop, mode: 'radius', Rg: R_MIN });
+  }
+  return out;
+}
+function dynGripBest(g, drive) {
+  let best = null, bestScore = -1e18;
+  for (const prm of gripGridFor(g)) {
+    const r = dynGripReach(g, drive, prm);
+    const score = (r.dynGO ? 1e6 : 0) + (r.exitOK ? 5e5 : 0) + r.sustainedDeg * 100 - (r.dynGO ? r.t : 0);
+    if (score > bestScore) { bestScore = score; best = { ...r, prm }; }
+  }
+  return best;
+}
+
 // ── Part B: 壁込み go/no-go(最善線の幾何成立性 + 動的到達性) ────────────────────────
 console.log(`\n[B] 壁込み go/no-go(最善線の剛体クリアランス掃引 + 【AU1】符号是正ドライバの動的到達性)`);
 console.log(`  掃引: ${FULL ? '系統(--full: 576 点/セル・駆動)' : '既定 縮小(128 点/セル・駆動)'}`);
 const table = [];      // セル単位(幾何)
 const dynTable = [];   // セル×駆動(動的到達性) = AU1 の新表
+const gripDynTable = [];  // セル×駆動(grip の動的到達性) = 【AU3 (a')】の新表
 for (const spec of wallSpecs) {
   const g = geoms[spec.name];
   const surf = /-low$/.test(spec.name) ? 'low' : 'dry';
@@ -329,6 +449,20 @@ for (const spec of wallSpecs) {
   const driftGeoFits = dr.s >= 0 && !dr.hit;
   // 動的到達性(drift のみ・FR/AWD をそれぞれ掃引最善で)。grip の動的は幾何最善線が既に破る(Part B)ゆえ省略。
   const dyn = { fr: dynDriftBest(g, 'fr'), awd: dynDriftBest(g, 'awd') };
+  // 【AU3 (a')】grip の動的アーム(同じ廊下・同じ合格条件)。drift と同じ steelman 掃引で最善を採る。
+  const gdyn = { fr: dynGripBest(g, 'fr'), awd: dynGripBest(g, 'awd') };
+  for (const drive of ['fr', 'awd']) {
+    const d = gdyn[drive];
+    gripDynTable.push({
+      cell: spec.name, kind: spec.cellKind, surf, drive: `normal_${drive}`,
+      dynGO: d.dynGO, done: d.done, spun: d.spun, brokeOut: d.brokeOut, hitAny: d.hitAny, exitOK: d.exitOK,
+      sustainedDeg: +d.sustainedDeg.toFixed(1), minClr: +d.minClr.toFixed(4), betaPk: +d.betaPk.toFixed(1),
+      t: d.dynGO ? +d.t.toFixed(3) : null,
+      shortfallDeg: d.dynGO ? 0 : +(180 - d.sustainedDeg).toFixed(1),
+      prm: { d: +d.prm.d.toFixed(2), U: d.prm.U, lead: d.prm.lead, mode: d.prm.mode,
+             Rg: d.prm.Rg != null ? +d.prm.Rg.toFixed(2) : null, steer: d.prm.prop ? 'prop' : 'tri' },
+    });
+  }
   for (const drive of ['fr', 'awd']) {
     const d = dyn[drive];
     // 統合 go/no-go = drift が「幾何成立 ∧ 動的到達(壁不侵犯を clearance と checkCollision の両方で)」∧ grip 幾何不能。
@@ -453,6 +587,48 @@ ok(deepTick >= 200 && deepRatio >= 0.8,
   console.log(`  同 セルの normal_awd: 動的 GO=${awdHard.filter(r => r.dynGO).length}/${awdHard.length}(最大 廊下保持 ${Math.max(...awdHard.map(r => r.sustainedDeg)).toFixed(0)}°)`);
 }
 
+// ── 【AU3 (a')】grip 動的アームのアサート ───────────────────────────────────────────
+console.log(`\n[AU3 (a') grip の動的実走]`);
+{
+  const hardG = gripDynTable.filter(r => (r.kind === 'forced' || r.kind === 'intermediate') && r.drive === 'normal_fr');
+  const hardGAll = gripDynTable.filter(r => r.kind === 'forced' || r.kind === 'intermediate');
+  const ctrlG = gripDynTable.filter(r => r.kind === 'control' && r.drive === 'normal_fr');
+  const goG = hardGAll.filter(r => r.dynGO);
+  const ctrlGo = ctrlG.filter(r => r.dynGO);
+  console.log(`  grip 幾何不能セル(forced/intermediate) の grip 動的走行: GO=${goG.length}/${hardGAll.length}(fr+awd)・normal_fr の最大 廊下保持 ${Math.max(...hardG.map(r => r.sustainedDeg)).toFixed(0)}°/180°`);
+  for (const r of hardG) console.log(`    ${r.cell.padEnd(27)} ${r.drive.padEnd(11)} 保持 ${r.sustainedDeg.toFixed(0).padStart(4)}° minClr ${r.minClr.toFixed(3).padStart(7)} 180=${r.done ? 'yes' : 'no '} hit=${String(r.hitAny).padStart(5)} | (d ${r.prm.d} U ${r.prm.U} lead ${r.prm.lead} ${r.prm.mode} ${r.prm.steer})`);
+  console.log(`  対照セル(grip 幾何が収まる)の grip 動的走行: GO=${ctrlGo.length}/${ctrlG.length}  ${ctrlG.map(r => `${r.cell}:${r.dynGO ? 'GO t=' + r.t + 's' : '保持' + r.sustainedDeg.toFixed(0) + '°'}`).join(' / ')}`);
+  // このゲートの ok() は緑を印字しない設計だが、AU3 で追加した述語は **緑でも実行された証跡**が要る
+  //   （AP14/AP15 は緑を出さず、touge/wf_drift_reexam は出す＝同族で不揃いだった・AU3 の敵対的レビュー m-12）。
+  //   既存アサートの出力形式は変えず、AU3 系だけ判定結果を1行で明示する。
+  const au3log = (id, cond, msg) => console.log(`   ${cond ? '✓' : '✗'} ${id} ${msg}`);
+  au3log('AU3-1a', goG.length === 0, `grip 実走の GO=${goG.length}/${hardGAll.length}`);
+  au3log('AU3-1b', ctrlGo.length >= 1, `弁別性 対照セル GO=${ctrlGo.length}/${ctrlG.length}`);
+  ok(hardG.length === 8, `AU3-1a0 grip 動的アームの対象は forced+intermediate の normal_fr 8 行 (実 ${hardG.length})`);
+  // (a') 本体: grip の実走でも 180°完走＋壁不侵犯は成立しない。**連続量マージン**も併記する(CI-14)。
+  ok(goG.length === 0,
+     `AU3-1a **grip の実走も通れない**: forced/intermediate ${hardGAll.length} 行(fr+awd)で 180°完走＋壁不侵犯=${goG.length} 行 ⇒ 「grip は幾何最善線だけでなく動的にも通過できない」`);
+  // 弁別性(必須・これが無いと (a') は反証不能): 同じドライバが対照セルでは通る。
+  ok(ctrlGo.length >= 1,
+     `AU3-1b **弁別性**: 同じ grip ドライバが対照セル(grip 幾何が収まる)では ${ctrlGo.length}/${ctrlG.length} 行で 180°完走＋壁不侵犯 ⇒ 上の 0 行はドライバの欠陥ではない`);
+  // 2 オラクル突合(drift 側 AU1-3c と同型): minClr≥0 の行で checkCollision=false。
+  const clrOKg = gripDynTable.filter(r => r.minClr >= 0);
+  const disG = clrOKg.filter(r => r.hitAny);
+  ok(clrOKg.length >= 2 && disG.length === 0,
+     `AU3-1c grip 側の壁オラクル突合: poseClearance≥0 の全 ${clrOKg.length} 行で checkCollision=false (${disG.length} 行不一致)`);
+  // 決定論(grip 動的アーム)。
+  const g0 = geoms[wallSpecs[0].name];
+  const pr = { d: (g0.innerR + g0.outerR) / 2, U: 4, lead: 0, prop: false, mode: 'lock', Rg: null };
+  const q1 = dynGripReach(g0, 'fr', pr), q2 = dynGripReach(g0, 'fr', pr);
+  ok(q1.minClr === q2.minClr && q1.sustainedDeg === q2.sustainedDeg && q1.dynGO === q2.dynGO,
+     `AU3-1d 決定論(grip 動的走行2回 bit 一致 minClr=${q1.minClr}/${q2.minClr})`);
+}
+// 人間可読表(grip 動的)
+console.log(`\n  [AU3 (a') grip 動的到達性] cell                  kind         drive       | 保持°  minClr  hit  180° 出口10m  t(s) | prm(d U lead mode 舵)`);
+for (const r of gripDynTable) {
+  console.log(`  ${r.cell.padEnd(27)} ${(r.kind || '?').padEnd(12)} ${r.drive.padEnd(11)} | ${r.sustainedDeg.toFixed(0).padStart(4)}° ${r.minClr.toFixed(2).padStart(6)} ${String(r.hitAny).padStart(5)} ${r.done ? 'yes' : 'no '}  ${r.exitOK ? 'yes' : 'no '}    ${r.t != null ? r.t.toFixed(2).padStart(5) : '   - '} | (${r.prm.d} ${r.prm.U} ${r.prm.lead} ${r.prm.mode.padEnd(6)} ${r.prm.steer})`);
+}
+
 // 人間可読表(幾何)
 console.log(`\n  cell(外径/内径・廊下)                kind         surf | grip幾何:clr   fit R    | drift幾何:clr  fit R   β   | drift動的:廊下保持 GO | 統合`);
 for (const r of table) {
@@ -471,16 +647,24 @@ const geoDriftOnly = table.filter(r => r.drift_geoFits && !r.grip_geoFits).lengt
 console.log(`\n  強制${nForced}(外径<R_min)・中間${nInt}(点可・車体込不可)・対照${nCtrl}(車体込可)。`);
 console.log(`  幾何 drift-only 窓(grip 不能∧drift 収まる)=${geoDriftOnly} 行 / 統合 GO(幾何∧動的到達) セル=${goN}/${table.length}・セル×駆動=${dynGoN}/${dynTable.length}。`);
 console.log(`  → grip の**幾何最善線(定常円弧)**は不能(criterion ①)。一方 **浅い滑りを含む能動的な運転なら一部セルで`);
-console.log(`     180°完走＋壁不侵犯が成立する**(GO 行の βpk は 12〜23°＝深いドリフトではない)。成立は normal_fr に限られ AWD は 0/8。`);
+{
+  const goFr = dynTable.filter(r => (r.kind === 'forced' || r.kind === 'intermediate') && r.drive === 'normal_fr' && r.dynGO);
+  const bp = goFr.map(r => r.betaPk);
+  const awdHard = dynTable.filter(r => (r.kind === 'forced' || r.kind === 'intermediate') && r.drive === 'normal_awd');
+  console.log(`     180°完走＋壁不侵犯が成立する**(GO 行の βpk は ${bp.length ? Math.min(...bp).toFixed(0) + '〜' + Math.max(...bp).toFixed(0) : '--'}°＝深いドリフトではない)。成立は normal_fr に限られ AWD は ${awdHard.filter(r => r.dynGO).length}/${awdHard.length}。`);
+}
 console.log(`     ※ 帰属: この変化は逆ハンの符号是正が原因ではない(符号のみ戻した変異体でも GO は残る)。冒頭の帰属注記を参照。`);
-console.log(`     ※ grip の**動的**実走は本ゲート未測定＝「後輪ドリフトが唯一の通過手段」とは言えない(PLAN AU3 (a') で測る)。`);
+console.log(`     ※ 【AU3 (a') で測定済】grip の**動的**実走も forced/intermediate では 180°完走できない(0/16 行・上表)。`);
+console.log(`        同じ grip ドライバが対照セルでは 2/2 で完走する＝ドライバの欠陥ではない(弁別性 AU3-1b)。`);
+console.log(`        ただし GO 行の βpk は 12〜15°＝**浅い滑り**であり「深い後輪ドリフト」ではない。`);
+console.log(`        ∴ 言えるのは「grip 走行(意図的な滑りを作らない運転)では通れず、滑りを使う運転なら一部で通れる」まで。`);
 
 if (process.argv.includes('--json')) {
   console.log('===JSON===');
   console.log(JSON.stringify({ appVersion: APP_VERSION, driver: 'AU1-sign-corrected', sweep: FULL ? 'full' : 'reduced',
     R_min: +R_MIN.toFixed(4), diag: +DIAG.toFixed(4), counterFire, counterTick, wantMin: +wantMin.toFixed(4),
     deepTick, deepCounter, deepRatio: +deepRatio.toFixed(4),
-    table, dynTable, goN, dynGoN, total: table.length }, null, 0));
+    table, dynTable, gripDynTable, goN, dynGoN, total: table.length }, null, 0));
 }
 
 console.log(`\n[結果] pass=${pass} fail=${fail}`);

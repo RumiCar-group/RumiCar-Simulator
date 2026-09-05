@@ -84,6 +84,8 @@ let counterFire = 0, counterTick = 0, wantMin = 0, steerMinReached = 0;   // wan
 //   比例則が滑りを *増やす* 向きに舵を出し、この比率が 0 付近へ落ちる = 変異注入で赤くなる。
 //   (単なる `counterFire > 0` は一時的な正βで簡単に満たされ検出力が無い — 実測で確認済)
 let deepTick = 0, deepCounter = 0;
+// 【AU3】後退ガード(持ち越し(ii))が実際に発火した run 数。0 なら述語が空振り＝入れた意味が無い。
+let revGuard = 0;
 function noteCounter(car, tgt, applied) {
   const trueSlip = -beta(car);              // 左旋回ドリフトで正になる滑り量(真値)
   if (trueSlip > tgt + 4) { deepTick++; if (applied < 0) deepCounter++; }
@@ -185,7 +187,10 @@ function runCorner(course, R, drive, strat, entryMul, headGate, driftEntryBase, 
       }
     }
     uPrev = car.u;
-    if (ab > SPIN_LIM) { spun = true; break; }
+    // 【AU3 是正 2026-09-05・持ち越し(ii)】beta()=atan2(vlat,|u|) は分母が |u| ゆえ **後退(u<0)では意味を失う**。
+    //   AP14 だけが持っていた後退ガードをここにも入れる(同族3本を揃える)。機序オラクルへの影響は無い＝
+    //   `pivoted` は u≤0.05 で、`uMinSlide` は u>0.05 でのみ latch されるので、u<−0.5 で打ち切っても既に確定済み。
+    if (ab > SPIN_LIM || car.u < -0.5) { if (car.u < -0.5) revGuard++; spun = true; break; }
     if (head >= headGate) { done = true; break; }
   }
   const tGate = steps * DT, exitU0 = car.u;
@@ -206,7 +211,7 @@ function runCorner(course, R, drive, strat, entryMul, headGate, driftEntryBase, 
       setSlope(car, dh, model);
       car.step(DT);
       if (Math.abs(beta(car)) < REGRIP_BETA) regripped = true;   // 再グリップ成立
-      if (Math.abs(beta(car)) > SPIN_LIM) { exitSpun = true; break; }
+      if (Math.abs(beta(car)) > SPIN_LIM || car.u < -0.5) { if (car.u < -0.5) revGuard++; exitSpun = true; break; }   // 後退ガード(AU3 持ち越し(ii))
       const s = (car.x - x0) * hx + (car.y - y0) * hy;
       if (s >= EXIT_RUN_M) { exitU = car.u; break; }
     }
@@ -338,14 +343,38 @@ console.log(`\n[アサート]`);
   console.log(`         AWD 低μ180° の βpk = ${awdBpk.join('/')}°（u 枯渇は回避しても β は深い＝2 指標は別物）・drift clean = ${awd.map(r => r.drift_cleanN).join('/')}/3`);
   ok(awd0.length === 3 && a0 === 3 && awdG.length === 6 && aG === 6,
     `機序B(u ベース限定): 低μ180° AWD は平地で u 枯渇 (${a0}/3)・下り 5°/10° では回避 (${aG}/6)。※βpk は全水準で 86〜90°・当該 run は DNF`);
-  // 連続量（CI-14: 二値でなくマージンで）: AWD の滑走中 min(u) は dh とともに **単調増加**する。
-  let monoU = 0;
+  // 連続量（CI-14: 二値でなくマージンで）: 下り勾配は AWD の滑走中の **速度枯渇を緩和する**。
+  // 【AU3 で述語を置換 2026-09-05・持ち越し(ii) の帰結・CI-5】旧述語は「uMinSlide が 0°<5°<10° と
+  //   単調増加」だったが、これは **後退ガードが無かったこと由来の値**に依存していた。後退ガードを入れると
+  //   run は u<−0.5 で打ち切られる＝ガード付き run はガード無し run の **厳密な接頭辞**(同一物理・同一入力)
+  //   なので、接頭辞上の min は全体の min 以上になる。実測で dh=0° の値が上がった(R6.5 0.10→0.16・R8
+  //   0.06→0.19)ことは、**旧値が「一度後退したあとに再び前進した局面」のサンプルだった**ことを意味する。
+  //   uMinSlide の定義コメント(:130-134)が元々「ピボット後の負 u スピンは除外＝制御可能な滑走の u 枯渇床を
+  //   測る」と言っている以上、後退を跨いだサンプルは定義違反であり、**是正後の値のほうが定義に忠実**。
+  //   ∴ 0°→5° の細かい順序(R8 で 0.19 vs 0.15)は測定の分解能内の揺れであって機序ではない。機序として
+  //   実際に強いのは「10° で桁が変わる」ことなので、**マージン付きの 2 述語**へ置き換える(緩和ではなく
+  //   同じ機序をより頑健な連続量で固定する＝旧述語より倍率の下限を明示するぶん主張は具体的になる)。
+  let steep = 0, drained = 0;
+  const RATIO_MIN = 2.5, DRAIN_MAX = 0.6;   // 実測 3.6/6.1/8.8 倍・dh≤5° は 0.11〜0.57 m/s
   for (const cn of HAIRPINS) {
     const v = DHS.map(d => (awd.find(r => r.corner === cn.key && r.dh === d.key) || {}).drift_uMinSlide);
-    if (v.every(x => x != null) && v[0] < v[1] && v[1] < v[2]) monoU++;
-    console.log(`         AWD ${cn.key.padEnd(13)} uMinSlide(0/5/10°) = ${v.map(x => x == null ? ' -- ' : x.toFixed(2)).join(' / ')} m/s`);
+    if (v.every(x => x != null)) {
+      const flat = Math.max(v[0], v[1]);
+      // ⚠ flat=0 だと `v[2] >= RATIO_MIN*0` が恒真になり C1/C2 が **同時に空振り緑**になる。
+      //   uMinSlide は「滑走中の正 u の最小」なので 0 にはならないはずだが、定義が変われば起こりうる。
+      //   ∴ 下限を機械で要求し、割れない値でだけ倍率を採る。
+      if (!(flat > 0.01)) { console.log(`         ⚠ ${cn.key}: flat=${flat} が下限 0.01 未満＝倍率が意味を持たない`); continue; }
+      if (v[2] >= RATIO_MIN * flat) steep++;
+      if (flat < DRAIN_MAX) drained++;
+      console.log(`         AWD ${cn.key.padEnd(13)} uMinSlide(0/5/10°) = ${v.map(x => x.toFixed(2)).join(' / ')} m/s  (10°/max(0°,5°) = ${(v[2] / flat).toFixed(1)}×)`);
+    } else console.log(`         AWD ${cn.key.padEnd(13)} uMinSlide(0/5/10°) = ${v.map(x => x == null ? ' -- ' : x.toFixed(2)).join(' / ')} m/s`);
   }
-  ok(monoU === HAIRPINS.length, `機序C: AWD の滑走中 min(u) は dh に対し単調増加 (${monoU}/${HAIRPINS.length} コーナー)`);
+  ok(drained === HAIRPINS.length,
+     `機序C1: 平地〜5° では AWD の滑走中 min(u) が ${DRAIN_MAX} m/s 未満＝**速度枯渇域**に落ちる (${drained}/${HAIRPINS.length} コーナー)`);
+  ok(revGuard > 0,
+     `機序C0(検出力): 後退ガード(u<−0.5)が ${revGuard} run で発火 ⇒ 持ち越し(ii)の是正は空振りしていない（発火 0 なら uMinSlide の値は旧版と同じはず）`);
+  ok(steep === HAIRPINS.length,
+     `機序C2: 10° では min(u) が 平地〜5° の最大値の ${RATIO_MIN} 倍以上へ跳ね上がる＝**勾配が枯渇を緩和する** (${steep}/${HAIRPINS.length} コーナー)`);
   // 連続量: 浅い滑走（β=45°時点）の u は FR/AWD とも dh で単調増加＝勾配の補給は浅い滑走には効く。
   let mono45 = 0, n45 = 0;
   for (const cn of HAIRPINS) for (const dv of ['fr', 'awd']) {

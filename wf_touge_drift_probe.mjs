@@ -41,6 +41,9 @@ let counterFire = 0, counterTick = 0, wantMin = 0, steerMinReached = 0;   // wan
 //   比例則が滑りを *増やす* 向きに舵を出し、この比率が 0 付近へ落ちる = 変異注入で赤くなる。
 //   (単なる `counterFire > 0` は一時的な正βで簡単に満たされ検出力が無い — 実測で確認済)
 let deepTick = 0, deepCounter = 0;
+// 【AU3】強化した clean 述語が **実際に run を落としているか** の計数(空振り=見せかけの緑の防止)。
+//   AU1 の教訓: 「定義から恒真」なアサートは緑でも何も守らない。∴ 各条件の却下件数を数えて下限を課す。
+let rejReverse = 0, rejRegrip = 0, rejExitU = 0, runN = 0;
 function noteCounter(car, tgt, applied) {
   const trueSlip = -beta(car);              // 左旋回ドリフトで正になる滑り量(真値)
   if (trueSlip > tgt + 4) { deepTick++; if (applied < 0) deepCounter++; }
@@ -73,7 +76,7 @@ function runCorner(course, R, drive, strat, entryMul, headGate, driftEntryBase) 
   const vEntry = (strat === 'grip' ? 0.9 : driftEntryBase) * vgrip * entryMul;
   toSpeed(car, vEntry);
 
-  let head = 0, prevTheta = car.theta, betaPk = 0, spun = false, done = false, steps = 0;
+  let head = 0, prevTheta = car.theta, betaPk = 0, spun = false, done = false, steps = 0, reversed = false;
   let brakePulse = (strat === 'drift' && drive === 'fr') ? 9 : 0;
   let gSteer = CONST.CENTER, prevSl = -beta(car);
   for (let i = 0; i < TIMEOUT; i++) {
@@ -117,14 +120,20 @@ function runCorner(course, R, drive, strat, entryMul, headGate, driftEntryBase) 
     if (strat === 'drift' && car.steerAngle / MX < steerMinReached) steerMinReached = car.steerAngle / MX;
     head += wrap(car.theta - prevTheta); prevTheta = car.theta;
     const b = Math.abs(beta(car)); if (b > betaPk) betaPk = b;
-    if (b > SPIN_LIM) { spun = true; break; }
+    // 【AU3 是正 2026-09-05・持ち越し(ii)】beta()=atan2(vlat,|u|) は分母が |u| ゆえ **後退(u<0)では意味を失う**
+    //   (前進で右へ滑るのと後退で左へ滑るのが同符号になる)。AP14 だけが持っていた後退ガードをここにも入れる。
+    //   これが無いと「スピンして後ろ向きに転がっている run」が |β| だけ見て健全と判定されうる。
+    if (b > SPIN_LIM || car.u < -0.5) { if (car.u < -0.5) reversed = true; spun = true; break; }
     if (head >= headGate) { done = true; break; }
   }
-  const tGate = steps * DT, exitU = car.u;
+  const tGate = steps * DT, exitU0 = car.u;
 
   // ③ 出口: そのまま新ヘディング方向へ全開直線 20m。ドリフト車は再グリップ回復も物理任せ
   //   (滑っている間は加速が乗らない=出口速度の価値/回復コストが総合時間に自動算入)。
-  let tTotal = null, exitSpun = false;
+  // 【AU3 是正 2026-09-05・持ち越し(iii)】clean 述語を AP15 の凍結述語と揃える。旧 touge は
+  //   「回頭した ∧ spin しなかった ∧ 出口 20m を走れた」だけで、**再グリップも出口速度も見ていなかった**。
+  //   AP15(:216) は `regripped ∧ exitU ≥ 0.4×vEntry` を課している。同族3本で不揃いだと go/no-go を比べられない。
+  let tTotal = null, exitSpun = false, regripped = false, exitU = exitU0;
   if (done && !spun) {
     const x0 = car.x, y0 = car.y, hx = Math.cos(car.theta), hy = Math.sin(car.theta);
     let k = 0, prevSlExit = -beta(car);
@@ -137,13 +146,19 @@ function runCorner(course, R, drive, strat, entryMul, headGate, driftEntryBase) 
         applySteer(car, want / MX); car.driveDir = CONST.FORWARD; car.pwm = 80;
       } else { car.steer = CONST.CENTER; car.steerAmt = null; car.driveDir = CONST.FORWARD; car.pwm = 255; }
       car.step(DT);
-      if (Math.abs(beta(car)) > SPIN_LIM) { exitSpun = true; break; }
+      if (Math.abs(beta(car)) < REGRIP_BETA) regripped = true;          // 再グリップ成立(AP15 と同一定義)
+      if (Math.abs(beta(car)) > SPIN_LIM || car.u < -0.5) { if (car.u < -0.5) reversed = true; exitSpun = true; break; }   // 後退ガード(持ち越し(ii))
       const s = (car.x - x0) * hx + (car.y - y0) * hy;
-      if (s >= EXIT_RUN_M) break;
+      if (s >= EXIT_RUN_M) { exitU = car.u; break; }                    // AP15 と同じく出口 20m 走破時点の u
     }
     if (!exitSpun && k < TIMEOUT) tTotal = tGate + (k + 1) * DT;
   }
-  const clean = done && !spun && !exitSpun && tTotal != null;
+  // 凍結述語(AP15 と同一): 回頭 ∧ spin なし ∧ 出口 20m 走破 ∧ 再グリップ ∧ 出口速度 ≥ 0.4×進入。
+  const clean = done && !spun && !exitSpun && tTotal != null && regripped && exitU >= 0.4 * vEntry;
+  runN++;
+  if (reversed) rejReverse++;                                                   // 後退ガードが発火した run
+  if (done && !spun && !exitSpun && tTotal != null && !regripped) rejRegrip++;  // 出口 20m は走れたが再グリップせず
+  if (done && !spun && !exitSpun && tTotal != null && regripped && exitU < 0.4 * vEntry) rejExitU++;
   return { tGate, tTotal, exitU, betaPk, spun: spun || exitSpun, clean, vgrip, vEntry };
 }
 
@@ -222,8 +237,22 @@ ok(wantMin <= -0.5, `T1b 逆ハンの深さ: **指令**目標舵角の最大逆�
   }
   // ⚠ 定常旋回の β の符号は **速度依存**(tangent speed 前後で反転・R8-dry で約 12 m/s)。結論を支えるのは
   //   第2連言 bMin<-30 のほう。第1連言は「低速(U=8 m/s)では正」という限定つきの記述として残す。
-  ok(bTurn > 0 && bMin < -30, `T2 β の符号: 低速(U=8)の定常左旋回は正 (+${bTurn.toFixed(2)}°) / ドリフトは負 (${bMin.toFixed(1)}°) ⇒ 正側閾値 \`β>+35\` は発火しない`);
+  ok(bTurn > 0 && bMin < -30, `T2 β の符号: 低速(U=8)の定常左旋回は正 (+${bTurn.toFixed(2)}°) / ドリフトは負 (${bMin.toFixed(1)}°) ⇒ 正側閾値 「β>+35」 は発火しない（※出力にバックティックを使わない: この行をシェルへ貼ると +35 がコマンド置換として実行され空ファイルが生成される・AU3 で実証）`);
 }
+// 【AU3】T4: 主結論の機械固定 — 峠ヘアピン 24 セルでドリフトが grip を上回るセルは存在しない。
+//   AU1 では表を出すだけでこの結論を固定していなかった(ゲート化の意味が半分だった)。
+{
+  const withRatio = table.filter(r => r.ratio != null);
+  // 非空振りガード: drift が全 DNF なら `goN===0` は自動的に緑になる。比が出た行の数に下限を課す
+  //   （wf_drift_reexam の P1-2 と同型・AU3 の敵対的レビュー m-6）。
+  ok(goN === 0 && withRatio.length >= 8,
+     `T4 峠 go/no-go: GO=${goN}/${table.length}（比が出た行 ${withRatio.length}/${table.length}・最小比=${withRatio.length ? Math.min(...withRatio.map(r => r.ratio)).toFixed(3) : '--'}・GO 閾値 0.98）`);
+}
+// 【AU3】T5: 強化した clean 述語(持ち越し(ii)(iii))が **実際に run を落としている**ことの裏取り。
+//   これが 0 件なら述語は空振り＝「定義から恒真」と同じで、緑でも何も守らない(AU1 の AU1-3c の教訓)。
+console.log(`  clean 述語の却下内訳: 全 ${runN} run 中 後退ガード ${rejReverse} / 再グリップ不成立 ${rejRegrip} / 出口速度<0.4×進入 ${rejExitU}`);
+ok(rejReverse > 0 && (rejRegrip + rejExitU) > 0,
+   `T5 clean 述語の検出力: 後退ガードが ${rejReverse} run・再グリップ/出口速度条件が ${rejRegrip + rejExitU} run を却下 ⇒ どちらも空振りしていない`);
 // T3: 決定論 — 同一セルを2回走らせて bit 一致 (表全体の md5 一致は外部で 2 回実行して照合する)。
 {
   const c = buildFromSpec(benches.find(b => b.name === 'bench-hairpin-R5-low'));

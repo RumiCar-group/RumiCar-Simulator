@@ -19,6 +19,13 @@
 //      (AP21。①〜⑦ は静的リテラルキー前提で、動的構築キーの「カタログ不在」を ②③ とも見逃す。
 //       ⑧ は suffix ドメインを本物のソース (PROGRAMS/CAR_PARAM_DOC/REGIMES/evaluator の throw subs)
 //       から導出し cross-product 展開を機械検査する。PROGRAMS 追加時のラベル付け忘れ等を版アップ前に検出。)
+//   ⑨ index.html の data-i18n-html **インライン本文** ≡ ja カタログ であること              … 違反で非ゼロ終了
+//      (AU3・AU2 の敵対的レビューで判明した「見せかけの緑」の根治。`i18n.js:47` が JS 有効時に
+//       innerHTML をカタログで上書きするため、インライン本文が古くても画面上は正しく見える。しかし
+//       **公開ソース・JS 無効時・ハイドレーション前**には古い本文が出る。②はキーの存在、④は hash(ja) 対
+//       カタログ自身しか見ないので、**カタログだけ直してインライン本文を直し忘れると全部緑のまま**だった
+//       (AU2 で変異注入により実測: インライン本文を旧文言へ戻しても exit=0)。
+//       既存の陳腐化は EXPECTED_STALE で件数と顔ぶれを固定し、**増えたら赤・直ったらリストを外せと赤**にする。)
 //
 // 使い方:  node wf_i18n_check.mjs        (PASS なら exit 0・違反で exit 1)
 //   ④ で落ちたら en を再確認のうえ node wf_i18n_rehash.mjs で h を更新する。
@@ -196,6 +203,59 @@ for (const k of dynExpected) {
   if (e.en == null || e.en === '') dynEmpty.push(`${k} (en 空)`);
 }
 
+// ---- ⑨ index.html のインライン本文 ≡ ja カタログ (AU3) ----
+// 抽出: data-i18n-html を持つ要素の innerHTML を、**同名タグの入れ子を数えて**取り出す(DOM 非依存)。
+//   正しさの裏取り＝137 要素中 100 要素がカタログと完全一致する(抽出が壊れていれば一致はまず出ない)。
+// 正規化: 空白連を 1 個へ畳み、**タグ境界の空白は無視**する(index.html 側の改行・インデント由来の空白を
+//   実差分と誤検出しないため。実測でこの正規化により偽陽性 11 件が消えた)。
+const INLINE_STALE_NOTE = 'i18n.js:47 が JS 有効時に innerHTML を上書きするため画面では見えないが、公開ソース/JS 無効時/ハイドレーション前には出る';
+// **既知例外(2026-09-05 AU3 で実測して固定)**: 長文ヘルプの一部でインライン本文が旧版のまま残っている。
+//   ここに載っているキーは「今は不一致でよい」。**増えたら赤**(新しい取り残しの検出)。
+//   **直ったのにここに残っていても赤**(リストが腐るのを防ぐ)＝直したらこの配列から外すこと。
+const EXPECTED_STALE = [
+  'ask.intro', 'doc.annulus.fields', 'doc.annulus.shapes', 'doc.common.bank',
+  'doc.common.desc', 'doc.common.grip', 'doc.common.i18n', 'doc.common.kind',
+  'doc.common.meta', 'doc.common.name', 'doc.common.noRace', 'doc.intro',
+  'doc.loop.note', 'doc.raw.fields', 'doc.sf.note', 'doc.touge.fields',
+  'doc.touge.style', 'doc.track.fields', 'doc.track.shape', 'doc.validate.note',
+  'pm.s1.models', 'pm.s11.cant', 'pm.s7.similar', 'rg.design.body',
+  'rg.feel.body', 'rg.gear.body', 'rg.howto.body', 'rg.intro',
+  'rg.layers.body', 'rg.recon.body', 'rg.rules.body', 'spec.lang.subset',
+  'spec.misc.storage', 'spec.veh.speedDisp', 'sys.arch.body', 'sys.ls.body',
+  'usage.langNote',
+];
+const normInline = (x) => x.replace(/\s+/g, ' ').replace(/\s+</g, '<').replace(/>\s+/g, '>').trim();
+const inlineRows = [];
+{
+  const re9 = /<([a-zA-Z][\w-]*)\b[^>]*\bdata-i18n-html="([^"]+)"[^>]*>/g;
+  let m9;
+  while ((m9 = re9.exec(html)) !== null) {
+    const full = m9[0], tag = m9[1], key = m9[2];
+    if (/\/>$/.test(full)) continue;                       // 自己閉じ (本文なし) は対象外
+    let i = m9.index + full.length, depth = 1, end = -1;
+    const openRe = new RegExp(`<${tag}\\b`, 'g'), closeRe = new RegExp(`</${tag}\\s*>`, 'g');
+    while (i < html.length) {
+      openRe.lastIndex = i; closeRe.lastIndex = i;
+      const o = openRe.exec(html), c = closeRe.exec(html);
+      if (!c) break;
+      if (o && o.index < c.index) { depth++; i = o.index + o[0].length; }
+      else { depth--; if (depth === 0) { end = c.index; break; } i = c.index + c[0].length; }
+    }
+    inlineRows.push({ key, inline: end < 0 ? null : html.slice(m9.index + full.length, end) });
+  }
+}
+const inlineBroken = inlineRows.filter((r) => r.inline == null).map((r) => r.key);   // 閉じタグを見つけられなかった＝抽出器の適用外
+const inlineMiss = [];
+for (const r of inlineRows) {
+  if (r.inline == null) continue;
+  const e = MESSAGES[r.key];
+  if (!e) continue;                                        // カタログ不在は ② が担当
+  if (normInline(r.inline) !== normInline(e.ja)) inlineMiss.push(r.key);
+}
+const inlineNew = inlineMiss.filter((k) => !EXPECTED_STALE.includes(k));                     // 新しい取り残し＝赤
+const inlineFixed = EXPECTED_STALE.filter((k) => inlineRows.some((r) => r.key === k) && !inlineMiss.includes(k));  // 直った＝リストから外せ
+const inlineGone = EXPECTED_STALE.filter((k) => !inlineRows.some((r) => r.key === k));       // HTML から消えた＝リスト腐り
+
 // ---- 報告 ----
 const line = '─'.repeat(60);
 console.log(line);
@@ -272,9 +332,20 @@ if (dynMissing.length || dynEmpty.length) {
   console.log(`✓ ⑧ 動的キー族: 展開 ${dynExpected.length} キー全て存在＋ja/en 非空 [${dynFamilies.map((f) => `${f.prefix}${f.keys.length}`).join(' ')}]`);
 }
 
+if (inlineNew.length || inlineFixed.length || inlineGone.length || inlineBroken.length) {
+  fail = true;
+  console.log(`\n✗ ⑨ index.html のインライン本文 ≡ ja カタログ (対象 ${inlineRows.length} 要素・既知例外 ${EXPECTED_STALE.length} 件)`);
+  for (const k of inlineNew) console.log(`    - **新しい取り残し**: ${k} — ja カタログを直してインライン本文を直し忘れている (${INLINE_STALE_NOTE})`);
+  for (const k of inlineFixed) console.log(`    - 直っている: ${k} — wf_i18n_check.mjs の EXPECTED_STALE からこのキーを外すこと`);
+  for (const k of inlineGone) console.log(`    - リスト腐り: ${k} — index.html に data-i18n-html="${k}" が無い。EXPECTED_STALE から外すこと`);
+  for (const k of inlineBroken) console.log(`    - 抽出不能: ${k} — 閉じタグを見つけられない (抽出器の前提を満たさない書き方)`);
+} else {
+  console.log(`✓ ⑨ インライン本文: ${inlineRows.length} 要素中 ${inlineRows.length - inlineMiss.length} 件が ja カタログと一致 (既知例外 ${EXPECTED_STALE.length} 件は固定・新規の取り残し 0)`);
+}
+
 console.log(`\n${line}`);
 if (fail) {
-  console.log('結果: FAIL (①②④⑤⑥⑦⑧ のいずれかに違反) — 版アップ前に修正すること');
+  console.log('結果: FAIL (①②④⑤⑥⑦⑧⑨ のいずれかに違反) — 版アップ前に修正すること');
   process.exit(1);
 } else {
   console.log('結果: PASS');

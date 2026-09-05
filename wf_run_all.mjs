@@ -49,6 +49,11 @@ const GATES = [
   'wf_as9_tire_gear.mjs', 'wf_as10_cant.mjs', 'wf_as11_susp.mjs', 'wf_as12_steer.mjs', 'wf_as13_engage.mjs',
   // AU1: 逆ハン符号是正にともない probe(アサート無し) から常設ゲートへ昇格。
   'wf_touge_drift_probe.mjs',
+  // AU3: 2026-09-04 の再検証スクラッチ3本(自由空間/切替最適化/2台走行)を統合して常設ゲート化。
+  //   ランナーは既定(縮小掃引)で回す。--full は docs 転記用で桁違いに長い(実測 約30分)ため対象外。
+  //   ※ 既定と --full で **結論が変わらない**ことは AU3 で確認済み(縮小格子が --full の唯一の GO を
+  //     見つけられるよう β=35/pCatch=110 を含めてある)。所要はゲート自身が Part 別に印字する。
+  'wf_drift_reexam.mjs',
 ].map((name) => ({ name, args: [] }));
 
 // official_result は決定論2回照合→result.json 再検証→Node pin 照合の複合ゲート (AP20)。
