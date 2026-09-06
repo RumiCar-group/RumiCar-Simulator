@@ -110,9 +110,15 @@ console.log('\n[②-a spurious 率 ±20% (N=50000)]');
 {
   resetNoise();
   SENSOR_NOISE.on = true; SENSOR_NOISE.sigmaBaseMm = 0; SENSOR_NOISE.sigmaFrac = 0; SENSOR_NOISE.dropout = 0;
-  const P = 0.05; SENSOR_NOISE.outlier = P;   // σ=0・dropout=0 → 各読みは真値 (round) か spurious 一様値のいずれか。
+  const P = 0.05;
   const car = new Car({ x: pose.x, y: pose.y, theta: pose.theta });
-  const trueMm = readAll.call(null, car, walls, [])[1].mm;  // outlier は下で発火するが、真値は σ=0 のとき outlier 非発火読み=trueMm
+  // 【AV3 是正】基準の真値は **outlier を 0 にして** 読む。旧版は outlier=P を有効にしたまま・シード前の実 Math.random で
+  //   1 回読んでおり、約 5% の確率で基準読み自体が spurious 値になって以後 N 回が「全部違う」＝100% で赤になった
+  //   （2026-09-06 に wf_run_all 4 回中 1 回・単独反復 12 回中 1 回で実測。負荷とは無関係の設計欠陥）。σ=0・dropout=0 なら
+  //   outlier=0 の読みは決定論の真値 (round) そのもの。
+  SENSOR_NOISE.outlier = 0;
+  const trueMm = readAll.call(null, car, walls, [])[1].mm;
+  SENSOR_NOISE.outlier = P;   // σ=0・dropout=0 → 各読みは真値 (round) か spurious 一様値のいずれか。
   seedRand(20240719);
   const N = 50000; let spur = 0;
   for (let k = 0; k < N; k++) { const mm = readAll(car, walls, [])[1].mm; if (mm !== trueMm) spur++; }

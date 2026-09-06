@@ -8,7 +8,8 @@
 //   ④ `h` (ja 内容ハッシュ印) 持ちキーは hash(ja)===h であること … 違反で非ゼロ終了
 //      (Phase O・陳腐化検知。ja を直して en を直し忘れた「古い英語」を落とす。
 //       `h` を持たないキー＝Phase N 既存の短文は従来どおり ④ 対象外＝後方互換。)
-//   ⑤ changelog.js CHANGELOG の各エントリに noteEn が非空・h=hash(note) であること … 違反で非ゼロ終了
+//   ⑤ changelog.js CHANGELOG の各エントリに noteEn が非空であること、**h を持つエントリは** h=hash(note) であること
+//      (h は任意。AV3 で changelog.js ヘッダと揃えた) … 違反で非ゼロ終了
 //      かつ先頭エントリの版が APP_VERSION と一致すること (版バンプ時の更新漏れ検知)。
 //   ⑥ data/courses.json の各ビルトインコースに name_en/desc_en が非空であること   … 違反で非ゼロ終了
 //      (AB4・RC-I18N-001。name があるのに name_en 欠落 / desc があるのに desc_en 欠落で落とす。

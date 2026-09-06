@@ -150,6 +150,28 @@ export function surfaceParamsFor(surface) {
   return (Number.isFinite(s.dig) && s.dig > 0 && Number.isFinite(s.digSat) && s.digSat > 0) ? s : null;
 }
 
+// ── 路面のピーク正規化スリップ (Stage AV3・**表示層専用**・物理へは一切読み戻さない) ────────────
+// HUD/レースレポートの「摩擦円使用率」は正規化スリップ σ をそのまま百分率にしている (M2/#18②)。舗装は
+// ピークが σ=1 なので「100%＝限界・100% 超＝ピークを越えて滑走」と読めるが、掘り込み路面 (AV1) はピークが
+// σ=digSat 付近へ移るため、最大グリップで走っている車が 300% と表示されていた (v7.6.0/v7.7.0 の記録)。
+// 表示の意味を路面によらず保つため、掘り込み路面では σ を **その路面のタイヤ法則の実ピーク σ** で割る。
+// ピークは F(σ)=g(σ)+dig·min(σ/digSat,1) の argmax を数値で求める (探索域 σ∈[1, digSat]。σ>digSat では
+// 掘り込みが飽和し g(σ) が単調減なので必ず下がる。単峰性は仮定せず 64 分割の走査を 3 段細分する)。
+// 舗装 (dig=null) では呼ばれず _muUseF/_muUseR は従来の σ そのもの (byte 不変)。ゲート wf_av1_loose B8。
+export function surfacePeakSigma(C, Bp, dig) {
+  if (!dig) return 1;
+  const F = (s) => Math.sin(C * Math.atan(Bp * s)) + dig.dig * Math.min(s / dig.digSat, 1);
+  const top = Math.max(1, dig.digSat);
+  let lo = 1, hi = top, best = 1, bv = F(1);
+  for (let r = 0; r < 3; r++) {
+    const N = 64, step = (hi - lo) / N;
+    if (!(step > 0)) break;
+    for (let i = 0; i <= N; i++) { const s = lo + step * i; const v = F(s); if (v > bv) { bv = v; best = s; } }
+    lo = Math.max(1, best - step); hi = Math.min(top, best + step);
+  }
+  return best;
+}
+
 // ── 制動装置の解決 (Stage AV2・車両の任意装備) ────────────────────────────────────
 // car.brakeSet ('motor'|'friction'|'frictionFront'|'frictionRear') から BRAKES の定義を引く
 // (未知/未指定は motor)。motor (null) は「4輪摩擦ブレーキなし」= 呼び側が brk=null で配分ブロックを
@@ -301,7 +323,7 @@ export class CarV2 extends DynCar {
     this._latCapF = 0;     // 前軸ぶんの横グリップ容量 Σ_front μ_i·Fz_i (AS11: 過渡の前後バランス測定・表示/ゲート専用)
     this._nFaxle0 = 0; this._nRaxle0 = 0;  // 前後移動前の軸荷重 (荷重移動ゲート)
     this._ayTire = 0; this._ayFrontTire = 0; this._ayRearTire = 0;  // 総/前/後軸 横タイヤ accel
-    this._muUseF = 0; this._muUseR = 0;  // 軸ごと摩擦円使用率 σ (HUD #18・slip 表示)
+    this._muUseF = 0; this._muUseR = 0;  // 軸ごと摩擦円使用率 σ (HUD #18・slip 表示)。AV3: 掘り込み路面ではその路面のピーク σ で正規化 (表示層専用)
     this._vw = [0, 0, 0, 0];  // 車輪面速度 vw=ωR の状態 [FL,FR,RL,RR] (AO3 車輪 ODE＋左右差動)。
                               // vwF/vwR (エンコーダ公開面) は軸平均で毎ステップ導出 ⇒ api.js 無改変。
     // ── Stage AO12: タイヤ熱・摩耗 状態 (発走ごとに冷間・無摩耗へ=各レース新品タイヤ) ──
@@ -417,6 +439,9 @@ export class CarV2 extends DynCar {
     // 掘り込み込みの σ→0 線形勾配。舗装 (dig=null) は CBp と**同一 double** ゆえ これを使う式は
     // すべて旧式と bit 一致する (車輪 ODE の半陰的剛性 kD・REVERSE 半陰の横剛性 CaF/CaR)。
     const CBpD = dig ? CBp + dig.dig / dig.digSat : CBp;
+    // AV3: 表示層専用。掘り込み路面のピーク σ (HUD/レポートの摩擦円使用率を「100%＝ピーク」へ正規化する除数)。
+    // 舗装は 1 (使われない＝_muUseF は σ そのもの)。物理は読まない。
+    const sigPk = dig ? surfacePeakSigma(C, Bp, dig) : 1;
     // AV2: 制動装置 (per-step 不変。this.brakeSet は step 実行中に変わらない)。
     // motor/未指定は null ⇒ 差動ブロックも wheelDriven も旧経路と同一 = byte 不変。
     const brk = brakeParamsFor(this.brakeSet);
@@ -441,7 +466,7 @@ export class CarV2 extends DynCar {
     const gearN = ratios.length;
     const shiftSec = (G.shiftSec0 || 0) * Math.sqrt(L / 0.13);
     return { p, dk, g, gN, grip, m, massK, L, a, b, tw, halfT, hCG, iz, maxV,
-             C, Bp, CBp, CBpD, kP, aP, vLow, muOf, doWear, relLen, lsd, kf, kth, susp, dig, brk,
+             C, Bp, CBp, CBpD, kP, aP, vLow, muOf, doWear, relLen, lsd, kf, kth, susp, dig, sigPk, brk,
              geared, ratios, gearN, upAt: G.upAt || 0, downAt: G.downAt || 0, shiftSec };
   }
 
@@ -795,7 +820,8 @@ export class CarV2 extends DynCar {
     this._ayTire = sumFyTire;         // 総横タイヤ accel (瞬時・緩和/クランプ後)
     this._ayFrontTire = sumFyFront;   // 前軸横タイヤ accel (緩和長ステップ応答)
     this._ayRearTire = sumFyRear;     // 後軸横タイヤ accel (rollBalance バランスシフト)
-    this._muUseF = sigFmax; this._muUseR = sigRmax;
+    // AV3: 掘り込み路面だけピーク σ で正規化 (表示層専用・「100%＝ピーク」を路面によらず保つ)。舗装は従来の σ (byte 不変)。
+    this._muUseF = dig ? sigFmax / sc.sigPk : sigFmax; this._muUseR = dig ? sigRmax / sc.sigPk : sigRmax;
     // ── エンコーダ公開面 vwF/vwR = 軸平均 (§12 AO3・api.js は car.vwF/vwR を読むだけ=無改変で成立) ──
     this.vwF = 0.5 * (this._vw[0] + this._vw[1]);   // 前軸 (非駆動なら接地追従の平均=地面速度)
     this.vwR = 0.5 * (this._vw[2] + this._vw[3]);   // 後軸

@@ -411,6 +411,7 @@ export function updatePanel(refs, data) {
     posTxt += ` β=${data.slip.toFixed(0)}° v→${vdir.toFixed(0)}°`;
   }
   // 摩擦円使用率 (M2 / #18②)。0%=グリップに余裕・100%超=限界突破で滑走。dynamic 車のみ。
+  // v2 は正規化スリップ σ (掘り込み路面ではその路面のピーク σ で正規化・AV3) を百分率にしている。
   if (data.muUse != null) {
     posTxt += ` ${t('hud.muCircle')} F:${Math.round(data.muUse.f * 100)}% R:${Math.round(data.muUse.r * 100)}%`;
   }

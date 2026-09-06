@@ -314,7 +314,7 @@ export function runRace(spec) {
     // レースレポート telemetry (W3・観測のみ・物理非干渉)。摩擦円使用率ピーク・|β|ピーク・初回
     // クラッシュ世界座標を集める。**car 状態を読むだけで slots を一切変えない** ので、report の
     // 有無に関わらず tickChecksum/finishers/dnf は同一 = verifyHash/traceHash は不変 (W1 byte 不変)。
-    const muPeak = new Array(n).fill(0);     // 摩擦円使用率ピーク (0..1+ ・ξ=hypot(fx/Fx,fyd/Fy))
+    const muPeak = new Array(n).fill(0);     // 摩擦円使用率ピーク (0..1+ ・dynamic: ξ=hypot(fx/Fx,fyd/Fy) / v2: σ を路面ピークで正規化=AV3)
     const betaPeak = new Array(n).fill(0);   // |β| ピーク [deg] (β=atan2(vlat,u))
     const crashAt = new Array(n).fill(null); // 初回クラッシュ世界座標 {x,y,tick} (適不適の可視化)
     const isDyn = new Array(n).fill(false);  // dynamic 車か (μ円/β を持つ。kinematic は null 表示)

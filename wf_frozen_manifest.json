@@ -20,11 +20,11 @@
   "canonicalNode": {
     "node": "22.22.1",
     "v8": "12.4.254.21-node.35",
-    "resultSha256": "47ece4f382c49f9e4a123187c1618950841729c481d828f5b1902b20914d90a6",
+    "resultSha256": "d0d579fb69c0971035beb1dba98a8d4d28c7d0fb30387563ea73733975492925",
     "pinnedAt": "2026-09-05",
     "eventId": "official-sample-circuit",
-    "appVersion": "v7.7.0",
-    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: AV2: 4輪摩擦ブレーキ brakeSet の任意装備を追加し APP_VERSION を v7.6.0 → v7.7.0 へ更新。既定 motor では物理は byte 不変 (f0〜f3 一致・verifyHash 不変) だが、APP_VERSION が engineFingerprint 経由で resultSha256 を必ず変えるため再ピンする (AQ-1)。"
+    "appVersion": "v7.8.0",
+    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: AV3: 版 v7.8.0 バンプ（表示層のピーク正規化・docs/i18n・ゲート追加。走行物理は無改変・verifyHash 不変）"
   },
   "history": [
     {

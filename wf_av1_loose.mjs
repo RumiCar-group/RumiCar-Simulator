@@ -24,7 +24,7 @@
 //   node wf_av1_loose.mjs --json   # 表を JSON で吐く（internal の docs/stage_av/ へ整形転記）
 // 所要は末尾に Part 別で印字する（ホスト依存ゆえ本文に固定値を書かない）。
 // ══════════════════════════════════════════════════════════════════════════════════════
-import { CarV2, V2, mfCoeffs, tireForceMF, tireParamsFor, surfaceParamsFor } from './public/js/physics_v2.js';
+import { CarV2, V2, mfCoeffs, tireForceMF, tireParamsFor, surfaceParamsFor, surfacePeakSigma } from './public/js/physics_v2.js';
 import { applyRegime, DYN, DynCar } from './public/js/physics_dyn.js';
 import { Car } from './public/js/physics.js';
 import { CAR, CONST, CAR_TYPES, SURFACES, setPhysicsMode, APP_VERSION } from './public/js/config.js';
@@ -325,6 +325,99 @@ const tableB = [];
   }
   ok(aLo > aPv + 8 && aLo >= 15 && aLo <= 35,
      `B5 **ピークが深い滑り角へ移る**: 舗装 σ=${pv.s.toFixed(2)}（α=${aPv.toFixed(1)}°）→ ルーズ σ=${lo.s.toFixed(2)}（α=${aLo.toFixed(1)}°）／実在のダート最適 20〜30° の帯に入る`);
+  // ── B8 (Stage AV3): HUD/レースレポートの「摩擦円使用率」の正規化（表示層専用・物理非読取）──────────
+  //   v7.6.0/v7.7.0 は正規化スリップ σ をそのまま百分率にしており、ルーズ路面では最大グリップの車が 300% と
+  //   出ていた（AV1 残余 #6）。AV3 で掘り込み路面だけ「その路面の実ピーク σ」で割り、「100%＝ピーク」を
+  //   路面によらず保つ。固定するのは
+  //   (a) 表示用ヘルパ surfacePeakSigma がタイヤ法則の総当たり argmax と一致する —— 出荷 loose（端点＝digSat ちょうど）
+  //       だけでなく **内点にピークを持つ合成路面** でも（AV3 敵対的レビュー #14: 出荷 loose だけでは
+  //       `return digSat` のスタブでも緑だった＝探索ロジックに検出力が無かった）
+  //   (b) 本番 CarV2 の _muUseF が ルーズのピーク滑り角で 1.0・舗装は閉形式の σ と一致（舗装が旧式と bit 同一なのは
+  //       else 枝が旧式そのものという**構造保証**であって、本アサートは 1e-9 許容差の照合＝レビュー #15 で言い分けた）
+  //   (c) **ピーク σ を差し替えても物理状態 9 成分が bit 一致し、_muUseF/_muUseR だけが厳密に比の分だけ動く**
+  //       ＝表示層が物理へ読み戻していないことを検出力つきで固定（初版は「同一入力 2 回の bit 一致」＝決定論しか
+  //       見ておらず、sigPk を物理へ読み戻す変異でも緑だった＝レビュー #12/#18）。
+  {
+    const Fof = (Cc, Bb, dg, s) => Math.sin(Cc * Math.atan(Bb * s)) + dg.dig * Math.min(s / dg.digSat, 1);
+    const brute = (Cc, Bb, dg) => { let bs = 1, bv = -Infinity; const top = Math.max(1, dg.digSat);
+      for (let s = 1; s <= top + 1e-12; s += 0.0005) { const v = Fof(Cc, Bb, dg, s); if (v > bv) { bv = v; bs = s; } }
+      return { s: bs, v: bv }; };
+    const pk = surfacePeakSigma(C, Bp, LOOSE);
+    ok(Math.abs(pk - lo.s) < 3e-3 && surfacePeakSigma(C, Bp, null) === 1,
+       `B8 表示用ピーク σ: surfacePeakSigma = ${pk.toFixed(6)}（タイヤ法則の argmax ${lo.s.toFixed(3)} と 3e-3 以内）／舗装は 1`);
+    // （記録・述語にしない＝SURFACES 定数に結合した反転アサートになるため・第 2 巡 #20）出荷 loose のピークが digSat と一致するかは
+    //   muDecay 次第（出荷タイヤ 0.75/0.95/0.80 と低μベンチ 0.92 では digSat=3 ちょうど・muDecay ≤ 0.5 では σ≈1.2 の内点へ移る）。
+    console.log(`      （記録）出荷 loose のピーク σ=${pk.toFixed(4)}（digSat=${LOOSE.digSat}・muDecay ${Tn.muDecay}）／muDecay 0.5 なら ${surfacePeakSigma(mfCoeffs(0.5).C, mfCoeffs(0.5).Bp, LOOSE).toFixed(4)}・0.35 なら ${surfacePeakSigma(mfCoeffs(0.35).C, mfCoeffs(0.35).Bp, LOOSE).toFixed(4)}`);
+    // 合成路面（内点ピーク・ピーク σ=1 の路面を含む）: 探索ロジックそのものの検出力。`return digSat` スタブなら赤。
+    const synth = [{ md: 0.35, dig: 0.05, digSat: 50 }, { md: 0.95, dig: 0.02, digSat: 20 }, { md: 0.75, dig: 0.5, digSat: 0.5 }, { md: 0.60, dig: 0.15, digSat: 6 }];
+    let worstF = 0, interior = 0; const rows = [];
+    for (const sy of synth) {
+      const cb = mfCoeffs(sy.md), dg = { dig: sy.dig, digSat: sy.digSat };
+      const got = surfacePeakSigma(cb.C, cb.Bp, dg), ref = brute(cb.C, cb.Bp, dg);
+      const dF = Math.abs(Fof(cb.C, cb.Bp, dg, got) - ref.v) / ref.v; worstF = Math.max(worstF, dF);
+      if (ref.s > 1 + 1e-6 && ref.s < Math.max(1, dg.digSat) - 1e-6) interior++;
+      rows.push(`md${sy.md}/dig${sy.dig}/sat${sy.digSat}: ${got.toFixed(3)} vs 総当たり ${ref.s.toFixed(3)}`);
+    }
+    ok(worstF < 1e-6 && interior >= 1,
+       `B8+ 合成路面 ${synth.length} 件で surfacePeakSigma のピーク F 値が総当たり（0.0005 刻み）と相対 ${worstF.toExponential(1)} で一致・うち内点ピーク ${interior} 件（${rows.join(' / ')}）＝探索ロジックに検出力あり`);
+    // 本番 CarV2 を **純横滑り（FREE・舵中立・r=0）** に固定して _muUseF を読む。δ=0・r=0 ゆえ前輪の
+    // σ = |vlat/u| / αP と閉形式で分かる（低μベンチは course.muDecay=0.92 ⇒ C/Bp はその値で立てる）。
+    // **本番の _subCtx → _substep を 1 回だけ呼ぶ**（step() は 28 substep の間に横速度が約 4% 減衰し、
+    // 最終 substep の入力状態が閉形式から外れる＝初版の述語はそれで赤になった。1 substep なら入力＝設定値）。
+    // sigPkOverride を渡すと sc.sigPk を差し替えて走らせる（(c) の検出力用）。
+    const cb92 = mfCoeffs(0.92), pk92 = surfacePeakSigma(cb92.C, cb92.Bp, LOOSE);
+    const muUseAt = (sf, sigma, sigPkOverride) => {
+      const c = new CarV2({ ...buildFromSpec(sf ? { ...BENCH_LOW, surface: sf } : BENCH_LOW).start, x: 0, y: 0, theta: 0 });
+      c.type = 'normal_fr'; c.driveDir = CONST.FREE; c.steer = CONST.CENTER; c.steerAmt = null;
+      const Uc = 25;
+      c.u = Uc; c.vlat = Uc * (sigma * aP); c.r = 0; c.theta = 0; c.steerAngle = 0;
+      const p = c.profile(), T = tireParamsFor(c.tireSet), cb = mfCoeffs(c.muDecay != null ? c.muDecay : T.muDecay);
+      const h = DT / 28, sc = c._subCtx(p, T, cb.C, cb.Bp, h); sc.siWheel = false;
+      if (sigPkOverride != null) sc.sigPk = sigPkOverride;
+      c._substep(h, sc);
+      return { f: c._muUseF, r: c._muUseR, st: [c.x, c.y, c.u, c.vlat, c.r, ...c._vw] };
+    };
+    const p1 = muUseAt(null, 1), l1 = muUseAt('loose', 1), lp = muUseAt('loose', pk92), p3 = muUseAt(null, 3);
+    ok(Math.abs(p1.f - 1) < 1e-9 && Math.abs(p3.f - 3) < 1e-9,
+       `B8' 舗装の _muUseF は閉形式の σ と一致（σ=1 → ${p1.f.toFixed(9)}・σ=3 → ${p3.f.toFixed(9)}・許容 1e-9）。旧式との bit 同一は else 枝が旧式そのものという構造保証（本アサートの担当ではない）`);
+    ok(Math.abs(lp.f - 1) < 1e-9 && Math.abs(l1.f - 1 / pk92) < 1e-9,
+       `B8'' ルーズの _muUseF はピーク滑り角で 1.0（σ=${pk92.toFixed(3)} → ${lp.f.toFixed(9)}）・σ=1 では 1/ピーク（${l1.f.toFixed(9)}）＝「100%＝ピーク」が路面によらず成立（旧表示は 300%）`);
+    // (c) 物理非読取: sc.sigPk を 1000 倍に差し替えた _substep と自然な _substep で、物理状態 9 成分が bit 一致し
+    //     _muUseF/_muUseR だけが厳密に 1/1000 になる。物理が sigPk を読めば状態が動く（＝赤）。
+    const lpX = muUseAt('loose', pk92, pk92 * 1000);
+    // 【第 2 巡 #17】上は fullscale・FREE・siWheel=false の 1 substep しか通らない。半陰的 kD 経路（卓上・AP13＝本 Stage の主題）で
+    //   sigPk を読む変異は素通りするので、**卓上 loose・friction BRAKE・siWheel=true** で 6 substep 回し、状態 15 成分
+    //   （x,y,θ,u,vlat,r,_vw×4,_fyRel×4,_axF,_ayF）を同じ差し替えで突合する。
+    const stateAt = (sigPkOverride) => {
+      applyRegime('tabletop');
+      const c = new CarV2({ ...buildFromSpec({ ...BENCH_LOW, surface: 'loose' }).start, x: 0, y: 0, theta: 0 });
+      c.type = 'normal_fr'; c.brakeSet = 'friction'; c.driveDir = CONST.BRAKE; c.pwm = 0; c.steer = CONST.LEFT; c.steerAmt = null;
+      c.u = 0.7 * CAR.maxSpeed; c.vlat = 0.05 * c.u; c.r = 0.5; c._vw = [c.u, c.u, c.u * 0.9, c.u * 0.9];
+      const p = c.profile(), T = tireParamsFor(c.tireSet), cb = mfCoeffs(c.muDecay != null ? c.muDecay : T.muDecay);
+      const h = DT / 8, sc = c._subCtx(p, T, cb.C, cb.Bp, h); sc.siWheel = V2.siActive && T.mu0 * (c.grip || 1) >= V2.siMinMu;
+      if (sigPkOverride != null) sc.sigPk = sigPkOverride;
+      for (let i = 0; i < 6; i++) c._substep(h, sc);
+      const out = { si: sc.siWheel, pk: sc.sigPk, f: c._muUseF, st: [c.x, c.y, c.theta, c.u, c.vlat, c.r, ...c._vw, ...c._fyRel, c._axF, c._ayF] };
+      applyRegime('fullscale');
+      return out;
+    };
+    const tb = stateAt(null), tbX = stateAt(tb.pk * 1000);
+    ok(lp.st.every((v, i) => Object.is(v, lpX.st[i])) && Math.abs(lp.f / lpX.f - 1000) < 1e-9 && Math.abs(lp.r / lpX.r - 1000) < 1e-9
+       && tb.si === true && tb.st.every((v, i) => Object.is(v, tbX.st[i])) && tb.f > 0 && Math.abs(tb.f / tbX.f - 1000) < 1e-9,
+       `B8''' 差し替え検査: ピーク σ を 1000 倍に差し替えても 物理状態が bit 一致（舗装 FREE 1 substep: 9 成分・x=${lp.st[0].toFixed(9)}／卓上 loose・friction BRAKE・半陰的=${tb.si}・6 substep: 15 成分・u=${tb.st[3].toFixed(9)}）し、_muUseF/_muUseR だけが厳密に 1/1000（比 ${(lp.f / lpX.f).toFixed(6)} / ${(lp.r / lpX.r).toFixed(6)}・卓上 ${(tb.f / tbX.f).toFixed(3)}）`);
+    // (d) 静的検査（第 2 巡 #17）: 差し替え検査は「差し替え後に読まれる sigPk」しか見ない。_subCtx 内で sigPk を他の per-step 定数へ
+    //     畳み込む読み戻しは差し替え前に確定するので動かない。∴ **ソース上の参照箇所**を機械固定する: `sigPk` を含む非コメント行は
+    //     宣言・return フィールド・_muUseF/_muUseR の代入 の 3 行だけ、`surfacePeakSigma(` は定義 1＋呼出 1 の 2 箇所だけ。
+    const src = readFileSync(join(ROOT, 'public', 'js', 'physics_v2.js'), 'utf8');
+    const code = src.split('\n').filter((l) => !/^\s*\/\//.test(l));
+    const sigLines = code.filter((l) => /\bsigPk\b/.test(l));
+    const declN = sigLines.filter((l) => /const sigPk = dig \? surfacePeakSigma\(C, Bp, dig\) : 1;/.test(l)).length;
+    const retN = sigLines.filter((l) => /^\s+C, Bp, CBp, CBpD, kP, aP, vLow, muOf, doWear, relLen, lsd, kf, kth, susp, dig, sigPk, brk,$/.test(l)).length;   // return 行は **完全一致**（sigPk を他の定数へ畳む改変は行が変わって赤）
+    const useN = sigLines.filter((l) => /this\._muUseF = dig \? sigFmax \/ sc\.sigPk : sigFmax; this\._muUseR = dig \? sigRmax \/ sc\.sigPk : sigRmax;/.test(l)).length;
+    const callN = code.filter((l) => /surfacePeakSigma\(/.test(l)).length;
+    ok(sigLines.length === 3 && declN === 1 && retN === 1 && useN === 1 && callN === 2,
+       `B8'''' 静的検査: physics_v2.js で sigPk を含む非コメント行は ${sigLines.length}（宣言 ${declN}・return ${retN}・表示代入 ${useN}）・surfacePeakSigma( は ${callN} 行（定義＋呼出）＝表示層以外に読み戻し経路が無い`);
+  }
   console.log(`      ピーク値: 舗装 ${pv.v.toFixed(4)}·μFz → ルーズ ${lo.v.toFixed(4)}·μFz（μ_eff 上限 ${(1 + LOOSE.dig).toFixed(2)} に対し ${(lo.v / (1 + LOOSE.dig) * 100).toFixed(1)}%）`);
   for (const sg of [1, 2, 3, 4, 6]) tableB.push({ sigma: sg, alphaDeg: +(Math.atan(sg * aP) * deg).toFixed(2), paved: +ratioAt(sg, null).toFixed(6), loose: +ratioAt(sg, LOOSE).toFixed(6) });
   console.log(`      σ:      ${tableB.map(r => String(r.sigma).padStart(8)).join('')}`);
@@ -648,8 +741,8 @@ tC = lap();
   //   ∴ **因果の説明は撤回**し、生の内訳と「特定できていない」ことだけを残す。
   ok(deepP > 0 && deepL > 0 && deepCellsP.length > 0 && deepCellsL.length > 0,
      `AV1-c2 深い滑り（βpk≥${DEEP_MIN}°）の clean 解は **舗装・ルーズの双方に存在する**（run 合計 ${deepP} / ${deepL}・` +
-     `セル 舗装 [${deepCellsP.join(',')}] → ルーズ [${deepCellsL.join(',')}]）。**PLAN の予想②「増える」は合計では成り立たない**` +
-     `（${deepP}→${deepL}）。**セル別の増減の機序は特定できていない**（R_min=${R_MIN.toFixed(2)}m は判別境界ではない — ` +
+     `セル 舗装 [${deepCellsP.join(',')}] → ルーズ [${deepCellsL.join(',')}]）。**PLAN の予想②「増える」の合計の符号は掃引に依存する**` +
+     `（この実行 ${deepP}→${deepL}＝${deepL > deepP ? '増' : deepL < deepP ? '減' : '同数'}。AV3 実測: 既定 6 セル 28→18 は減・--full 18 セル 58→234 は増）。**セル別の増減の機序は特定できていない**（R_min=${R_MIN.toFixed(2)}m は判別境界ではない — ` +
      `R6.5 は R_min より大きいのに舗装の深い解が消える。掃引セルが ${pairs.length} と少なく β 格子にも依存する）。clean 限定の βpk 最大 ${bpkP.toFixed(0)}° → ${bpkL.toFixed(0)}°`);
   ok(cleanL > cleanP && cellL >= cellP,
      `AV1-c2' **掘り込みで drift の成立域そのものは広がる**（測定された効果）: drift の clean run 合計 ${cleanP} → ${cleanL}` +
