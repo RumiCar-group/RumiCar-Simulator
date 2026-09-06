@@ -262,30 +262,45 @@ export function latCorridor(G, safe = RMIN_SAFE) {
 //   超過が大きいときだけ BRAKE を足す。FR のモーターブレーキは後軸ロックなので、既に横滑りしている
 //   ときは踏まない（リアが抜けてスピンする）。
 const LD0 = 0.09, LD_K = 0.22, LD_MIN = 0.07, LD_MAX = 0.30;   // lookahead [m]
+
+// 以下 3 つは `driveTick` から**純粋に抽出**した部品（式も順序もそのまま。AX2 のコーナー局所測定が
+// 同じ追従則を再実装しないため＝CI-14）。抽出後に AX1 ゲートの出力が byte 一致することを確認済み。
+export function lookaheadIdx(car, G, i) {
+  const Ld = clamp(LD0 + LD_K * Math.abs(car.u), LD_MIN, LD_MAX);
+  return Math.min(G.n - 1, i + Math.round(Ld / STEP));
+}
+// 純追跡の厳密式 δ = atan(2·L·sin(e)/dist) ＋ 3 値サーボ（tri）の理想デューティ量子化。
+export function pursueLine(car, G, j, latJ) {
+  const tx = G.P[j][0] - Math.sin(G.th[j]) * latJ, ty = G.P[j][1] + Math.cos(G.th[j]) * latJ;
+  const e = wrap(Math.atan2(ty - car.y, tx - car.x) - car.theta);
+  const dist = Math.max(0.03, Math.hypot(tx - car.x, ty - car.y));
+  const want = clamp(Math.atan2(2 * CAR.wheelBase * Math.sin(e), dist), -CAR.maxSteer, CAR.maxSteer);
+  car.steerAmt = null;                                  // tri（既定サーボ）= 3 値のみ
+  car.steer = (car.steerAngle < want) ? CONST.LEFT : CONST.RIGHT;
+  return want;
+}
+// 目標速度 vT の保持。pwm は **目標速度比**（memory rumicar-v2-pwm-is-target-speed）。超過が大きいときだけ
+// BRAKE を足す。FR のモーターブレーキは後軸ロックなので、既に横滑りしているときは踏まない。
+export function holdTo(car, vT) {
+  const beta = Math.abs(Math.atan2(car.vlat, Math.max(Math.abs(car.u), 1e-6))) * 180 / Math.PI;
+  if (car.u > vT + 0.06 && beta < 20) { car.driveDir = CONST.BRAKE; car.pwm = 0; }
+  else { car.driveDir = CONST.FORWARD; car.pwm = Math.max(0, Math.min(255, Math.round(vT / (CAR.maxSpeed * car.profile().maxSpeed) * 255))); }
+}
+
 export function driveTick(car, G, prof, st, latFrac) {
   const i = st.i;
   const room = roomAt(G, i);
   const f = clamp(latFrac, -1, 1);
   // lookahead は速度連動。狭い所（room 小）では短くして内側を舐めない。
-  const Ld = clamp(LD0 + LD_K * Math.abs(car.u), LD_MIN, LD_MAX);
-  const j = Math.min(G.n - 1, i + Math.round(Ld / STEP));
+  const j = lookaheadIdx(car, G, i);
   // 到達可能な回廊（幾何から決めた連続関数）へ指令をクランプする。
   const req = f * room;                                   // 素の要求
   const latTarget = clamp(req, G.loLat[i], G.hiLat[i]);
   const clamped = Math.abs(latTarget - req);
   const latJ = clamp(f * roomAt(G, j), G.loLat[j], G.hiLat[j]);
-  const tx = G.P[j][0] - Math.sin(G.th[j]) * latJ, ty = G.P[j][1] + Math.cos(G.th[j]) * latJ;
-  const e = wrap(Math.atan2(ty - car.y, tx - car.x) - car.theta);
-  // 純追跡の厳密式 δ = atan(2·L·sin(e)/Ld)。lookahead が短いと発散するので実距離で割る。
-  const dist = Math.max(0.03, Math.hypot(tx - car.x, ty - car.y));
-  const want = clamp(Math.atan2(2 * CAR.wheelBase * Math.sin(e), dist), -CAR.maxSteer, CAR.maxSteer);
-  car.steerAmt = null;                                  // tri（既定サーボ）= 3 値のみ
-  car.steer = (car.steerAngle < want) ? CONST.LEFT : CONST.RIGHT;
-
+  const want = pursueLine(car, G, j, latJ);
   const vT = prof.v[i];
-  const beta = Math.abs(Math.atan2(car.vlat, Math.max(Math.abs(car.u), 1e-6))) * 180 / Math.PI;
-  if (car.u > vT + 0.06 && beta < 20) { car.driveDir = CONST.BRAKE; car.pwm = 0; }
-  else { car.driveDir = CONST.FORWARD; car.pwm = Math.max(0, Math.min(255, Math.round(vT / (CAR.maxSpeed * car.profile().maxSpeed) * 255))); }
+  holdTo(car, vT);
   return { latTarget, latReq: req, clamped, room, want, vT };
 }
 
@@ -374,6 +389,124 @@ export function runTouge({ spec, carType, latFrac = 0, mode = 'window', maxSec =
     // 走行条件の実測（ゲートが「本当にその条件で走ったか」を構造で確かめるための返り値）
     roadActive: !!slot._road, engine: car.engine, steerSet: car.steerSet, tireSet: car.tireSet,
     brakeSet: car.brakeSet, gearSet: car.gearSet, suspSet: car.suspSet, downhill: +(course.downhill || 0),
+  };
+}
+
+// ── コーナーの同定（AX2/AX3 が共有する定義）──────────────────────────────────────────
+// **コーナー = |κ| がしきい値以上の連続区間**。しきい値は「R ≤ 1.0m」= κ ≥ 1.0 とする
+//   （出荷 6 峠の中心線 minR は 0.278〜0.636m ＝ どの峠にもコーナーが立つ最小のしきい値。
+//    これより厳しくすると架空峠(緩斜面) の minR=0.636m が 1 本も拾えなくなる）。
+//   切れ目 0.10m 以内は同じコーナーとして結合し、**車長 0.19m に満たない区間は捨てる**
+//   （車が姿勢を作れない長さの「コーナー」は測定単位にならない）。
+// 返す各コーナーは 到達可能性・通過速度・区間所要の測定単位になる。
+export const CORNER_KAPPA = 1.0;
+export function cornersOf(G, kappaTh = CORNER_KAPPA) {
+  const runs = []; let st = -1;
+  for (let i = 0; i < G.n; i++) {
+    const hi = Math.abs(G.kap[i]) >= kappaTh;
+    if (hi && st < 0) st = i;
+    // 終端は「まだ閾値を満たしている最後の点」。閾値を割った最初の点まで含めると系統的に
+    //   1 標本（0.02m）長くなる（層 4 レビュー指摘・実測 20/20 コーナーで該当）。
+    if ((!hi || i === G.n - 1) && st >= 0) { runs.push([st, hi ? i : i - 1]); st = -1; }
+  }
+  const merged = [];
+  for (const r of runs) {
+    const last = merged[merged.length - 1];
+    if (last && G.s[r[0]] - G.s[last[1]] < 0.10) last[1] = r[1]; else merged.push([...r]);
+  }
+  const out = [];
+  for (const [a, b] of merged) {
+    if (G.s[b] - G.s[a] < CAR.length) continue;
+    let kMax = 0, sign = 0, hwMin = Infinity;
+    for (let i = a; i <= b; i++) {
+      const k = G.kap[i];
+      if (Math.abs(k) > kMax) { kMax = Math.abs(k); sign = Math.sign(k); }
+      if (G.hw[i] < hwMin) hwMin = G.hw[i];
+    }
+    out.push({ i0: a, i1: b, s0: G.s[a], s1: G.s[b], len: G.s[b] - G.s[a],
+      kMax, sign, R: 1 / kMax, hwMin, usable: hwMin - CAR.width / 2 });
+  }
+  return out;
+}
+
+// 横位置 lat（+lat = 中心線の左）が、符号付き曲率 sign・半径 R のコーナーで **幾何だけから**
+// 到達可能とみなせるか（舵角律速のみ。道幅・車体余白は見ない）。**判定には使わない** —
+// AX2 は実走で到達可能性を決め、この式は「代理量がどれだけ外すか」の比較にだけ使う（CI-14）。
+export function latReachable(lat, R, sign, safe = 1) {
+  const latIn = sign > 0 ? lat : -lat;      // κ>0 = 左旋回 = 内側は +lat 側
+  return (R - latIn) >= (CAR.wheelBase / Math.tan(CAR.maxSteer)) * safe;
+}
+
+// ── コーナー局所の測定（AX2「その横位置を通ったときの最大通過速度」の実行器）───────────
+// **なぜコーナー局所か**: 20 コーナー × 横位置 7 × 速度の二分探索 を毎回コース全体で走らせると
+//   実行時間が桁違いになる（ゲートとして常設できない）。コーナーの手前 RUNUP から出口までだけを
+//   走らせる。**使うものは本番と同一**（buildFromSpec の壁・makeSlot のスロットと路面フレーム・
+//   integrateFleetV2・checkCollision）で、違うのは **開始位置と開始速度＝初期条件だけ**である
+//   （wf_touge_drift_probe / wf_ao8 の `toSpeed` が原点へ置き直すのと同型）。
+// **初速は与えず、静止から助走で作る**（`car.u` を直接書くと車輪速 `_vw` が 0 のままで
+//   t=0 に「ロックしたまま滑っている」状態になり、測ろうとしている物理と別物になる）。
+//   助走 0.6m の妥当性は **実測**で確かめる（v2 の駆動力は目標との差に比例する一次遅れなので、
+//   等加速度の式 v²/2a では根拠にならない）。実測: 到達可能点の入口速度は指令の 0.995〜1.071 倍。
+//   実際に入口で目標速度に乗ったかは戻り値 `vEntry` で呼び出し側が確かめること（空振り防止）。
+const CORNER_RUNUP = 0.6, CORNER_EXIT = 0.15;
+export function runCornerLine({ spec, carType, corner, latAbs, speed, maxSec = 20, course = null, G = null, road = true }) {
+  const crs = course || buildFromSpec(spec);
+  const geo = G || tougeGeom(crs);
+  const slot = makeSlot({ i: 0, lang: 'c', src: '', course: crs, slotCount: 1, logFor: () => (() => {}) });
+  slot.carType = carType; slot.car.type = carType;
+  rebuildSpawns([slot], crs, null);
+  // 開始インデックス = コーナー入口の CORNER_RUNUP 手前
+  let iStart = corner.i0;
+  while (iStart > 0 && geo.s[corner.i0] - geo.s[iStart] < CORNER_RUNUP) iStart--;
+  const x0 = geo.P[iStart][0] - Math.sin(geo.th[iStart]) * latAbs;
+  const y0 = geo.P[iStart][1] + Math.cos(geo.th[iStart]) * latAbs;
+  slot.car.reset({ ...slot.spawn, x: x0, y: y0, theta: geo.th[iStart] });   // 路面属性(downhill/grip)は spawn のまま
+  if (!road) slot._road = null;      // 計測アーム（既定 true では makeSlot/rebuildSpawns が入れた値のまま）
+  slot.lap.reset(crs, { carType, persist: false });
+  slot.running = true;
+  const car = slot.car, side = sideWallsOf(crs);
+  const track = trackerOf(geo, 'window');
+  const iEnd = Math.min(geo.n - 1, corner.i1 + Math.round(CORNER_EXIT / STEP));
+  const errs = [];
+  // **接触は全 tick で見る**。コーナー窓の中だけで見ていた初版は、助走 0.6m の区間で壁へめり込んだ
+  //   走行を「接触 0」として通していた（層 4 レビュー・実測 3 件が 9 tick ずつめり込んでいた）。
+  //   `contactIn` はコーナー窓内だけの内訳（診断用）。
+  let t = 0, tIn = null, tOut = null, vEntry = null, contact = 0, contactIn = 0, arms = 0, prevRec = 0, minClear = Infinity;
+  let reached = false, ticks = 0;
+  const maxTicks = Math.round(maxSec / DT);
+  for (; ticks < maxTicks; ticks++) {
+    const st = track(car.x, car.y);
+    if (st.i >= corner.i0 && tIn == null) { tIn = t; vEntry = car.u; }
+    if (st.i >= iEnd) { tOut = t; reached = true; break; }
+    const j = lookaheadIdx(car, geo, st.i);
+    pursueLine(car, geo, j, latAbs);
+    holdTo(car, speed);
+    integrateFleetV2([slot], DT, crs.walls, true, false);
+    t += DT;
+    if (car.recoverT > prevRec + 1e-9) arms++;
+    prevRec = car.recoverT;
+    const hitNow = checkCollision(car, crs.walls);
+    if (hitNow) contact++;
+    if (st.i >= corner.i0 - Math.round(0.10 / STEP) && st.i <= iEnd) {
+      errs.push(Math.abs(st.lat - latAbs));
+      if (hitNow) contactIn++;
+      for (const e of carEdges(car)) {
+        const a = { x: e.x1, y: e.y1 }, b = { x: e.x2, y: e.y2 };
+        for (const w of side) {
+          const wa = { x: w.x1, y: w.y1 }, wb = { x: w.x2, y: w.y2 };
+          const d = Math.min(distToSeg(a, wa, wb), distToSeg(b, wa, wb), distToSeg(wa, a, b), distToSeg(wb, a, b));
+          if (d < minClear) minClear = d;
+        }
+      }
+    }
+  }
+  errs.sort((a, b) => a - b);
+  return {
+    reached, contact, contactIn, arms, ticks, roadActive: !!slot._road,
+    vEntry, secT: (reached && tIn != null) ? tOut - tIn : null,
+    latMed: errs.length ? errs[Math.floor(errs.length * 0.5)] : null,
+    latP95: errs.length ? errs[Math.min(errs.length - 1, Math.floor(errs.length * 0.95))] : null,
+    minClear: Number.isFinite(minClear) ? minClear : null, nErr: errs.length,
   };
 }
 

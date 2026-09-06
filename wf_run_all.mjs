@@ -67,6 +67,9 @@ const GATES = [
   //   完走 18 セル・決定論 5 回・既定サンプルとの ±30% 帯・横位置追従・予備実装の欠陥 2 件の固定。
   //   本体は library `wf_touge_driver.mjs`（下の EXCLUDED に明示）。
   'wf_ax1_touge_base.mjs',
+  // AX2: 峠の「速いライン」の同定とブロック対象の定義。コーナー 20 本 × 横位置 7 分割で
+  //   到達可能性（実走判定）・最大通過速度・区間所要・「内側 1/3 を占有されたときのコスト」を固定。
+  'wf_ax2_lines.mjs',
 ].map((name) => ({ name, args: [] }));
 
 // official_result は決定論2回照合→result.json 再検証→Node pin 照合の複合ゲート (AP20)。
