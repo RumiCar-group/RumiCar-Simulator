@@ -19,12 +19,14 @@
 //     carry 後に残る |β|(横滑り角 = atan2(vlat,|u|))の**包絡**(位相依存の振動を平均するため d±0.5relLen 窓の max)。
 //     事前振り無し(直進のみ)は β=0 ゆえ、この包絡値がそのまま「事前振り有/無の turn-in β 差」= 持ち越し量。
 //     carry 距離 d = 各治具/出荷S字の**実測切返し間隔**を使う(=治具幾何と β 測定を結ぶ)。
-//  【分解能】= 完全緩和参照(carry 12×relLen)で残る |β|(≈0.01-0.02°=緩和床)より上に取る保守床 0.05°。
+//  【分解能】= 完全緩和参照(carry 12×relLen)で残る |β|(=緩和床。AP26 起票時 ≈0.01-0.02°・AW1 v8.0.0 では 0.034°＝参照解
+//     〔原 explicit〕の 0.0343° と同じ。過小伝達の物理では小さく出ていた)より上に取る保守床 0.05°。出荷 S 字の残|β|(0.0416°)に
+//     対する床の余裕は 0.0084°=17%(本ゲートが印字)。
 //     決定論は bit 完全一致(数値分解能 0)。0.05°未満=「持ち越しなし(緩和)」・以上=「持ち越しを分解」。
 //  【弁別性】= flick 中の peak |β|(βrelease)が大きい(≥5°)=ハーネスが β を実測できている証拠(死んだ計器でない)。
 
 import { buildFromSpec } from './public/js/course.js';
-import { CarV2 } from './public/js/physics_v2.js';
+import { CarV2, V2 } from './public/js/physics_v2.js';
 import { CAR, CONST, setPhysicsMode, APP_VERSION } from './public/js/config.js';
 import { applyRegime } from './public/js/physics_dyn.js';
 import { readFileSync } from 'fs';
@@ -126,10 +128,24 @@ for (const j of jigs) {
 for (const row of betaTable) {
   ok(row.ship <= RES, `② 出荷S字 緩和 U=${row.U}: 残|β|=${row.ship}°≤分解能${RES}° =持ち越し測定不能(出荷S字が不適の実証)`);
 }
-// 分離度: 最小治具/最大出荷S字 ≥ 10×(clean separation)
+// 分離度: 最小治具/最大出荷S字 を **参照解相対（±20% ∧ ≥2）** で固定する
+// 【AW1（v8.0.0）で「固定 ≥10×」から刻み直し・緩和ではなく測定対象の是正】AP26 起票時の「≥10×」は AP13 の半陰的車輪 ODE が
+//   接地速度を凍結して力を過小に伝えていた物理（v4.0.0〜v7.8.0）の上で決めた余裕値で、当時の実測は 16.5×
+//   （最小治具 0.2619° / 最大出荷 0.0159°）。**同じ製品コードの陽的経路（原 explicit・nSub 上限 4096＝参照解）で
+//   測り直すと 3.48×（0.1452° / 0.0417°）**＝10× は真の物理では成り立っていなかった。AW1（車輪 ODE を車体加速度と
+//   同一 substep で連成）は 3.36×（0.1397° / 0.0416°・参照解比 −3.5%）。核心の述語（治具 > 分解能・出荷 ≤ 分解能）は
+//   不変のまま緑。出荷 S 字の残|β| は緩和床（12×relLen・0.034°）より 22% 上にあり、分解能床 0.05° に対する余裕は 0.0084°（下で印字）。
 let minJig = Infinity, maxShip = 0;
 for (const row of betaTable) { for (const j of jigs) minJig = Math.min(minJig, row[j.name]); maxShip = Math.max(maxShip, row.ship); }
-ok(minJig / Math.max(maxShip, 1e-9) >= 10, `② 分離度: 最小治具残|β|=${minJig.toFixed(4)}° / 最大出荷S字残|β|=${maxShip.toFixed(4)}° = ${(minJig/Math.max(maxShip,1e-9)).toFixed(1)}×≥10`);
+const sepCur = minJig / Math.max(maxShip, 1e-9);
+// 参照解（同じ製品コードの陽的経路・V2.siActive=false → step() が needW を課す原 explicit）で同じ分離度を測り、**参照解との相対**で固定する
+// （AW1 敵対的レビュー #4: 固定値 3 は実測 3.36 の直下＝将来の微小変化で赤になる床。参照解突合なら「緩和」と「是正」を区別できる）。
+const sepRef = (() => { const keep = V2.siActive; V2.siActive = false; try {
+  let mj = Infinity, ms = 0;
+  for (const U of US) { const prof = carryProfile(U, DFLICK); for (const j of jigs) mj = Math.min(mj, envAt(prof.samp, j.interval)); ms = Math.max(ms, envAt(prof.samp, shipSb.interval)); }
+  return mj / Math.max(ms, 1e-9); } finally { V2.siActive = keep; } })();
+ok(sepCur >= 2 && Math.abs(sepCur / sepRef - 1) <= 0.2,
+   `② 分離度: 最小治具残|β|=${minJig.toFixed(4)}° / 最大出荷S字残|β|=${maxShip.toFixed(4)}° = ${sepCur.toFixed(2)}×（参照解 ${sepRef.toFixed(2)}× の ±20% 以内 ∧ ≥2。v7.8.0 は過小伝達の副作用で 16.5×）`);
 
 // 決定論: 同一条件2回 bit 一致。
 {
@@ -149,6 +165,8 @@ for (const row of betaTable) {
   console.log(`    ${String(row.U).padEnd(6)} ${String(row.betaRelease).padStart(6)}°  | ` +
     jigs.map(j => `${String(row[j.name]).padStart(6)}°`).join('       ') + `   | ${String(row.ship).padStart(7)}°   | ${String(row.relaxFloor).padStart(6)}°`);
 }
+const maxRelax = Math.max(...betaTable.map(r => r.relaxFloor));
+console.log(`\n  出荷S字 残|β| max ${maxShip.toFixed(4)}° ≤ 分解能床 ${RES}°: 余裕 ${(RES - maxShip).toFixed(4)}°(${(100 * (RES - maxShip) / RES).toFixed(0)}%)  緩和床(12×relLen) max ${maxRelax.toFixed(4)}°(出荷は床の ${(maxShip / maxRelax).toFixed(2)} 倍)  分離度 ${sepCur.toFixed(2)}× / 参照解 ${sepRef.toFixed(2)}× (${(100 * (sepCur / sepRef - 1)).toFixed(1)}%)`);
 console.log(`\n  → β持ち越しは実在(治具間隔 2-4×relLen で 残|β| ~${minJig.toFixed(2)}-${betaTable.reduce((m,r)=>Math.max(m,...jigs.map(j=>r[j.name])),0).toFixed(2)}°>分解能)が、`);
 console.log(`    ~4-6×relLen 以内で緩和し、出荷S字(11.6×relLen)では ${maxShip.toFixed(3)}°≤分解能=測定不能。∴治具が必要(AP1_audit C5 の実証)。`);
 

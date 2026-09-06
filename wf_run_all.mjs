@@ -60,6 +60,9 @@ const GATES = [
   // AV2: 4輪摩擦ブレーキ brakeSet（車両の任意装備）の受け入れゲート。
   //   既定=縮小掃引（D 章の格子2 を 32 セルへ）。--full は docs 転記用で 288 セルへ広げる。
   'wf_av2_brake.mjs',
+  // AW1: 車輪 ODE と車体加速度の同一 substep 連成（AP13 半陰的化の過小伝達の是正）の受け入れゲート。
+  //   参照解（同じ製品コードの陽的経路）との一致・本番 nSub での安定性・陽的経路の回帰指紋・avgNSub を固定。
+  'wf_aw1_coupled.mjs',
 ].map((name) => ({ name, args: [] }));
 
 // official_result は決定論2回照合→result.json 再検証→Node pin 照合の複合ゲート (AP20)。

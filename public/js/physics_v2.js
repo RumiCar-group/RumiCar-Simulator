@@ -336,6 +336,10 @@ export class CarV2 extends DynCar {
     //  ため、AV2 では配分と力の両方を実装の側から読む述語を置く。)
     this._fAppWheel = [0, 0, 0, 0];  // 輪へ指令した縦力 fApp (制動は負・駆動は正・非駆動/惰行輪は 0)
     this._fxWheel = [0, 0, 0, 0];    // 輪が実際に路面へ出した縦力 fxA (車輪系・緩和/半径クランプ後)
+    // ── Stage AW1: 車輪 ODE が到達した縦スリップ率 κ (クランプ後・非駆動輪は 0) とクランプ発火回数 (**診断専用・物理非読取**)。
+    //    ゲートが「実装の κ」を外から読むための量 (AV1 教訓(ii): 不変条件をゲート側で再計算しない)。
+    this._kapWheel = [0, 0, 0, 0];
+    this._kapClampN = 0;
     // ── Stage AS9: 変速機の状態 (発走ごとに 1速・変速中でない)。direct 装備では参照されない (=byte 不変) ──
     this._gearIdx = 0;     // 現在の段 (GEARS[gearSet].ratios の添字)
     this._shiftT = 0;      // 変速で駆動が切れている残り時間 [s] (>0 の間 駆動トルク 0)
@@ -712,6 +716,8 @@ export class CarV2 extends DynCar {
     }
 
     // ── ⑤ 輪ごと 結合 MF タイヤ力 (横力緩和込) → 車体系へ回転して合算 ──
+    // AW1: 車輪 ODE の更新を「全輪の力→車体加速度」の後（⑥'）へ回すための輪ごとの入力（同一 substep 内の受け渡し）。
+    const WD = [false, false, false, false], WV = [0, 0, 0, 0], WDen = [0, 0, 0, 0], WFx = [0, 0, 0, 0], WMu = [0, 0, 0, 0], WcD = [1, 1, 1, 1], WsD = [0, 0, 0, 0];
     const WH = [
       { x: a, y: +halfT, d: dFL, n: nFL, n0: nF0, split: dk.split[0], idx: 0 },  // FL
       { x: a, y: -halfT, d: dFR, n: nFR, n0: nF0, split: dk.split[0], idx: 1 },  // FR
@@ -778,39 +784,88 @@ export class CarV2 extends DynCar {
       sumFx += fxB; sumFy += fyB; sumFyTire += fyB;
       if (w.idx <= 1) sumFyFront += fyB; else sumFyRear += fyB;  // 軸別横力 (緩和長/rollBalance ゲート)
       sumMz += w.x * fyB - w.y * fxB;
-      // ── 車輪 ODE (§2.4・AO3): dvw/dt = λ·(fApp − fx_tire)。fx は適用縦力 fxA (body と同一=作用反作用)。
-      //    縦力は瞬時 (緩和は横力のみ)。κ を ±clamp で数値安定 (nSub 上限時の発散止め=最終防波堤)。
-      //    非駆動/惰行輪は接地追従 vw=vcx (自由転動・スリップなし)。──
-      if (wheelDriven) {
-        const v0 = this._vw[w.idx];
-        // ── AO3 車輪 ODE (AP13): grip 十分域は半陰的化 (無条件安定・nSub 削減の核)、低グリップ (slip) は原
-        //    explicit を保存 (near-limit のカオス的挙動を byte 維持・境界は step() の siWheel=μ0eff≥siMinMu)。──
-        //  半陰的: dvw/dt=λ·(fApp−fx(vw)) の fx を vw で1次陰的化。線形域 fx=muFz·C·Bp·(vw−vcx)/(kP·denom) ゆえ
-        //    局所縦剛性 kD=∂fx/∂vw=muFz·C·Bp/(kP·denom)≥0。backward Euler vw'=v0+λ·dt·(fApp−fxA−kD·(vw'−v0)) を
-        //    解くと **vw' = v0 + λ·dt·(fApp − fxA)/(1 + λ·dt·kD)**。**無条件安定** (剛い程 増分→0=vw が接地速度に
-        //    slave)・定常 fApp=fxA で vw'=v0 不変。線形 kD は飽和域の実勾配を上回る安全側の減衰で、空転/ロックの
-        //    定常点と kappaClamp 上限は不変。旧陽的 (needW で nSub を 256 へ貼り付かせていた) を置換。
-        //  explicit: 原 vw'=v0+λ·(fApp−fxA)·dt (低グリップは step() が needW を復元し高 nSub で走る=byte 保存)。
-        let vwNew;
-        if (siWheel) {
-          const kD = muFz * CBpD / (kP * denom);   // 縦タイヤ剛性 ∂fx/∂vw (線形域・安全側。AV1: CBpD は掘り込み込み)
-          vwNew = v0 + V2.wheelLambda * (fApp[w.idx] - fxA) * dt / (1 + V2.wheelLambda * kD * dt);
-        } else {
-          vwNew = v0 + V2.wheelLambda * (fApp[w.idx] - fxA) * dt;   // 原 explicit (低グリップ保存・byte 不変)
-        }
-        const kN = (vwNew - vcx) / denom;
-        if (kN > V2.kappaClamp) vwNew = vcx + V2.kappaClamp * denom;
-        else if (kN < -V2.kappaClamp) vwNew = vcx - V2.kappaClamp * denom;
-        // モーターブレーキは回転を止めるだけ=車輪を逆回転へは駆動しない (0 でロック。ブレーキはエネルギーを
-        // 注入できない)。制動中は vw の符号を跨がせず 0 クランプ (F5 の vwLock 相当・ロック輪=最大スリップ)。
-        if (braking) vwNew = v0 >= 0 ? Math.max(0, vwNew) : Math.min(0, vwNew);
-        this._vw[w.idx] = vwNew;
-      } else {
-        this._vw[w.idx] = vcx;
-      }
+      // ── 車輪 ODE (§2.4・AO3) は ⑥'（全輪の力と車体加速度の後）で更新する（AW1・2 パス）。ここでは輪ごとの入力を保存。
+      WD[w.idx] = wheelDriven; WV[w.idx] = vcx; WDen[w.idx] = denom; WFx[w.idx] = fxA; WMu[w.idx] = muFz; WcD[w.idx] = cD; WsD[w.idx] = sD;
       this._FzWheel[w.idx] = w.n;
       if (w.idx <= 1) sigFmax = Math.max(sigFmax, F.sigma); else sigRmax = Math.max(sigRmax, F.sigma);
       if (w.idx === 2) arRear = ta;
+    }
+    // ── ⑦ 車体合力/モーメント (mass-norm) ──
+    let ax = sumFx + coast - dragX + this.r * this.vlat;   // Coriolis +r·vlat
+    let ay = sumFy - dragY - this.r * this.u;              // Coriolis −r·u
+    const rdot = sumMz / iz;
+    // 勾配重力の適用 (AP10): 駆動中(FORWARD/REVERSE)と BRAKE 走行中は gFwd をそのまま加算。BRAKE 静止は
+    // ブレーキ保持で掛けない (現仕様踏襲)。FREE は上の惰行ブロックで転がり抵抗と合成済 (coast に内包) ゆえ
+    // ここでは加えない (二重加算回避)。gApplied は荷重 LPF の縦比力にも同値で入る (下・FREE は coast 経由)。
+    let gApplied = 0;
+    if (gFwd !== 0 && this.driveDir !== CONST.FREE && (driven || Math.abs(this.u) > 1e-3)) gApplied = gFwd;
+    ax += gApplied;
+    // AS10: 面内重力の横成分。前方と違い FREE 惰行ブロックへ折り込む相手 (転がり抵抗) が無いので**無条件に
+    // 加算**する (惰行で坂を下る車も横へ押される)。gLeft は非タイヤ力ゆえ REVERSE 半陰的分岐でも ayNoLat
+    // 側に残り正しく陽的に扱われ、⑪の aySpec (タイヤ横力+空力) には入らない = 左右荷重移動の二重計上なし。
+    // 平地は gLeft===0 で完全 no-op = byte 不変。
+    if (gLeft !== 0) ay += gLeft;
+    // ── ⑥' 車輪 ODE (§2.4・AO3・**AW1: 2 パス目**) ──────────────────────────────────────
+    //  dvw/dt = λ·(fApp − fx_tire)。fx は適用縦力 fxA (body と同一=作用反作用)。縦力は瞬時 (緩和は横力のみ)。
+    //  κ を ±clamp で数値安定 (nSub 上限時の発散止め=最終防波堤)。非駆動/惰行輪は接地追従 vw=vcx (自由転動)。
+    //  AP13 の半陰的化 (grip 十分域・siWheel=true) は fx を vw で 1 次陰的化した backward Euler
+    //    vw' = v0 + λ·dt·(fApp − fxA)/(1 + λ·dt·kD)  (kD=∂fx/∂vw=muFz·C·Bp/(kP·denom) の線形域上界・無条件安定)
+    //  だが、substep の間 **接地速度 vcx を凍結**していた (作用素分割)。車体が減速して vcx が毎 substep ax·dt だけ
+    //  下がるのに輪は (fApp−fxA)/kD 程度しか追随できず、滑りが立ち上がらない＝**指令より小さい力しか路面へ届かない**
+    //  (AV3 実測: 卓上 motor で参照解の −36%・中スケール −32%。誤差 ∝ dt·kD)。
+    //  AW1 の是正: 全輪の力から **同一 substep の車体加速度 (ax, ay, rdot)** を先に求め、接地点の縦速度変化
+    //    Δvcx = (ax − rdot·y)·cosδ·dt + (Δv_lat + rdot·x·dt)·sinδ   （前進/制動では Δv_lat = ay·dt。REVERSE は ⑧ と同じ半陰的式で予測＝下記）
+    //  を滑り変数 s=vw−vcx の陰的更新へ入れる: s' = s + [λ·dt·(fApp−fxA) − Δvcx]/(1+λ·dt·kD) ⇔
+    //    **vw' = v0 + λ·dt·(fApp−fxA)/(1+λ·dt·kD) + Δvcx·λ·dt·kD/(1+λ·dt·kD)**、κ クランプの基準は vcx+Δvcx。
+    //  **前 substep の Δvcx を使う予測子は禁止** (AV3 で 4 輪制動が周期 2 振動: ΣFx>0 22%・後輪 fx 符号交替 83%)。
+    //  同一 substep の ax は現在の力の関数なのでループ利得の遅れが無く、線形化解析で |1−ε|<1 の減衰 (AW1 ゲートで
+    //  ΣFx>0=0・符号交替 <5% を機械固定)。**陽的経路 (siWheel=false: fullscale・低グリップ) は式・順序とも旧値と同一
+    //  double** (f2/f3・正準 verifyHash・AO6 D2 を byte 保存)。
+    // AW1 (敵対的レビュー #1 で是正): REVERSE は ⑧ が横速度 vlat を半陰的 (1/(1+kLat·dt)) に積分する。定常後退旋回では
+    //   陽的 ay·dt は 0 にならず (ayNoLat = kLat·vlat が釣り合う)、Δvcx の横成分をそれで予測すると誤差が毎 substep 滑りへ入り
+    //   続ける (実測: 後退速度 +7%・旋回半径 +5% の乖離)。∴ ⑧ と **同一の式・同一の kLat** で Δvlat を予測する。
+    //   kLat は ⑧ から巻き上げ (絶対値 |u+ax·dt| は ⑧ の u+=ax·dt 後の |u| と同一 double) ⇒ 陽的経路の ⑧ は bit 不変。
+    let kLatRev = 0, dvlat = ay * dt;
+    if (this.driveDir === CONST.REVERSE) {
+      const absU_ = Math.max(Math.abs(this.u + ax * dt), DYN.absUFloor);
+      const cd0_ = Math.cos(delta);
+      let CaF_, CaR_;
+      if (doWear) {
+        CaF_ = (muOf(nFL, nF0) * fTW[0] * nFL + muOf(nFR, nF0) * fTW[1] * nFR) * CBpD / aP;
+        CaR_ = (muOf(nRL, nR0) * fTW[2] * nRL + muOf(nRR, nR0) * fTW[3] * nRR) * CBpD / aP;
+      } else {
+        CaF_ = (muOf(nFL, nF0) * nFL + muOf(nFR, nF0) * nFR) * CBpD / aP;
+        CaR_ = (muOf(nRL, nR0) * nRL + muOf(nRR, nR0) * nRR) * CBpD / aP;
+      }
+      kLatRev = (CaF_ * cd0_ * cd0_ + CaR_) / absU_;
+      dvlat = (this.vlat + (ay - sumFyTire) * dt) / (1 + kLatRev * dt) - this.vlat;   // ⑧ REVERSE 枝と同一式の 1 substep 変化
+    }
+    this._kapClampN = 0;
+    for (let k = 0; k < 4; k++) {
+      const w = WH[k], vcx = WV[k], denom = WDen[k];
+      if (!WD[k]) { this._vw[k] = vcx; this._kapWheel[k] = 0; continue; }
+      const v0 = this._vw[k], fxA = WFx[k];
+      let vwNew, vcxRef = vcx;
+      if (siWheel) {
+        const kD = WMu[k] * CBpD / (kP * denom);   // 縦タイヤ剛性 ∂fx/∂vw (線形域・安全側。AV1: CBpD は掘り込み込み)
+        const dvcx = (ax - rdot * w.y) * WcD[k] * dt + (dvlat + rdot * w.x * dt) * WsD[k];   // AW1: 同一 substep の接地速度変化 (横は ⑧ と同じ積分則)
+        const g = V2.wheelLambda * kD * dt;
+        vwNew = v0 + V2.wheelLambda * (fApp[k] - fxA) * dt / (1 + g) + dvcx * g / (1 + g);
+        const vcxN = vcx + dvcx; vcxRef = vcxN;
+        const kN = (vwNew - vcxN) / denom;
+        if (kN > V2.kappaClamp) { vwNew = vcxN + V2.kappaClamp * denom; this._kapClampN++; }
+        else if (kN < -V2.kappaClamp) { vwNew = vcxN - V2.kappaClamp * denom; this._kapClampN++; }
+      } else {
+        vwNew = v0 + V2.wheelLambda * (fApp[k] - fxA) * dt;   // 原 explicit (低グリップ・fullscale 保存・byte 不変)
+        const kN = (vwNew - vcx) / denom;
+        if (kN > V2.kappaClamp) { vwNew = vcx + V2.kappaClamp * denom; this._kapClampN++; }
+        else if (kN < -V2.kappaClamp) { vwNew = vcx - V2.kappaClamp * denom; this._kapClampN++; }
+      }
+      // モーターブレーキは回転を止めるだけ=車輪を逆回転へは駆動しない (0 でロック。ブレーキはエネルギーを
+      // 注入できない)。制動中は vw の符号を跨がせず 0 クランプ (F5 の vwLock 相当・ロック輪=最大スリップ)。
+      if (braking) vwNew = v0 >= 0 ? Math.max(0, vwNew) : Math.min(0, vwNew);
+      this._vw[k] = vwNew;
+      this._kapWheel[k] = (vwNew - vcxRef) / denom;   // AW1 診断: 到達 κ (クランプ後・物理非読取)
     }
     this._fcMarginSS = fcMarginSS;    // 定常 MF 力の摩擦円マージン (≤0=円内・不変条件)
     this._fcMargin = fcMarginApp;     // 適用力 (緩和+クランプ後) のマージン (≤0=クランプで保証)
@@ -827,37 +882,12 @@ export class CarV2 extends DynCar {
     this.vwR = 0.5 * (this._vw[2] + this._vw[3]);   // 後軸
     if (brakeStop) { this._vw[0] = this._vw[1] = this._vw[2] = this._vw[3] = 0; this.vwF = 0; this.vwR = 0; }
 
-    // ── ⑦ 車体合力/モーメント (mass-norm) ──
-    let ax = sumFx + coast - dragX + this.r * this.vlat;   // Coriolis +r·vlat
-    let ay = sumFy - dragY - this.r * this.u;              // Coriolis −r·u
-    const rdot = sumMz / iz;
-    // 勾配重力の適用 (AP10): 駆動中(FORWARD/REVERSE)と BRAKE 走行中は gFwd をそのまま加算。BRAKE 静止は
-    // ブレーキ保持で掛けない (現仕様踏襲)。FREE は上の惰行ブロックで転がり抵抗と合成済 (coast に内包) ゆえ
-    // ここでは加えない (二重加算回避)。gApplied は荷重 LPF の縦比力にも同値で入る (下・FREE は coast 経由)。
-    let gApplied = 0;
-    if (gFwd !== 0 && this.driveDir !== CONST.FREE && (driven || Math.abs(this.u) > 1e-3)) gApplied = gFwd;
-    ax += gApplied;
-    // AS10: 面内重力の横成分。前方と違い FREE 惰行ブロックへ折り込む相手 (転がり抵抗) が無いので**無条件に
-    // 加算**する (惰行で坂を下る車も横へ押される)。gLeft は非タイヤ力ゆえ REVERSE 半陰的分岐でも ayNoLat
-    // 側に残り正しく陽的に扱われ、⑪の aySpec (タイヤ横力+空力) には入らない = 左右荷重移動の二重計上なし。
-    // 平地は gLeft===0 で完全 no-op = byte 不変。
-    if (gLeft !== 0) ay += gLeft;
-
     // ── ⑧ セミインプリシット Euler (REVERSE 横半陰化は DynCar 方式継承・sign-1 後退連成安定化) ──
     this.u += ax * dt;
     if (this.driveDir === CONST.REVERSE) {
-      const absU = Math.max(Math.abs(this.u), DYN.absUFloor);
       // 線形横剛性 (2軸ぶんの Cα・前輪は cos²δ 投影)。緩和後の実効剛性より安全側 (陰的で無条件安定)。
-      const cd0 = Math.cos(delta);
-      let CaF, CaR;
-      if (doWear) {   // AO12: 熱・摩耗で低下した μ を後退時の横剛性推定にも反映 (OFF は下の else=byte 不変)
-        CaF = (muOf(nFL, nF0) * fTW[0] * nFL + muOf(nFR, nF0) * fTW[1] * nFR) * CBpD / aP;
-        CaR = (muOf(nRL, nR0) * fTW[2] * nRL + muOf(nRR, nR0) * fTW[3] * nRR) * CBpD / aP;
-      } else {
-        CaF = (muOf(nFL, nF0) * nFL + muOf(nFR, nF0) * nFR) * CBpD / aP;
-        CaR = (muOf(nRL, nR0) * nRL + muOf(nRR, nR0) * nRR) * CBpD / aP;
-      }
-      const kLat = (CaF * cd0 * cd0 + CaR) / absU;
+      // AW1: kLat は ⑥' の前で巻き上げた kLatRev (同一式・|u| は u+=ax·dt 後と同一 double ⇒ 旧版と bit 一致) を使う。
+      const kLat = kLatRev;
       const ayNoLat = ay - sumFyTire;   // 横タイヤ力を除いた横 accel (Coriolis+空力)
       this.vlat = (this.vlat + ayNoLat * dt) / (1 + kLat * dt);
     } else {
