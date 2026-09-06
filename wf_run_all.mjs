@@ -63,6 +63,10 @@ const GATES = [
   // AW1: 車輪 ODE と車体加速度の同一 substep 連成（AP13 半陰的化の過小伝達の是正）の受け入れゲート。
   //   参照解（同じ製品コードの陽的経路）との一致・本番 nSub での安定性・陽的経路の回帰指紋・avgNSub を固定。
   'wf_aw1_coupled.mjs',
+  // AX1: 峠を安定して走る基準ドライバ（Stage AX の測定の土台）の受け入れゲート。
+  //   完走 18 セル・決定論 5 回・既定サンプルとの ±30% 帯・横位置追従・予備実装の欠陥 2 件の固定。
+  //   本体は library `wf_touge_driver.mjs`（下の EXCLUDED に明示）。
+  'wf_ax1_touge_base.mjs',
 ].map((name) => ({ name, args: [] }));
 
 // official_result は決定論2回照合→result.json 再検証→Node pin 照合の複合ゲート (AP20)。
@@ -73,7 +77,7 @@ GATES.push({ name: 'wf_official_result.mjs', args: ['--out', OFFICIAL_OUT] });
 // 意図的に非実行 (沈黙截断の禁止・CI-14 — 何を回さないかを明示する)。
 const EXCLUDED = {
   'probe (常に exit0・計測のみ＝アサート無し)': ['wf_ab5_measure.mjs'],
-  'library (単体実行不可・ゲートが import)': ['wf_i18n_hash.mjs', 'wf_frozen.mjs'],
+  'library (単体実行不可・ゲートが import)': ['wf_i18n_hash.mjs', 'wf_frozen.mjs', 'wf_touge_driver.mjs'],
   '変異ツール (product/manifest を書換＝non-変異証明のため除外)': ['wf_i18n_rehash.mjs', 'wf_refreeze.mjs'],
 };
 
