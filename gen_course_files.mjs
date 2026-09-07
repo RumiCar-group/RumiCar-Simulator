@@ -34,6 +34,10 @@ const ROMAJI = {
   '競技グラウンド (フルスケール)': 'competition-ground',
   '競技サーキット (フルスケール)': 'competition-circuit',
 };
+// AX3 (2026-09-07): 道幅比の派生峠〔道幅 N 台分〕は「元の slug + -wN」。対応表に無い名前が 'course' へ落ちるのを防ぐ。
+for (const [ja, r] of Object.entries({ ...ROMAJI })) {
+  for (const w of ['4.5', '3', '2']) ROMAJI[`${ja}〔道幅 ${w} 台分〕`] = `${r}-w${w.replace('.', '')}`;
+}
 
 function slug(name, i) {
   const r = ROMAJI[name]

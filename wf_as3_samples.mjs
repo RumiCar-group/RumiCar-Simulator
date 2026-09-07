@@ -38,9 +38,12 @@ for (const { i, spec, course } of touges) {
   const h1 = run(spec, course, 1), h3 = run(spec, course, 3), h7 = run(spec, course, 7);
   ok(h1.verifyHash === h3.verifyHash && h3.verifyHash === h7.verifyHash,
     `[${i}] ${spec.name}: laps=1/3/7 で verifyHash が一致しない (${h1.verifyHash}/${h3.verifyHash}/${h7.verifyHash}) = 峠が周回コース扱いのまま`);
-  ok(h3.finishers.length >= 1,
+  // AX3 (2026-09-07): 道幅比の派生峠（`derivedFrom` 持ち・車幅 2.0〜4.5 台分の狭路）は **意図的に出荷サンプルで完走しにくい**
+  //   コース（追加時の実測 0〜3/3・desc に明記）。「誰かがゴールできる」は出荷 6 峠にだけ課す。laps 正規化の検出器 A-1
+  //   （laps=1/3/7 で verifyHash 一致）は派生を含む全峠に課したまま。
+  if (!spec.derivedFrom) ok(h3.finishers.length >= 1,
     `[${i}] ${spec.name}: 既定 laps=3 で完走者 0 (峠は誰かがゴールできなければならない)`);
-  console.log(`  [${i}] ${spec.name}: verify=${h3.verifyHash} (laps 1/3/7 一致) 完走 ${h3.finishers.length}/3`);
+  console.log(`  [${i}] ${spec.name}: verify=${h3.verifyHash} (laps 1/3/7 一致) 完走 ${h3.finishers.length}/3${spec.derivedFrom ? ' (派生峠・完走要求なし)' : ''}`);
 }
 
 // ===== B: 完走判定 (finish ライン) を持たないコース =====
@@ -67,7 +70,10 @@ for (const { i, spec, course } of noFinish) {
 //   よって「コース別に下がらないこと」を守らせると、無害な変更まで不合格にする一方、実質的な劣化と
 //   改善を区別できない。母集団の連続量 (完走総数 / 全3台完走コース数 / 0 完走コース数) で判定する。
 //   perCourse は診断用の参照データとして持つだけで、合否には使わない。
-// 検出力: サンプルの脱出ロジックを外すと完走総数が 103→75 に落ち 0 完走が 2→4 に増えて C が落ちる。
+// 検出力: サンプルの脱出ロジックを外すと完走総数が 103→75 に落ち 0 完走が 2→4 に増えて C が落ちる（39 コース時代の実測）。
+// AX3 (2026-09-07) で派生峠 18 本を足し母集団は 57 コース（凍結 total 120 / allThree 30 / maxZero 10・3 値とも実測＝境界の
+// ゼロ余裕＝AS10 以来の方針を踏襲）。完走 1 台のコースが 1→4 件に増えたので、無害な物理改良で赤になりやすくなっている
+// （層 4 レビュー 重要-7）。赤になったら「意図した変化か」を確かめて刻み直す（AP-0 の版付き回帰記録）。
 console.log('\n=== C: 既定3サンプルの完走マトリクス (母集団レベル) ===');
 const EXPECTED = JSON.parse(fs.readFileSync(new URL('./wf_as3_expected.json', import.meta.url), 'utf8'));
 let total = 0;
