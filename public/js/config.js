@@ -2,7 +2,7 @@
 // すべての調整可能パラメータをここに集約する。
 
 // アプリのバージョン (ヘッダーのバッジ・起動ログに表示する単一ソース)。
-export const APP_VERSION = 'v8.1.0';
+export const APP_VERSION = 'v8.1.1';
 
 // 変更履歴 (CHANGELOG) は **`./changelog.js` に分離**した (Stage AS2)。表示専用のデータ塊で
 // 起動のコース初描画には使わないのに、critical path 上の本ファイル (ほぼ全モジュールが import)
