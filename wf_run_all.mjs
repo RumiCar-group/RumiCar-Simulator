@@ -72,6 +72,10 @@ const GATES = [
   'wf_ax2_lines.mjs',
   // AX3: 多車・片道レースでのブロック戦術の測定（道幅比の掃引を含む）。既定=縮小掃引。--full は docs 転記用で長い。
   'wf_ax3_block.mjs',
+  // AY1: 逆算ベンチ（外径比 R_out/R_min × 道幅）での grip vs drift 同予算比較。既定=縮小掃引（本ホスト実測 約 225 秒）。
+  //   --full は予算 2 倍・二分探索を細かく（docs 転記用）。本体の最適化器は library `wf_drift_opt.mjs`
+  //   （= wf_drift_reexam から純粋抽出したもの。下の EXCLUDED に明示）。
+  'wf_ay1_rmin_bench.mjs',
 ].map((name) => ({ name, args: [] }));
 
 // official_result は決定論2回照合→result.json 再検証→Node pin 照合の複合ゲート (AP20)。
@@ -82,7 +86,7 @@ GATES.push({ name: 'wf_official_result.mjs', args: ['--out', OFFICIAL_OUT] });
 // 意図的に非実行 (沈黙截断の禁止・CI-14 — 何を回さないかを明示する)。
 const EXCLUDED = {
   'probe (常に exit0・計測のみ＝アサート無し)': ['wf_ab5_measure.mjs'],
-  'library (単体実行不可・ゲートが import)': ['wf_i18n_hash.mjs', 'wf_frozen.mjs', 'wf_touge_driver.mjs'],
+  'library (単体実行不可・ゲートが import)': ['wf_i18n_hash.mjs', 'wf_frozen.mjs', 'wf_touge_driver.mjs', 'wf_drift_opt.mjs'],
   '変異ツール (product/manifest を書換＝non-変異証明のため除外)': ['wf_i18n_rehash.mjs', 'wf_refreeze.mjs'],
 };
 

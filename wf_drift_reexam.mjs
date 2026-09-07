@@ -50,13 +50,18 @@
 // 所要は末尾に Part 別で印字する(ホスト依存ゆえ本文に固定値を書かない)。
 // ══════════════════════════════════════════════════════════════════════════════════════
 import { buildFromSpec } from './public/js/course.js';
-import { CarV2, tireParamsFor, V2 } from './public/js/physics_v2.js';
+import { CarV2, V2 } from './public/js/physics_v2.js';
 import { CAR, CONST, setPhysicsMode, APP_VERSION } from './public/js/config.js';
 import { applyRegime, DYN } from './public/js/physics_dyn.js';
 import { integrateFleetV2 } from './public/js/fleet.js';
 import { LapTracker } from './public/js/lap.js';
 import { carEdges } from './public/js/physics.js';
 import { distToSeg } from './public/js/geom.js';
+// 【AY1 抽出 2026-09-07・物理無改変】共通ドライバ部品と Part 2 の最適化器は
+//   `wf_drift_opt.mjs` へ **純粋抽出**した（式も評価順も同一・既定値は本ファイルの旧 literal と一致）。
+//   Stage AY1 が「最適化器を再利用し、再実装しない」を満たすため。抽出前後で本ゲートの出力が
+//   byte 一致することを機械確認済み（AX1→AX2 の driveTick 抽出と同じ作法）。
+import { makeCornerLab, DEEP_MIN, MARGIN_MIN, DT, deg, rad, beta, wrap } from './wf_drift_opt.mjs';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -71,53 +76,23 @@ const BRAKE_ARG = (process.argv.find(a => a.startsWith('--brake=')) || '').slice
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) { pass++; console.log('  ✓ ' + m); } else { fail++; console.log('  ✗ ' + m); } };
 
-const DT = 1 / 60, deg = 180 / Math.PI, rad = Math.PI / 180;
-const beta = (c) => Math.atan2(c.vlat, Math.max(Math.abs(c.u), 1e-6)) * deg;
-const wrap = (a) => { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; };
 const benches = JSON.parse(readFileSync(join(ROOT, 'docs', 'stage_ao', 'bench_courses.json'), 'utf8'));
 
 setPhysicsMode('v2'); applyRegime('fullscale');
-const Tn = tireParamsFor('normal');
+// **設定は渡さない** = `wf_drift_opt.mjs` の既定値が本ファイルの旧 literal と 1 対 1 で一致する
+// （exitM 20 / tmo 1800 / runupTicks 8000 / spinLim 115 / brakeBand 0.6 / speedBias 0.3 /
+//   throttleFloorU 1 / throttleBias 0.2 / tcFloorU 1 / revU −0.5 / arFloorU 0.5 / violW 5）。
+// brakeSet だけは AV2 の `--brake=` を透過する（未指定なら car.brakeSet を書かない＝AU3 と byte 不変）。
+const lab = makeCornerLab({ brakeSet: BRAKE_ARG });
+const { Tn, HALF_W_CAR, maxVOf, pwmFor, holdSpeed, tcPwm, applySteer, mkCar, toSpeed,
+        runCornerSwitch, GRIP_SPACE, DRIFT_SPACE, score, scoreDeep, optimize } = lab;
 const R_MIN = CAR.wheelBase / Math.tan(CAR.maxSteer);
-const HALF_W_CAR = CAR.width / 2;
 console.log(`\n[AU3] ドリフト再検証プローブ  APP=${APP_VERSION}  fullscale v2  R_min=${R_MIN.toFixed(3)}m  車体 ${CAR.length}x${CAR.width}m`);
 console.log(`  掃引: ${FULL ? '系統(--full・docs 転記用)' : '既定 縮小'}   ドライバ=AU3(符号是正＋catch 単位是正＋後退ガード)`);
 if (BRAKE_ARG) console.log(`  ⚙ 制動装置 = ${BRAKE_ARG}（AV2 の任意装備。--brake= 未指定なら car.brakeSet を書かず AU3 と byte 不変）`);
 
-// ── 共通ドライバ部品(AP14/AP15/touge と同型) ──────────────────────────────────────────
-// v2 の pwm は「目標速度 = pwm/255·maxV」(physics_v2.js)。低 pwm でも全トルク指令になりうるので、
-// 速度指令は必ず目標速度比で出す(memory `rumicar-v2-pwm-is-target-speed`)。
-const maxVOf = (car) => CAR.maxSpeed * car.profile().maxSpeed;
-const pwmFor = (car, U) => Math.max(0, Math.min(255, Math.round(U / maxVOf(car) * 255)));
-function holdSpeed(car, U) {
-  const e = U - car.u;
-  if (e < -0.6) { car.driveDir = CONST.BRAKE; car.pwm = 0; }
-  else { car.driveDir = CONST.FORWARD; car.pwm = pwmFor(car, U + 0.3); }
-}
-// 簡易トラクション制御(車輪エンコーダ vwR のみ使用)。駆動軸スリップ率が maxSlip を超えたら絞る。
-function tcPwm(car, full, maxSlip) {
-  const s = (car.vwR - Math.abs(car.u)) / Math.max(Math.abs(car.u), 1);
-  return s > maxSlip ? pwmFor(car, Math.abs(car.u)) : full;
-}
-// 舵。norm∈[-1,1](正=LEFT)。prop=連続舵(AS12 の任意装備)/tri=3値の理想デューティ量子化。
-function applySteer(car, prop, norm) {
-  const n = Math.max(-1, Math.min(1, norm));
-  if (prop) { car.steer = n >= 0 ? CONST.LEFT : CONST.RIGHT; car.steerAmt = Math.round(Math.abs(n) * 255); }
-  else { car.steer = (car.steerAngle < n * CAR.maxSteer) ? CONST.LEFT : CONST.RIGHT; car.steerAmt = null; }
-  return n;
-}
-function mkCar(course, type, prop, x = 0, y = 0, th = 0) {
-  const car = new CarV2({ ...course.start, x, y, theta: th });
-  car.type = type; car.tireSet = 'normal'; car.steerSet = prop ? 'prop' : 'tri';
-  if (BRAKE_ARG) car.brakeSet = BRAKE_ARG;   // AV2: 未指定なら書かない = AU3 と byte 不変
-  return car;
-}
-// 助走で U まで上げてから原点へ戻す(速度状態は保持)。意図線の中心 (0,R) と整合させる。
-function toSpeed(car, U) {
-  car.steer = CONST.CENTER; car.steerAmt = null; car.driveDir = CONST.FORWARD; car.pwm = 255;
-  for (let i = 0; i < 8000 && car.u < U; i++) car.step(DT);
-  car.x = 0; car.y = 0; car.theta = 0;
-}
+// 共通ドライバ部品（maxVOf/pwmFor/holdSpeed/tcPwm/applySteer/mkCar/toSpeed/throttleSlip）は
+// `wf_drift_opt.mjs` の `makeCornerLab` が持つ（上で分割代入した）。実体はそこにある。
 
 // ══════════════════════════════════════════════════════════════════════════════════════
 // Part 1: 自由空間＋廊下プロキシ
@@ -126,7 +101,7 @@ function toSpeed(car, U) {
 //   clean = P+20m 面を通過 ∧ 廊下不侵犯 ∧ 通過時 |β|≤10° ∧ 向き誤差≤10° ∧ u≥0.5·v_grip ∧ spin/後退なし。
 //   総合時間 = 弧開始〜P+20m 面通過。GO = 総合時間比 ≤0.98 ∧ 進入±10% で 3/3 clean(頑健)。
 // ══════════════════════════════════════════════════════════════════════════════════════
-const SPIN_LIM = 115, EXIT_M = 20, TMO = 1800;
+const { spinLim: SPIN_LIM, exitM: EXIT_M, tmo: TMO } = lab.cfg;   // = 115 / 20 / 1800（wf_drift_opt.mjs の既定）
 let p1Reversed = 0, p1Runs = 0;    // 後退ガードの発火計数(空振り防止・持ち越し(ii)の検出力)
 function runCornerFree(course, R, W, type, strat, prm) {
   const prop = prm.prop, mx = CAR.maxSteer;
@@ -282,117 +257,11 @@ console.log(`  GO = ${p1Go} / ${table1.length} セル（drift clean 合計 ${p1D
 //   条件 3 種: base / power2x(駆動力×2＝実車ドリフト車は駆動力 > 後輪グリップ) / loose(ルーズ路面近似)。
 //   ※ エンジンは無改変。V2 holder と bench spec を **実行時に上書き**して感度を測り、各セル前に applyRegime で戻す。
 // ══════════════════════════════════════════════════════════════════════════════════════
-// 決定論 PRNG (mulberry32) — ランダム探索も再現可能にする。
-let _rs = 0x12345678;
-const rnd = () => { _rs = (_rs + 0x6D2B79F5) >>> 0; let t = _rs; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
-const lerp = (a, b, r) => a + (b - a) * r;
-function throttleSlip(car, kStar, floorU = 1) {
-  const u = Math.max(Math.abs(car.u), floorU);
-  car.driveDir = CONST.FORWARD; car.pwm = pwmFor(car, u * (1 + kStar) + 0.2);
-}
-let p2Reversed = 0, p2Runs = 0;
-function runCornerSwitch(course, R, W, type, strat, p) {
-  const prop = !!p.prop, mx = CAR.maxSteer;
-  const car = mkCar(course, type, prop);
-  const vgrip = Math.sqrt(Tn.mu0 * (car.grip || 1) * DYN.g * R);
-  const vEntry = p.entry * vgrip;
-  toSpeed(car, vEntry);
-  const A = p.ang * rad, lead = p.lead || 0, Cx = lead, Cy = R;
-  const Px = lead + R * Math.sin(A), Py = R - R * Math.cos(A);
-  const ex = Math.cos(A), ey = Math.sin(A), nx = -Math.sin(A), ny = Math.cos(A);
-  const lim = W / 2 - HALF_W_CAR;
-  let head = 0, prevTh = car.theta, betaPk = 0, spun = false, reversed = false, viol = 0, t = 0, done = false, gated = false;
-  let phase = 'init', prevSl = -beta(car), initTicks = 0, brake = (strat === 'drift') ? (p.brakeTicks | 0) : 0;
-  let exitU = null, exitBeta = null, exitHead = null, uMin = 1e9, arPk = 0;
-  p2Runs++;
-  for (let i = 0; i < TMO; i++) {
-    const cgx = car.x, cgy = car.y;
-    let prog = (cgx - Px) * ex + (cgy - Py) * ey;
-    if (!gated) { if (head >= 0.75 * A && prog >= 0) gated = true; else prog = -1; }
-    const lat = (cgx - Px) * nx + (cgy - Py) * ny;
-    if (prog < 0) { const dev = (cgx < Cx) ? Math.abs(cgy) : Math.abs(Math.hypot(cgx - Cx, cgy - Cy) - R); if (dev > lim) viol = Math.max(viol, dev - lim); }
-    else if (Math.abs(lat) > lim) viol = Math.max(viol, Math.abs(lat) - lim);
-    if (prog >= EXIT_M) { done = true; exitU = car.u; exitBeta = beta(car); exitHead = wrap(car.theta - A) * deg; break; }
-    const sl = -beta(car), sld = (sl - prevSl) / DT; prevSl = sl;
-    const remaining = A - head;
-    if (strat === 'grip') {
-      if (prog >= 0) { const herr = wrap(A - car.theta); applySteer(car, prop, p.kpG * 4 * herr / mx); throttleSlip(car, p.kExit); }
-      else {
-        if (prop) applySteer(car, true, (CAR.wheelBase / R + p.kpG * (car.u / R - car.r)) / mx);
-        else { const rStar = car.u / R; car.steer = (car.r < rStar * 0.98) ? CONST.LEFT : (car.r > rStar * 1.02 ? CONST.CENTER : car.steer); car.steerAmt = null; }
-        const e = vEntry - car.u;   // 速度保持(トレイルブレーキは entry<1 に含意)
-        if (e < -0.6) { car.driveDir = CONST.BRAKE; car.pwm = 0; } else { car.driveDir = CONST.FORWARD; car.pwm = pwmFor(car, vEntry + 0.3); }
-      }
-    } else {
-      const bt = p.beta;
-      if (prog >= 0) phase = 'exit';
-      else if (phase !== 'exit' && phase !== 'catch' && remaining < Math.max(Math.abs(car.r), 0.5) * p.tLead) phase = 'catch';
-      else if (phase === 'init' && (sl >= bt - 5 || initTicks > 90)) phase = 'hold';
-      if (phase === 'init') {
-        initTicks++;
-        if (brake > 0) { car.steer = CONST.LEFT; car.steerAmt = null; car.driveDir = CONST.BRAKE; car.pwm = 0; brake--; }
-        else { applySteer(car, prop, 1); throttleSlip(car, p.kInit); }
-      } else if (phase === 'hold') {
-        const want = (p.kp * (bt - sl) - p.kd * sld) * mx; applySteer(car, prop, want / mx);
-        throttleSlip(car, sl > bt + 4 ? p.kHoldLo : p.kHold);
-      } else if (phase === 'catch') {
-        // 【AU3 是正(i)】単位を揃えた残回頭ベースの絞り(deg 掛けなし)。
-        const btc = Math.max(0, Math.min(bt, p.catchGain * remaining));
-        const want = (p.kp * (btc - sl) - p.kd * sld) * mx; applySteer(car, prop, want / mx);
-        throttleSlip(car, sl > btc + 4 ? p.kCatchLo : p.kCatch);
-      } else {
-        const herr = wrap(A - car.theta) * deg;
-        const want = (p.kp * (0 - sl) - p.kd * sld + 0.02 * herr) * mx; applySteer(car, prop, want / mx);
-        throttleSlip(car, Math.abs(sl) > 8 ? p.kCatchLo : p.kExit);
-      }
-    }
-    car.step(DT); t += DT;
-    head += wrap(car.theta - prevTh); prevTh = car.theta;
-    const ab = Math.abs(beta(car)); if (ab > betaPk) betaPk = ab; if (car.u < uMin) uMin = car.u;
-    // 後軸スリップ角(車体 β とは別物・「後輪をどれだけ滑らせているか」の直接指標)。
-    const bb = 0.45 * CAR.wheelBase;
-    const ar = Math.abs(Math.atan2(car.vlat - bb * car.r, Math.max(Math.abs(car.u), 0.5)) * deg); if (ar > arPk) arPk = ar;
-    if (ab > SPIN_LIM || car.u < -0.5) { if (car.u < -0.5) { reversed = true; p2Reversed++; } spun = true; break; }
-  }
-  const clean = done && !spun && viol === 0 && Math.abs(exitBeta) <= 10 && Math.abs(exitHead) <= 10 && exitU >= 0.5 * vgrip;
-  return { t: done ? t : null, clean, spun, reversed, viol, betaPk, arPk, exitU, exitBeta, exitHead, vgrip, vEntry, uMin };
-}
-const GRIP_SPACE = { entry: [0.7, 1.15], kpG: [0.1, 1.0], lead: [0, 6], kExit: [0.02, 0.3], prop: [0, 1] };
-const DRIFT_SPACE = { entry: [0.8, 1.5], beta: [10, 50], tLead: [0.3, 1.5], lead: [0, 6], brakeTicks: [0, 30], kp: [0.02, 0.12], kd: [0, 0.005],
-  catchGain: [30, 90], kInit: [0.1, 1.0], kHold: [0.05, 0.8], kHoldLo: [-0.1, 0.2], kCatch: [0.02, 0.4], kCatchLo: [-0.1, 0.1], kExit: [0.02, 0.3], prop: [0, 1] };
-const sample = (sp) => { const o = {}; for (const k in sp) { const [a, b] = sp[k]; o[k] = k === 'prop' ? (rnd() < 0.5 ? 0 : 1) : (k === 'brakeTicks' ? Math.round(lerp(a, b, rnd())) : lerp(a, b, rnd())); } return o; };
-const perturb = (sp, p, f) => { const o = { ...p }; for (const k in sp) { const [a, b] = sp[k]; if (k === 'prop') { if (rnd() < 0.15) o[k] = 1 - o[k]; continue; } let v = p[k] + (b - a) * f * (rnd() * 2 - 1); v = Math.max(a, Math.min(b, v)); o[k] = k === 'brakeTicks' ? Math.round(v) : v; } return o; };
-// 目的: clean なら t、非 clean なら連続的な罰(廊下逸脱量・spin・出口姿勢)＝探索が clean 側へ近づける。
-function score(r) {
-  if (r.clean) return r.t;
-  let pen = 100; if (r.t != null) pen = 20 + r.t;
-  pen += 5 * r.viol + (r.spun ? 30 : 0);
-  if (r.exitBeta != null) pen += 0.2 * Math.max(0, Math.abs(r.exitBeta) - 10) + 0.2 * Math.max(0, Math.abs(r.exitHead) - 10);
-  return pen;
-}
-// 【AU3】深さ制約アーム: 「実際に深く滑っている(βpk≥DEEP_MIN)clean 解」の中での最良を探す。
-//   狙い＝「速いのは浅い滑り」を **浅い最適解が選ばれた** という事実だけで言うと過大主張になる
-//   (変異注入で確認: 目的関数が深さを報酬すると βpk 23° で grip より 9% 速い解が見つかる＝深くても
-//    grip には勝てる)。∴ 正しい主張は「**深い解は浅い最適解より遅い**」であり、それを直接測る。
-const DEEP_MIN = 20;
-// 深い解が浅い最適解より「実際に」どれだけ遅いか の下限（単なる `deep_t ≥ drift_t` は最適化の恒等式に近い）。
-const MARGIN_MIN = 1.05;
-function scoreDeep(r) {
-  if (r.clean && r.betaPk >= DEEP_MIN) return r.t;
-  if (r.clean) return 20 + r.t + 0.3 * (DEEP_MIN - r.betaPk);   // clean だが浅い＝深さ不足の連続罰
-  return score(r);
-}
-function optimize(course, R, W, type, strat, ang, nRand, nLocal, seed, scoreFn = score) {
-  _rs = seed >>> 0;
-  const sp = strat === 'grip' ? GRIP_SPACE : DRIFT_SPACE;
-  let best = null;
-  const evalP = (p) => { const r = runCornerSwitch(course, R, W, type, strat, { ...p, ang }); const sc = scoreFn(r); if (!best || sc < best.sc) best = { sc, p, r }; return sc; };
-  for (let i = 0; i < nRand; i++) evalP(sample(sp));
-  let f = 0.25;
-  for (let i = 0; i < nLocal; i++) { const cand = perturb(sp, best.p, f); const before = best.sc; evalP(cand); if (best.sc >= before) f = Math.max(0.03, f * 0.97); }
-  const rob = [0.9, 1.1].map(m => runCornerSwitch(course, R, W, type, strat, { ...best.p, ang, entry: best.p.entry * m })).filter(r => r.clean).length + (best.r.clean ? 1 : 0);
-  return { ...best, robust: rob };
-}
+// 切替(トレイルブレーキ型)ドライバ 1 run（runCornerSwitch）・探索空間・目的関数・最適化器は
+// `wf_drift_opt.mjs` へ純粋抽出済み（上で分割代入した）。DEEP_MIN/MARGIN_MIN も同モジュール。
+// 実行計数は lab.stats（旧 p2Runs/p2Reversed）。
+const p2Stats = lab.stats;
+
 function setVariant(v) { applyRegime('fullscale'); if (v === 'power2x') { V2.launchAccel *= 2; V2.wheelPower *= 2; } }
 function courseFor(ck, sfx, v) {
   const spec = { ...benches.find(b => b.name === `bench-${ck}-${sfx}`) };
@@ -721,7 +590,7 @@ console.log(`\n[アサート]`);
 if (WANT_JSON) {
   console.log('===JSON===');
   console.log(JSON.stringify({ appVersion: APP_VERSION, gate: 'AU3-drift-reexam', sweep: FULL ? 'full' : 'reduced',
-    R_min: +R_MIN.toFixed(4), p1Runs: p1RunsAtTable, p1Reversed: p1ReversedAtTable, p2Runs, p2Reversed,
+    R_min: +R_MIN.toFixed(4), p1Runs: p1RunsAtTable, p1Reversed: p1ReversedAtTable, p2Runs: p2Stats.runs, p2Reversed: p2Stats.reversed,
     part1: table1, part2: table2, part3: table3,
     p1Go, p1Total: table1.length }, null, 0));
 }
