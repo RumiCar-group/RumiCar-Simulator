@@ -578,6 +578,13 @@ export const AX3 = {
   DRIFT_SPIN: 50,       // これを超える |β| はスピンとみなし保持相を打ち切る [deg]（打ち切り回数は spinAborts で返す）
   DRIFT_KP: 0.05, DRIFT_KD: 0.002,   // 逆ハン比例則（wf_touge_drift_probe GAINS と同一）
   DRIFT_PRE: 0.10,      // コーナー入口の何 m 手前でブレーキを当てるか
+  // 派生コースで「多車レースなのに発走できない車が出る」既知の制限（AX4・2026-09-07 に本番オラクル runRace/driveableCapN で実測）。
+  //   狭路では前方に置かれた車が give-up し、AK7 の発走順次化で後続が永久 held になる。driveableCapN は cap=4 を返すので
+  //   ライブは n=3 のレースを許す＝**利用者から見える挙動**。利用者裁定（2026-09-07）は「公開に残す＋コース説明に注記」。
+  //   **ここが単一真実源**: (a) derivedTougeSpec が desc/desc_en の注記を作り、(b) wf_recover_model.mjs の既知例外リストが
+  //   同じ配列から名前を導く。2 箇所に書くと必ずドリフトする（RATELIMIT-1 の教訓「同じ門を全経路に通す」）。
+  //   base=元の峠名 / widthCars=道幅水準 / n=発生する出走台数 / stuck=動けない台数 / okN=起きないと実測した台数（n≤cap の範囲）
+  KNOWN_STUCK: [{ base: '架空峠 ロング・ワインディング(激坂)', widthCars: 2.0, n: 3, stuck: 2, okN: [2, 4] }],
 };
 export const TACTICS = ['race', 'inside', 'sideways', 'drift'];
 
@@ -596,12 +603,17 @@ export function derivedTougeSpec(base, widthCars, descCompl = null, stamp = null
   //   この派生を含まない＝層 4 レビュー 軽-13）。
   const complJa = descCompl != null ? `追加時${stamp ? '（' + stamp + '）' : ''}の実測: 既定 3 サンプル中 ${descCompl} 台が完走。` : '';
   const complEn = descCompl != null ? ` At the time of addition${stamp ? ' (' + stamp + ')' : ''}, ${descCompl} of the 3 built-in samples finished.` : '';
+  // 多車レースの既知の制限（AX3.KNOWN_STUCK が単一真実源）。該当しない派生コースでは空文字。
+  const ks0 = AX3.KNOWN_STUCK.find((e) => e.base === base.name && e.widthCars === widthCars);
+  const ks = ks0 && ks0.okN && ks0.okN.length ? ks0 : null;   // okN が空だと「（…では起きません）」が空文になる（層 4 レビュー #2 軽-5）
+  const stuckJa = ks ? `【多車レースの既知の制限】${ks.n} 台で走らせると、前方に置かれた車が狭路で走行を諦め、後続 ${ks.stuck} 台が発走待ちのまま一度も動きません（${stamp ? stamp + ' 実測。' : ''}${ks.okN.map((v) => v + ' 台').join('・')}では起きません）。` : '';
+  const stuckEn = ks ? ` [Known limitation in multi-car races] With exactly ${ks.n} cars, the car placed ahead gives up on the narrow road and the ${ks.stuck} cars behind it stay in the starting queue, never moving at all (${stamp ? 'measured ' + stamp + '; ' : ''}this does not happen with ${ks.okN.join(' or ')} cars).` : '';
   const descJa = `${base.desc}【狭路版】実車の峠に近い道幅比（車幅 ${lv} 台分＝${(2 * hw).toFixed(2)}m）まで壁を寄せた派生コース。` +
     (room <= 0 ? '横に 2 台並ぶ余地は 0＝追い越しは幾何的に不可能。' : `横に 2 台並ぶ余地は ${room.toFixed(2)}m。`) +
-    `出荷の既定サンプルは完走しにくい。${complJa}`;
+    `出荷の既定サンプルは完走しにくい。${complJa}${stuckJa}`;
   const descEn = `${base.desc_en} [Narrow variant] Walls moved in to a road-width ratio close to a real mountain pass (${lv} car widths = ${(2 * hw).toFixed(2)} m).` +
     (room <= 0 ? ' No room for two cars abreast: overtaking is geometrically impossible.' : ` Room for two abreast: ${room.toFixed(2)} m.`) +
-    ` The built-in sample programs struggle to finish.${complEn}`;
+    ` The built-in sample programs struggle to finish.${complEn}${stuckEn}`;
   return { ...base, name: ja, name_en: en, hw, desc: descJa, desc_en: descEn, diff: 5, derivedFrom: base.name, widthCars };
 }
 // 横に 2 台並ぶ幾何的余地 [m]（負なら並べない）。道幅 − 2×車幅。

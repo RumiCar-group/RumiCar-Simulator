@@ -286,10 +286,10 @@ console.log(`\n[C] 非空振り（追走モデルの検出力）`);
   //   先頭の近くで慎重になり 47% になった＝層 4 重要-5 の是正で下がったぶん。**閾値の変更は決定ログ AX-3 に記録し人間の裁定に
   //   委ねる**。これは PLAN の受け入れ基準ではなく測定器の非空振り検査）。1.15 では 0%＝反復の半分は現行幅で着順の弁別に寄与しない。
   ok(hi.length > 0 && lo.length > 0 && lostHi / hi.length >= 1 / 3,
-    `C-2 現行幅・race 基準で先頭が抜かれる割合: ペース比 1.15 で ${(100 * lostLo / lo.length).toFixed(0)}% → 1.35 で ${(100 * lostHi / hi.length).toFixed(0)}%（1.35 で ≥33%＝追走が実際に速い。閾値 50%→33% の変更は AX-3 に記録）`);
+    `C-2 現行幅・race 基準で先頭が抜かれる割合: ペース比 1.15 で ${lostLo}/${lo.length}=${(100 * lostLo / lo.length).toFixed(0)}% → 1.35 で ${lostHi}/${hi.length}=${(100 * lostHi / hi.length).toFixed(0)}%（分母つき＝外部へ転記する用・B-2c と同じ処方。1.35 で ≥33%＝追走が実際に速い。閾値 50%→33% の変更は AX-3 に記録）`);
   const wide = rows.filter((x) => x.tactic === 'race' && (x.level === 'cur' || x.level === '4.5'));
   const chFin = wide.reduce((s, x) => s + (x.n - 1 - Math.max(0, x.dnf - (x.t == null ? 1 : 0))), 0), chAll = wide.reduce((s, x) => s + x.n - 1, 0);
-  ok(chFin / chAll >= 0.8, `C-3 広い水準（現行・4.5）の race 基準で追走の完走率 ${(100 * chFin / chAll).toFixed(1)}%（≥80%）`);
+  ok(chFin / chAll >= 0.8, `C-3 広い水準（現行・4.5）の race 基準で追走の完走率 ${chFin}/${chAll}=${(100 * chFin / chAll).toFixed(1)}%（≥80%）`);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════════════
@@ -382,8 +382,11 @@ for (const lv of LEVELS) {
   const per = {};
   for (const tc of TACTICS) {
     const rr = R.filter((x) => x.tactic === tc);
-    per[tc] = { win: +(rr.filter((x) => x.win).length / rr.length).toFixed(3), winClean: +(rr.filter((x) => x.win && x.lc === 0 && x.near === 0).length / rr.length).toFixed(3),
-      dnf: rr.filter((x) => x.t == null).length, tMean: mean(rr.filter((x) => x.t != null).map((x) => x.t)), contactRate: +(rr.filter((x) => x.contacts > 0).length / rr.length).toFixed(3),
+    // 【AX4・2026-09-07 是正】win/winClean は **丸めずに** 持つ。以前は toFixed(3) で丸めた値をさらに toFixed(0) して印字しており、
+    //   4.5 台分の inside（541/648 = 83.49%）が [E] では 83%・この [F] では 0.835→84% と**同じ実行の中で 2 つの数字**になっていた
+    //   （二重丸め）。docs へ転記する数字が出力の場所で変わるのは事故のもと（層 4 レビュー 軽-8）。表示のときだけ丸める。
+    per[tc] = { win: rr.filter((x) => x.win).length / rr.length, winClean: rr.filter((x) => x.win && x.lc === 0 && x.near === 0).length / rr.length,
+      dnf: rr.filter((x) => x.t == null).length, tMean: mean(rr.filter((x) => x.t != null).map((x) => x.t)), contactRate: rr.filter((x) => x.contacts > 0).length / rr.length,   // win/winClean と同じく丸めない（二重丸めの兄弟・層 4 レビュー #2 軽-2）
       lead: rr.filter((x) => x.rule === 'lead').length, caught: rr.filter((x) => x.rule === 'caught').length, passed: rr.filter((x) => x.rule === 'passed').length };
   }
   const room2 = geo.find((g) => g.level === lv.key).room2;
@@ -400,6 +403,21 @@ for (const lv of LEVELS) {
   for (const x of r2.filter((x) => x.tactic === 'inside')) { const y = r2.find((z) => z.tactic === 'race' && z.course === x.course && z.n === x.n && z.vi === x.vi); tot++; if (y && y.t === x.t && y.ticks === x.ticks && y.rank === x.rank) ident++; }
   ok(s2.per.race.win === 1 && ident === tot && tot > 0,
     `F-1 2.0 台分（余地 0）: race の先頭 1 位率 ${(100 * s2.per.race.win).toFixed(0)}% = 100%＝横に 2 台並べない幾何が順位を決める（AX_survey §2 の裏取り）。inside は race と ${ident}/${tot} レースで到達時刻・tick・着順まで bit 一致＝線が同一（縮退の検出が正しい）`);
+  // F-3: [E]（対ごとの集計 tWin/pairs）と [F]（レースごとの集計 per[tc].win）は**同じ量**なので、印字も一致しなければならない。
+  //   以前は [F] だけが win を toFixed(3) で丸めてから ×100 して整数化しており、同じ実行の中で 83% と 84% が並んでいた
+  //   （層 4 レビュー #2 軽-2/軽-3。縮小掃引では丸めの有無で表示が変わらないため、この不変条件が無いと回帰を検出できない）。
+  const mism = [];
+  for (const lv of LEVELS) for (const tac of TACTICS.filter((t) => t !== 'race')) {
+    const cs = conds.filter((c) => c.level === lv.key && c.tactic === tac);
+    const pairs = cs.reduce((x, c) => x + c.pairs, 0);
+    if (!pairs) continue;
+    const tW = cs.reduce((x, c) => x + c.tWin, 0);
+    const sm = summary.find((x) => x.level === lv.key);
+    if (Math.abs(tW / pairs - sm.per[tac].win) > 1e-12) mism.push(`${lv.key}/${tac}: [E] ${tW}/${pairs} vs [F] ${sm.per[tac].win}`);
+  }
+  ok(mism.length === 0,
+    `F-3 [E] と [F] は同じ 1 位率を出す（丸めた値を再び丸めない）: ${LEVELS.length}×${TACTICS.length - 1} セル全一致`
+    + (mism.length ? ` — 不一致 ${mism.length} 件: ${mism.join(' / ')}` : ''));
   const s3 = summary.find((s) => s.level === '3'), sc = summary.find((s) => s.level === 'cur');
   ok(sc.per.race.win < 1 && s3.per.race.win > sc.per.race.win,
     `F-2 道幅を詰めるほど race の先頭 1 位率は上がる（現行 ${(100 * sc.per.race.win).toFixed(0)}% → 3.0 台分 ${(100 * s3.per.race.win).toFixed(0)}%）＝ 順位を守るのは戦術でなく道幅`);

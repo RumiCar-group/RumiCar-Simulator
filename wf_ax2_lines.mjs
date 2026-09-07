@@ -199,6 +199,21 @@ console.log(`\n[B] 到達可能性（実走判定）と、到達不能の第一�
   console.log(`                第一原因 ${Object.entries(cc).map(([k, v]) => `${k} ${v}`).join(' / ') || '（なし）'}`);
   ok(unreach.length === 0 || zc.inner / unreach.length >= 0.5,
     `B-2 到達不能な横位置の ${unreach.length ? (100 * zc.inner / unreach.length).toFixed(1) : '--'}% が**旋回の内側**の帯にある`);
+  // B-2c: **帯ごとの分母**を印字して固定する（AX4・2026-09-07 追加）。B-2 は「到達不能のうち内側が何 %」＝分子側しか出さないので、
+  //   「内側 N 点のうち 23 点が到達不能」と外部（physics_model・アプリ Q&A・CHANGELOG）へ書くときの N がゲートのどこにも現れず、
+  //   実際に AX2 の帯境界バグを直した後も**古い分母 49 が公開文へ 6 箇所転記された**（層 4 レビューが実測 60 と照合して検出）。
+  //   分母は**帯の定義そのもの**（`latIn >= usable/3` = 上の zone 判定と同じ式）から数える。`(NPOS-1)/2` のような
+  //   分割数からの近道は NPOS=7 のときたまたま一致するだけで、分割数を変えると**この行だけが偽赤になり、しかも
+  //   「外部へ転記する用」と書いた行に誤った分母を印字する**（層 4 レビュー #2 軽-1・NPOS=9 で実測）。
+  const zt = { inner: 0, mid: 0, outer: 0 };
+  for (const r of rows) zt[r.zone]++;
+  const perZone = Array.from({ length: NPOS }, (_, j) => (j / (NPOS - 1) * 2 - 1))
+    .filter((x) => x >= 1 / 3 - 1e-9).length;          // 内側の帯に入る位置数（帯の定義 latIn >= usable/3 と同一）
+  const nCorner = cornersAll.length;
+  console.log(`  帯ごとの分母: 内側 ${zt.inner} / 中央 ${zt.mid} / 外側 ${zt.outer} 点（コーナー ${nCorner} 本 × 内側 ${perZone} 位置）`);
+  ok(zt.inner === nCorner * perZone && zt.outer === nCorner * perZone && zt.mid === nCorner,
+    `B-2c 帯ごとの分母: **内側 ${zt.inner} 点**（= ${nCorner} コーナー × ${perZone}）/ 中央 ${zt.mid} / 外側 ${zt.outer}`
+    + ` ⇒ 「内側 ${zt.inner} 点中 ${zc.inner} 点が到達不能」と外部へ書くときの分母はこれ（分子だけ刻み直して分母が腐るのを防ぐ）`);
   // B-2b: **その理由**を分けて言う。「舵角律速で内側に寄れない」のと「端が壁と面一で当たる」のは別の話。
   ok((cc.lat || 0) + (cc.contact || 0) > 0,
     `B-2b 到達不能の内訳: **舵角律速（追従できない）${cc.lat || 0} 点 / 壁に当たる ${cc.contact || 0} 点 / 復帰 ${cc.arms || 0} 点 / 未到達 ${cc.reached || 0} 点**` +
@@ -244,7 +259,7 @@ for (const c of cornersAll) {
   // C-2 は **割合に下限を課す**（「1 点でも通れば緑」では 9 割という主張を守れない）。助走を壊すと
   //   最上段通過率が落ちるので、この下限が助走の健全性の検出力も兼ねる（実測: 助走 0.6→0.05m で 93%→30%）。
   ok(ratio >= 0.8,
-    `C-2 到達可能な横位置の ${(100 * ratio).toFixed(1)}%（下限 80%）が **ラダー最上段 ${VLADDER[0]} m/s 指令でも通過できる** ⇒ 卓上の峠では通過速度はコーナーでなく**車の最高速**で決まる`);
+    `C-2 到達可能な横位置の ${satur}/${reachRows.length}=${(100 * ratio).toFixed(1)}%（分母つき＝外部へ転記する用。下限 80%）が **ラダー最上段 ${VLADDER[0]} m/s 指令でも通過できる** ⇒ 卓上の峠では通過速度はコーナーでなく**車の最高速**で決まる`);
   const limited = reachRows.filter((r) => r.vCmd < VLADDER[0]);
   const lz = { inner: 0, mid: 0, outer: 0 };
   for (const r of limited) lz[r.zone]++;

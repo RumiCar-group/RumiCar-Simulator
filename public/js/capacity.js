@@ -25,9 +25,16 @@ export function stuckAtN(course, regime, n) {
   return s;
 }
 
-// 実態容量: 1..n 台すべてが走り出せる最大 n。発走順次化ゲートにより卓上は単調 (n台 OK なら n-1 台も OK) な
+// 実態容量: 1..n 台すべてが走り出せる最大 n。発走順次化ゲートにより卓上はおおむね単調 (n台 OK なら n-1 台も OK) な
 // ので **maxN から下げて最初に全車走り出せた台数** で確定する (=clean なコースは1走で maxN 確定。ナローシケインは
-// 6→5→4 で確定)。単調性は wf_recover_model が「stuck⊆{n>capN}」で構造検査 (破れたら CI が落ちる)。
+// 6→5→4 で確定)。単調性は wf_recover_model が「stuck⊆{n>capN}」で構造検査する。
+// **【AX4・2026-09-07 是正】単調性は「必ず成り立つ」ではなく「既知の例外つき」である。** 上の探索は単調性を前提に
+// 「降順で最初に stuck=0 になった n」を返すので、単調性が破れたコースでは *その n より少ない台数で走り出せない車が出る*。
+// 実在の反例: 派生峠「架空峠 ロング・ワインディング(激坂)〔道幅 2 台分〕」は stuck(3)=2 なのに stuck(4)=0 で、cap は 4 を返す
+// (狭路で前方の車が give-up し、後続が発走順次化 AK7 で永久 held になる。3 台では詰まり 4 台では詰まらない)。
+// wf_recover_model.mjs の既知例外リスト (単一真実源 = wf_touge_driver.mjs の AX3.KNOWN_STUCK) がこの 1 件を明示的に
+// 許容している ＝ **CI はこの破れでは落ちない**。利用者裁定 (2026-09-07) は「コースを公開に残し、コース説明に注記する」で、
+// driveableCapN 自体は変更していない。新しい破れは同リストに載っていないので従来どおり赤になる。
 export function driveableCapN(course, regime, maxN = FLEET.maxCars) {
   const key = `${course.name}|${regime || 'tabletop'}|${CAR.length.toFixed(4)}|${maxN}`;
   if (_cache.has(key)) return _cache.get(key);

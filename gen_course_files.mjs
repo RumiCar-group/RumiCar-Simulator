@@ -2,6 +2,7 @@
 // 索引 (index.json)・README・コミュニティ投稿の例を /tmp/rc_courses 配下へ生成する。
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { buildFromSpec } from './public/js/course.js';
+import { AX3, derivedTougeSpec } from './wf_touge_driver.mjs';   // AX4: 派生峠の水準と名前の単一真実源
 
 const OUT = '/tmp/rc_courses';
 rmSync(OUT, { recursive: true, force: true });
@@ -35,8 +36,15 @@ const ROMAJI = {
   '競技サーキット (フルスケール)': 'competition-circuit',
 };
 // AX3 (2026-09-07): 道幅比の派生峠〔道幅 N 台分〕は「元の slug + -wN」。対応表に無い名前が 'course' へ落ちるのを防ぐ。
+// **【AX4・2026-09-07 是正】水準と名前の綴りを手で複製しない。** 旧版は `['4.5','3','2']` と `〔道幅 N 台分〕` を
+//   ここに直書きしており、AX3.WIDTH_LEVELS に水準を足しても本ファイルは黙って slug() のフォールバックへ落ちた
+//   (本ファイルは wf_run_all のゲート一覧に無いのでどこも赤くならない。層 4 レビュー #2 軽-4)。
+//   水準と名前は生成器 derivedTougeSpec を単一真実源として引く。
 for (const [ja, r] of Object.entries({ ...ROMAJI })) {
-  for (const w of ['4.5', '3', '2']) ROMAJI[`${ja}〔道幅 ${w} 台分〕`] = `${r}-w${w.replace('.', '')}`;
+  for (const w of AX3.WIDTH_LEVELS) {
+    const name = derivedTougeSpec({ name: ja, name_en: '', desc: '', desc_en: '' }, w).name;
+    ROMAJI[name] = `${r}-w${String(w % 1 === 0 ? w : w.toFixed(1)).replace('.', '')}`;
+  }
 }
 
 function slug(name, i) {

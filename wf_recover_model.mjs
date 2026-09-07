@@ -19,6 +19,7 @@ import { runRace } from './public/js/race_engine.js';
 import { setCarScale, setRegimeScale, CAR, FLEET } from './public/js/config.js';
 import { PROGRAMS, PROGRAM_BY_KEY } from './public/js/programs.js';
 import { driveableCapN } from './public/js/capacity.js';
+import { AX3, derivedTougeSpec } from './wf_touge_driver.mjs';   // AX4: 既知例外リストの単一真実源（下記 KNOWN_STUCK）
 import { FROZEN as FROZEN_HASH } from './wf_frozen.mjs';   // AP3: 凍結ハッシュは中央マニフェスト経由 (既存 const FROZEN=0.05m〔変位閾値〕と衝突回避のため別名)
 
 const specs = JSON.parse(fs.readFileSync('./public/data/courses.json', 'utf8'));
@@ -52,18 +53,32 @@ const offCap = [], capped = [];
 //   armMax 0/0/7。driveableCapN は cap=4 を返すのでライブは 3 台のレースを許す＝**公開コース上の利用者可視な挙動**）。
 //   母集団から派生を丸ごと外すとこの 1 件が不可視になる（層 4 レビュー 2 巡目 重要-C）ので、**既知の違反を明示の例外リスト**にする:
 //   リストに無い違反は赤（新規の退行）、リストにあるのに違反しなくなったら赤（リストを腐らせない）。是正の要否は AX4 の人間裁定。
-const KNOWN_STUCK = [{ name: '架空峠 ロング・ワインディング(激坂)〔道幅 2 台分〕', n: 3 }];
+// **単一真実源は `wf_touge_driver.mjs` の `AX3.KNOWN_STUCK`**（AX4・2026-09-07）。同じ配列から (a) 公開コースの desc 注記と
+//   (b) この例外リストの両方を作る。ここに名前を直書きすると、desc とリストが別々に腐る（RATELIMIT-1「同じ門を全経路に通す」）。
+const KNOWN_STUCK = AX3.KNOWN_STUCK.map((e) => {
+  const b = specs.find((s) => s.name === e.base);
+  if (!b) { console.log(`  ✗ KNOWN_STUCK の元コース '${e.base}' が courses.json に無い (AX3.KNOWN_STUCK と公開コースの不整合)`); process.exit(1); }
+  return { name: derivedTougeSpec(b, e.widthCars).name, n: e.n, stuck: e.stuck, okN: e.okN || [] };
+});
 const knownHit = new Set();
+// (E) セルごとの「走り出せない車」台数と実態容量を全件記録する (AX4)。AX3.KNOWN_STUCK の `stuck`/`okN` は
+//   **公開コースの desc 文言にそのまま出る数値** (wf_touge_driver.mjs の derivedTougeSpec) なのに、これまで
+//   どのゲートも検算していなかった (層 4 レビュー #2 重-1)。物理が変わって詰まる台数が変われば公開文だけが
+//   嘘になる ＝ B-2c が潰した「分子だけ刻み直して分母が腐る」と同型。ここで実測と突き合わせて固定する。
+const cellStuck = new Map();   // `${コース名}|${台数}` -> 走り出せない車の台数
+const capOf = new Map();       // コース名 -> driveableCapN
 for (const spec of specs) {
   let course; try { course = buildFromSpec(spec); } catch { continue; }
   setRegimeScale(1); setCarScale(0.8);
   const cap = driveableCapN(course, 'tabletop', FLEET.maxCars);   // 本物の実態容量 (ライブと同一オラクル)
+  capOf.set(spec.name, cap);
   if (cap < FLEET.maxCars) capped.push(`${spec.name}(cap${cap})`);
   for (let n = 1; n <= FLEET.maxCars; n++) {
     setRegimeScale(1); setCarScale(0.8);
     let r;
     try { r = runRace({ course, regime: 'tabletop', laps: 2, field: fieldOf(n), crashRule: { rejoin: true, penaltySec: 3 }, interact: true, maxSec: 14, trackNet: true, fitGuard: false }); }
     catch (e) { console.log('  ERR', spec.name, n, e.message); fail++; continue; }
+    let nStuckCell = 0;
     for (let i = 0; i < n; i++) {
       totCars++;
       if (r.armMax[i] > maxArmAll) maxArmAll = r.armMax[i];   // recoverN は全範囲で発散しないこと
@@ -71,7 +86,7 @@ for (const spec of specs) {
       //     楽め込み車の後ろの車が永久 held=netMax0 になり得るが、それはライブで自動的に絞られ走らない台数。
       if (n <= cap && r.netMax[i] < minMaxNet && !KNOWN_STUCK.some((e) => e.name === spec.name && e.n === n)) minMaxNet = r.netMax[i];
       if (r.netMax[i] < CAR.length && !r.carCrashed[i]) {          // 一度も carLen 動けない=走り出せない
-        totStuck++;
+        totStuck++; nStuckCell++;
         // (C) 容量内 (n≤cap) で走り出せない車が出たら回帰 (=完全0 が崩れた / 単調性が破れた)。既知の例外は別に数える。
         if (n <= cap) {
           const k = KNOWN_STUCK.find((e) => e.name === spec.name && e.n === n);
@@ -79,11 +94,29 @@ for (const spec of specs) {
         }
       }
     }
+    cellStuck.set(`${spec.name}|${n}`, nStuckCell);
   }
 }
 ok(minMaxNet > FROZEN, `凍結車ゼロ: 全 ${totCars} 車の最小 最大変位 = ${minMaxNet.toFixed(3)}m > ${FROZEN}m (元バグ net~0.004 は一掃)`);
 ok(offCap.length === 0, `実態容量内 (n≤capN) で走り出せない車 0 = 完全0 (違反=${offCap.length}件${offCap.length ? ': ' + offCap.join(', ') : ''}・既知の例外 ${KNOWN_STUCK.length} 件は別掲)`);
 ok(knownHit.size === KNOWN_STUCK.length, `既知の例外 (KNOWN_STUCK) は全件が現に違反している ${knownHit.size}/${KNOWN_STUCK.length} (直ったらリストから外すこと: ${KNOWN_STUCK.map((e) => e.name + '|n=' + e.n).join(', ')})`);
+// (E) 公開 desc に出る数値の検算 (AX4・層 4 レビュー #2 重-1)。ズレたら赤 = 公開文を直せの合図。
+{
+  const bad = [];
+  for (const e of KNOWN_STUCK) {
+    const got = cellStuck.get(`${e.name}|${e.n}`);
+    if (got !== e.stuck) bad.push(`${e.name}|n=${e.n}: 実測 ${got} 台 ≠ 宣言 ${e.stuck} 台`);
+    const cap = capOf.get(e.name);
+    for (const m of e.okN) {
+      if (m > cap) { bad.push(`${e.name}|okN の ${m} 台は実態容量 ${cap} を超える (ライブで走らない台数を「起きません」と書いている)`); continue; }
+      const g2 = cellStuck.get(`${e.name}|${m}`);
+      if (g2 !== 0) bad.push(`${e.name}|okN の ${m} 台で実測 ${g2} 台が走り出せない (「起きません」が嘘)`);
+    }
+  }
+  ok(bad.length === 0,
+    `既知の例外の**台数**が実測と一致 (公開コース desc の文言と同じ数値: ${KNOWN_STUCK.map((e) => `${e.n}台で${e.stuck}台停止/${e.okN.join(',')}台は正常`).join(' ; ')})`
+    + (bad.length ? ` — 不一致 ${bad.length} 件: ${bad.join(' / ')}` : ''));
+}
 ok(maxArmAll <= RECOVER_MAX + 1, `recoverN 頭打ち: 全車の最大 = ${maxArmAll} ≤ ${RECOVER_MAX + 1} (袋小路でも発散しない)`);
 console.log(`  参考) 走り出せない車 合計 = ${totStuck} (すべて実態容量超過 n>capN=ライブが自動で絞る範囲)。実態容量<6 のコース: ${capped.length ? capped.join(', ') : 'なし'}`);
 

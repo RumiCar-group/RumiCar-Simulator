@@ -20,11 +20,11 @@
   "canonicalNode": {
     "node": "22.22.1",
     "v8": "12.4.254.21-node.35",
-    "resultSha256": "fa20bb36c2984a2f6a95f101c849a1e74ba234f11f21818445095558bf93f091",
-    "pinnedAt": "2026-09-06",
+    "resultSha256": "f5809c19736cffa86ab93bcc65bd3a981047299d8a274f84cad82cb5fe105e10",
+    "pinnedAt": "2026-09-07",
     "eventId": "official-sample-circuit",
-    "appVersion": "v8.0.0",
-    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: v8.0.0 (Stage AW1: 卓上/中スケール v2 の車輪 ODE を車体加速度と同一 substep で連成。フルスケール v2 は byte 不変で verifyHash c731ecce も不変・appVersion 変更により resultSha256 のみ更新)"
+    "appVersion": "v8.1.0",
+    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: v8.1.0 版バンプ (Stage AX4: 峠の追走型ブロック戦術の結論を docs/pm へ追記・派生峠 18 本の公開追加・走行物理 無改変)。appVersion が engineFingerprint 経由で resultSha256 を変えるため再ピン (AQ-1)。verifyHash=c731ecce は不変。"
   },
   "history": [
     {
