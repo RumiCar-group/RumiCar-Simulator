@@ -79,7 +79,7 @@ SIM_PORT=80 docker compose up -d --build
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8090/simulator/          # → 200
-curl -s http://127.0.0.1:8090/simulator/data/courses.json | grep -c '"name"'       # → 41
+curl -s http://127.0.0.1:8090/simulator/data/courses.json | grep -c '"name"'       # → 66
 curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8090/healthz             # → 200
 ```
 
@@ -142,7 +142,7 @@ docker compose up -d        # nginx をネットワーク追加ぶん再作成
 
 ## 検証ゲートの実行
 
-52本の常設ゲートが同梱されています。改変後の回帰確認に使ってください。
+62本の常設ゲートが同梱されています。改変後の回帰確認に使ってください。
 
 ```bash
 cd RumiCar-Simulator

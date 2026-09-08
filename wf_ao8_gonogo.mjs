@@ -59,7 +59,7 @@ const benches = JSON.parse(readFileSync('./docs/stage_ao/bench_courses.json', 'u
   ok(Math.abs(g2low - g2dry) > 0.02, `A3 muDecay が σ=2 の保持力を変える (dry g=${g2dry.toFixed(4)} < low g=${g2low.toFixed(4)})`);
   ok(g2low > g2dry, `A3 低μ路面(muDecay0.92)は滑らせても保持 (g(2) 大)`);
 }
-// A4: 既存コース（41 + AX3 派生 18 = 59）byte 不変 — 全 spec を build→JSON 往復→再 build が同一・muDecay キー未混入
+// A4: 既存コース（41 + AX3 派生 18 + AY2 舵角限界ベンチ 7 = 66）byte 不変 — 全 spec を build→JSON 往復→再 build が同一・muDecay キー未混入
 {
   const existing = JSON.parse(readFileSync('./public/data/courses.json', 'utf8'));
   let leaked = 0, roundtripBad = 0;
@@ -71,7 +71,10 @@ const benches = JSON.parse(readFileSync('./docs/stage_ao/bench_courses.json', 'u
     if (JSON.stringify(c2) !== j) roundtripBad++;
   }
   // AX3 (2026-09-07): 道幅比の派生峠 18 本を末尾へ追加（利用者裁定 H2）＝ 41 → 59。索引は末尾追加ゆえ既存 41 本は不変。
-  ok(existing.length === 59, `A4 既存コース数=59 (実 ${existing.length}・AX3 で峠の派生 18 本を末尾追加)`);
+  // AY2 (2026-09-08): 舵角限界ベンチ 7 本を末尾へ追加（利用者裁定）＝ 59 → 66。**末尾追加なので既存 59 本の索引は不変**
+  //   （このアサートが守っているのは「コースが黙って増減/入替されないこと」であって本数そのものではない。
+  //    追加のたびに版付きで刻み直す＝AX3 と同型の運用）。
+  ok(existing.length === 66, `A4 既存コース数=66 (実 ${existing.length}・AX3 で峠の派生 18 本、AY2 で舵角限界ベンチ 7 本を末尾追加)`);
   ok(leaked === 0, `A4 既存コースに muDecay 混入=0 (実 ${leaked})`);
   ok(roundtripBad === 0, `A4 buildFromSpec 決定論 (JSON 往復同一)=全一致 (不一致 ${roundtripBad})`);
 }

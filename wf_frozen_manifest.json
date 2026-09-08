@@ -20,11 +20,11 @@
   "canonicalNode": {
     "node": "22.22.1",
     "v8": "12.4.254.21-node.35",
-    "resultSha256": "fe8a1526ae4ba27575d3940060f22be106b2f6c882308df595acec92004680ae",
+    "resultSha256": "e19a031421ca46c2f32258e7108162b91765ac84d2e551cc16cd8fd05b25bb62",
     "pinnedAt": "2026-09-07",
     "eventId": "official-sample-circuit",
-    "appVersion": "v8.1.1",
-    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: v8.1.1 版バンプ (PATCH: 物理モデル解説とアプリ内 Q&A で『まだ測っていないこと』の範囲を書き分け。制動は R_min が速度非依存ゆえ原理的に届かないと明記。物理・測定結果ともに不変)。appVersion が engineFingerprint 経由で resultSha256 を変えるため再ピン (AQ-1)。verifyHash=c731ecce は不変。"
+    "appVersion": "v8.2.0",
+    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: AY2: v8.2.0 版バンプ (舵角限界ベンチ 7 本の公開追加＋physics_model §11/アプリ Q&A への Stage AY 結果の反映)。走行物理は無改変で verifyHash=c731ecce は不変、resultSha256 のみ appVersion 経由で変化。"
   },
   "history": [
     {

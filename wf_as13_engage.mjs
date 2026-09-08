@@ -197,7 +197,17 @@ ok(noFinish.length === 2,
 {
   const st0 = challengeState(built, CARS, () => null);
   ok(st0.excluded === noFinish.length, `C1 除外件数を黙らず返す (excluded=${st0.excluded})`);
-  ok(st0.rows.length === built.length - noFinish.length, `C1 母集団 = 完走が定義されるコースのみ (${st0.rows.length})`);
+  // AY2 (2026-09-08): 除外の理由は 2 種類ある。**混ぜてはいけない** — `excluded` は「ゴールラインが無く
+  //   完走が定義されない」、`excludedBench` は「ゴールラインは持つが、舵では原理的に曲がれないことを
+  //   見せるための教材ベンチで完走を前提にしていない」。UI は理由ごとに別の文言を出すので、片方の述語を
+  //   広げて済ませると説明文が嘘になる（実際に一度そう壊した）。両方を件数で固定する。
+  const benchC = built.filter((c) => c.bench);
+  ok(benchC.length === 7 && benchC.every((c) => isCompletable(c)),
+    `C1 舵角限界ベンチは 7 件で、いずれも**ゴールラインは持つ**（＝除外理由は「完走が定義されない」ではない）` +
+    ` — 実測 ${benchC.length} 件・ゴールライン有り ${benchC.filter((c) => isCompletable(c)).length} 件`);
+  ok(st0.excludedBench === benchC.length, `C1 ベンチの除外件数も黙らず別に返す (excludedBench=${st0.excludedBench})`);
+  ok(st0.rows.length === built.length - noFinish.length - benchC.length,
+    `C1 母集団 = 完走が定義され、かつ教材ベンチでないコースのみ (${st0.rows.length} = ${built.length} − ${noFinish.length} − ${benchC.length})`);
   ok(st0.total.done === 0 && st0.badges.every((b) => !b.got), 'C2 記録ゼロなら完走 0・バッジは全て未取得');
   ok(st0.next && st0.next.diff === Math.min(...st0.rows.map((r) => r.diff == null ? 9 : r.diff)),
     `C2 「次の一歩」は未完走のうち最もやさしいコース (★${st0.next && st0.next.diff}「${st0.next && st0.next.name}」)`);

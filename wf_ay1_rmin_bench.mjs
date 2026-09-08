@@ -237,7 +237,7 @@ for (const W of WIDTHS) for (const ratio of RATIOS) {
 }
 
 // ── A-4/A-5: AY-0 の 2 つの数値の是正を、実測で機械固定する ────────────────────────────
-console.log(`\n[A-4/A-5] 決定ログ AY-0 の数値の是正（実測で固定）`);
+console.log(`\n[A-4/A-5] 決定ログ AY-0 の数値の是正（実測で固定・対象は**峠コーナーだけ**。峠以外は A-6）`);
 {
   const specs = JSON.parse(readFileSync(join(ROOT, 'public', 'data', 'courses.json'), 'utf8'));
   const T = [...tougeSpecs(specs), ...derivedTougeSpecs(specs)];
@@ -263,7 +263,7 @@ console.log(`\n[A-4/A-5] 決定ログ AY-0 の数値の是正（実測で固定�
     console.log(`  ${k.padEnd(30)} R_out<R_min = ${String(below[k]).padStart(2)} / ${rows.length} 本・最も際どい ${tightest[k].Rout.toFixed(4)}m = R_min の ${tightest[k].ratio.toFixed(3)} 倍（${t.name}）`);
   }
   ok(Object.values(below).every((v) => v === 0),
-     `A-4 **現行の全 ${rows.length} コーナー（出荷の峠 ${nShip} ＋ 派生 ${rows.length - nShip}）に R_out < R_min は 0 本**（3 通りの定義すべてで 0）` +
+     `A-4 **現行の全 ${rows.length} 峠コーナー（出荷の峠 ${nShip} ＋ 派生 ${rows.length - nShip}）に R_out < R_min は 0 本**（3 通りの定義すべてで 0）` +
      ` ⇒ AY-0 の結論は不変。ただし最も際どい値は **${tightest['R + usable（本ゲートの定義）'].Rout.toFixed(4)}m = ${tightest['R + usable（本ゲートの定義）'].ratio.toFixed(3)} 倍**` +
      `（AY-0 本文の「0.297m = 1.017 倍」は usable/2 で算出したもの＝是正）`);
   // A-5: fullscale の「唯一 GO」セルの 2 つの比率を並べて、取り違えを機械的に封じる。
@@ -279,6 +279,70 @@ console.log(`\n[A-4/A-5] 決定ログ AY-0 の数値の是正（実測で固定�
      `A-5 **AO8/AU3 のベンチは 5 半径すべて R_out > R_min**（${fsRows.map((r) => r.rOut.toFixed(2)).join('/')}）。` +
      `唯一 GO の R5 の「0.856」は **中心線比**（${r5.rCenter.toFixed(4)}）であって外径比（${r5.rOut.toFixed(3)}）ではない` +
      ` ⇒ あの GO は「舵でも通れるが滑らせたほうが速い」であり「滑らせる以外に手が無い」ではない（AY-0 の是正）`);
+}
+
+// ── A-6: AY2 で公開した「舵角限界ベンチ」の台帳（コースとゲートのベンチが同一幾何であることの機械固定）──
+// なぜ要るか: AY2 で courses.json に逆算ベンチ 7 本を追加した。以後 **公開コースの中に R_out < R_min の廊下が
+//   実在する**ので、A-4 の「0 本」は**峠に限った話**になった（A-4 の文言もそう直してある）。外部文書
+//   （physics_model §11・アプリ Q&A・CHANGELOG）は「峠には無い / ベンチには有る」と書き分けているので、
+//   その 2 つの数を毎回ここで数え直す。加えて **コース側の rr/width が benchSpec と一致すること**を見て、
+//   「ゲートのベンチ」と「公開コース」が別物へ分岐するのを防ぐ（同名で別物の防止）。
+console.log(`\n[A-6] 公開コースの舵角限界ベンチ（AY2 追加分）の台帳`);
+{
+  const specsAll = JSON.parse(readFileSync(join(ROOT, 'public', 'data', 'courses.json'), 'utf8'));
+  const benches = specsAll.filter((c) => c.bench);
+  let geomOK = benches.length > 0, below = 0, atOrAbove = 0;
+  for (const b of benches) {
+    const ref = benchSpec(b.ratioOutMin, b.width, 'dry');
+    const same = b.kind === ref.kind && b.shape === ref.shape && b.L === ref.L &&
+                 b.rr === ref.rr && b.width === ref.width && b.samples === ref.samples;
+    if (!same) geomOK = false;
+    const Rout = b.rr + usableOf(b.width);
+    if (Rout < R_MIN) below++; else atOrAbove++;
+    console.log(`  ${b.name}  rr=${b.rr} W=${b.width} | R_out=${Rout.toFixed(4)} / R_min=${R_MIN.toFixed(4)} = ${(Rout / R_MIN).toFixed(4)}` +
+                ` | benchSpec と一致: ${same ? 'yes' : '**NO**'}`);
+  }
+  ok(geomOK,
+     `A-6a 公開ベンチ ${benches.length} 本の幾何（kind/shape/L/rr/width/samples）が benchSpec と**完全一致**` +
+     ` ⇒ 公開コースで走るのと本ゲートが測っているのは同じ廊下`);
+  // A-6c: **公開文言（name / desc / desc_en）の数値が、この場で計算した値と一致するか**。
+  //   なぜ要るか（層 4 レビュー D3）: A-6a は `benchSpec(b.ratioOutMin, ...)` と比べるので、`ratioOutMin` と `rr` を
+  //   一緒に動かすと恒真になり、しかも **name/desc の数値は一切見ていなかった**（変異テストで実証: 名前に
+  //   「=0.856」と書いてある行の隣にゲートが「= 0.9000」と印字しながら緑だった）。利用者が読むのは desc なので、
+  //   幾何ではなく**文言**を機械で縛る。加えて **2 本の境界の前提スタンプ**（AY1_bench §6 が「必ず添えろ」と
+  //   書いているもの）が日英とも desc に残っているかを存在検査する（消えたら赤）。
+  const num = (re, txt) => { const m = txt.match(re); return m ? Number(m[1]) : NaN; };
+  const near = (a, b, tol) => Number.isFinite(a) && Math.abs(a - b) <= tol;
+  const wordBad = [], numBad = [];
+  for (const b of benches) {
+    const Rout = b.rr + usableOf(b.width), body = (Rout - swingOut(R_MIN)) / R_MIN;
+    const chk = [
+      ['name 比',       near(num(/R_out\/R_min=([\d.]+)/, b.name), b.ratioOutMin, 5e-4)],
+      ['name_en 比',    near(num(/R_out\/R_min=([\d.]+)/, b.name_en), b.ratioOutMin, 5e-4)],
+      ['ja R_out',      near(num(/R_out=([\d.]+)m/, b.desc), Rout, 5e-5)],
+      ['ja R_min',      near(num(/R_min=([\d.]+)m/, b.desc), R_MIN, 5e-5)],
+      ['ja 比',         near(num(/の ([\d.]+) 倍/, b.desc), b.ratioOutMin, 5e-4)],
+      ['ja 車体比',     near(num(/\(R_out−はみ出し\)\/R_min = ([\d.]+)/, b.desc), body, 5e-4)],
+      ['ja 道幅',       near(num(/台分\(([\d.]+)m\)/, b.desc), b.width, 1e-9)],
+      ['en R_out',      near(num(/R_out=([\d.]+) m/, b.desc_en), Rout, 5e-5)],
+      ['en 比',         near(num(/is ([\d.]+)x the minimum turning radius/, b.desc_en), b.ratioOutMin, 5e-4)],
+      ['en R_min',      near(num(/R_min=([\d.]+) m/, b.desc_en), R_MIN, 5e-5)],
+      ['en 車体比',     near(num(/\(R_out - swing-out\)\/R_min = ([\d.]+)/, b.desc_en), body, 5e-4)],
+    ];
+    for (const [k, okk] of chk) if (!okk) numBad.push(`${b.name}: ${k}`);
+    // 2 本の境界の前提スタンプ（横位置を選べる前提 / 廊下中央から入る前提の 1.073・1.174）。
+    if (!(b.desc.includes('1.073') && b.desc.includes('1.174') && b.desc.includes('前提'))) wordBad.push(`${b.name}: ja 前提スタンプ`);
+    if (!(b.desc_en.includes('1.073') && b.desc_en.includes('1.174') && b.desc_en.includes('assum'))) wordBad.push(`${b.name}: en 前提スタンプ`);
+  }
+  ok(numBad.length === 0,
+     `A-6c 公開文言（name/name_en/desc/desc_en）の数値 ${11 * benches.length} 点がすべて計算値と一致` +
+     `（不一致 ${numBad.length}${numBad.length ? ': ' + numBad.join(' / ') : ''}）⇒ 幾何を直して文言を直し忘れる／文言だけ書き替える のどちらも赤になる。**照合するのは R_out・R_min・比・車体比・道幅の 5 種**で、実壁の不足量は H-6、既定サンプルの完走数は wf_as3_samples の D 章が別に照合する`);
+  ok(wordBad.length === 0,
+     `A-6d 全 ${benches.length} 本の desc/desc_en に **2 本の境界の前提スタンプ**（1.073 / 1.174 と「前提」/"assum"）が残っている` +
+     `（欠落 ${wordBad.length}${wordBad.length ? ': ' + wordBad.join(' / ') : ''}）⇒ AY1_bench §6 の「どちらの前提かを必ず添える」を機械で保つ`);
+  ok(below === 5 && atOrAbove === 2,
+     `A-6b 公開ベンチの内訳 = **R_out < R_min が ${below} 本**（舵では原理的に曲がれない）／**R_out ≥ R_min が ${atOrAbove} 本**（比 1.02＝舵で通せる側の対照）` +
+     ` ⇒ A-4 の「峠には 0 本」と併せて外部文書の「峠には無い／ベンチには有る」を機械固定する`);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════════════
@@ -690,6 +754,25 @@ const WALL_CONTROL_RATIOS = [1.5, 2.0];   // 固定 8 セルの外。**弁別性
      ` ⇒ 外部へ書くときは「点経路の話か車体の話か」を必ず添える`);
   // drift 幾何アームの読み違いを封じる注記（表に GO と出るが、運転できるとは言っていない）。
   const impossible = [...live, ...ctrl].filter((r) => r.drift_fits && r.drift_R < R_MIN && r.drift_beta === 0);
+  // H-6: **公開 desc に書いた「実壁で ○m 収まりません」を、いま測ったクリアランスと照合する**
+  //   （層 4 レビュー 2 巡目 ⑨: A-6c は R_out/R_min/比/車体比/道幅しか見ておらず、この数値は無検査だった。
+  //    幾何を変えても文言が古いまま緑になる穴が残っていた。）
+  {
+    const benchSpecsJ = JSON.parse(readFileSync(join(ROOT, 'public', 'data', 'courses.json'), 'utf8')).filter((c) => c.bench);
+    const badClr = [];
+    for (const b of benchSpecsJ) {
+      const row = wallRows.find((r) => r.kind === 'grid' && Math.abs(r.ratio - b.ratioOutMin) < 1e-9 && Math.abs(r.W - b.width) < 1e-9);
+      if (!row || row.skipped) { badClr.push(`${b.name}: 実壁アームに対応行が無い`); continue; }
+      const want = Math.abs(row.grip_clr);
+      const mJa = String(b.desc).match(/が ([\d.]+)m 収まりません/);
+      const mEn = String(b.desc_en).match(/misses by ([\d.]+) m/);
+      if (!mJa || Math.abs(Number(mJa[1]) - want) > 5e-5) badClr.push(`${b.name}: ja ${mJa ? mJa[1] : '(無)'} vs 実測 ${want.toFixed(4)}`);
+      if (!mEn || Math.abs(Number(mEn[1]) - want) > 5e-5) badClr.push(`${b.name}: en ${mEn ? mEn[1] : '(無)'} vs 実測 ${want.toFixed(4)}`);
+    }
+    ok(badClr.length === 0,
+       `H-6 公開 ${benchSpecsJ.length} 本の desc/desc_en に書いた「実壁で ○m 収まりません」が本章の実測と一致` +
+       `（不一致 ${badClr.length}${badClr.length ? ': ' + badClr.join(' / ') : ''}）`);
+  }
   note(`H-5 ⚠ drift 幾何アームは「**その姿勢の剛体が廊下に収まるか**」だけを見ている。R < R_min かつ β=0 の線は` +
        ` **運転では実現できない**（まさに本ゲートが「原理的に不可能」と言っている姿勢）。該当 ${impossible.length} 行` +
        `（${impossible.map((r) => `${r.kind === 'control' ? '対照' : '格子'} 比${r.ratio}/W${r.W}: R=${r.drift_R}`).join(' ') || 'なし'}）。` +
@@ -862,6 +945,28 @@ if (WANT_JSON) {
     ratios: RATIOS, widths: WIDTHS, ang: ANG, budget: BUDGET, labCfg: LAB_CFG, entrySpace: ENTRY, leadSpace: LEAD,
     cells, dry: dryRows, low: lowRows, wall: wallRows, boundaries, goRobust: jRows,
     goDry: goRows.length, goLow: goLow.length, runs: lab.stats.runs, reversed: lab.stats.reversed }, null, 0));
+}
+
+// **公開文書に書いたアサート数を、このゲート自身の実数と突き合わせる**（層 4 レビュー 1 巡目 A2・2 巡目 ②）。
+//   同じ欠陥を「その欠陥の修理中に」もう一度作ったので、人の記憶ではなく機構で止める。
+//   数える対象は**この検査自身を含めた総数** = pass + fail + 1。
+{
+  const want = pass + fail + 1;
+  const src = [
+    ['docs/physics_model.md',    /\(本節・(\d+) アサート/],
+    ['docs/physics_model.en.md', /\(this section; (\d+) assertions/],
+    ['public/js/changelog.js',   /wf_ay1_rmin_bench\.mjs` \((\d+) アサート\)/],
+    ['public/js/changelog.js',   /wf_ay1_rmin_bench\.mjs` \((\d+) assertions\)/],
+  ];
+  const bad = [];
+  for (const [f, re] of src) {
+    const m = readFileSync(join(ROOT, f), 'utf8').match(re);
+    if (!m) bad.push(`${f}: 記載が見つからない (${re})`);
+    else if (Number(m[1]) !== want) bad.push(`${f}: 記載 ${m[1]} ≠ 実数 ${want}`);
+  }
+  ok(bad.length === 0,
+     `Z-1 公開文書 ${src.length} 箇所のアサート数が実数 ${want} と一致` +
+     `（不一致 ${bad.length}${bad.length ? ': ' + bad.join(' / ') : ''}）⇒ ゲートを増減したら文書も直さないと赤`);
 }
 
 console.log(`\n[結果] pass=${pass} fail=${fail}`);

@@ -34,9 +34,10 @@ videos/
 **/aaa
 
 # 検証スクラッチ・ゲートの出力 (使い捨て。作業ツリーに溜まるが履歴には入れない)
-#   _*.mjs            … ブロック作業中の probe/diag (例 _as12_diag.mjs)
+#   _*.mjs / _*.json  … ブロック作業中の probe/diag と、その中間データ (例 _as12_diag.mjs)
 #   official_result.json … wf_official_result / wf_run_all の既定書込先
 #   test_*.mjs        … 一時検証スクリプト (CLAUDE.md「検証スクラッチ」)
 _*.mjs
+_*.json
 official_result.json
 test_*.mjs

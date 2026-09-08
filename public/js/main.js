@@ -1168,6 +1168,8 @@ function renderChallenge() {
   // 総合進捗
   h += `<p class="chal-total"><b>${esc(t('chal.total', { done: st.total.done, total: st.total.total }))}</b></p>`;
   if (st.excluded) h += `<p class="hint">${esc(t('chal.excluded', { n: st.excluded }))}</p>`;
+  // AY2: 除外の理由は 2 種類ある (ゴールライン無し / 完走を前提にしない教材ベンチ)。理由ごとに書く。
+  if (st.excludedBench) h += `<p class="hint">${esc(t('chal.excludedBench', { n: st.excludedBench }))}</p>`;
   // バッジ (取得済みは色つき・未取得は灰。件数を必ず添えて「あと何個か」が分かるようにする)
   h += '<p class="chal-badges">' + st.badges.map((b) => {
     const label = t('chal.badge.' + b.key, { n: b.total });

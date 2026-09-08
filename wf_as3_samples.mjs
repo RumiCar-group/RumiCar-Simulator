@@ -78,9 +78,16 @@ console.log('\n=== C: 既定3サンプルの完走マトリクス (母集団レ�
 const EXPECTED = JSON.parse(fs.readFileSync(new URL('./wf_as3_expected.json', import.meta.url), 'utf8'));
 let total = 0;
 const perCourse = {};
+const bench = {};
 for (const { i, spec, course } of built) {
   if (!course.finish) continue;                       // B で扱った不成立コースは対象外
   const r = run(spec, course, 3);
+  // AY2 (2026-09-08): 舵角限界ベンチ (`bench` 持ち・R_out/R_min を逆算した 180° ヘアピンだけの競技場形) は
+  //   **舵では通れないことを見せるために作った**コースで、完走数は構造的に 0 付近へ張り付く。母集団 C に入れると
+  //   maxZeroCourses の枠 (上限 10・実測も 10 で余裕ゼロ) を食い潰し、C 本来の検出力 (サンプル退行) が落ちる。
+  //   ∴ 母集団からは外し、代わりに D で「本当に通れないままか」を**上限つきの実測**として固定する
+  //   (= 枠を緩めるのではなく、別の述語を足す)。母集団の件数は追加前と同じ 57 のままなので凍結値は不変。
+  if (spec.bench) { bench[i] = r.finishers.length; continue; }
   perCourse[i] = r.finishers.length; total += r.finishers.length;
 }
 const nAll = Object.keys(perCourse).filter((i) => perCourse[i] === 3).length;
@@ -94,6 +101,47 @@ console.log(`  対象 ${Object.keys(perCourse).length} コース: 完走総数 $
   `全3台完走 ${nAll} 件 (下限 ${EXPECTED.allThreeCourses})・0 完走 ${zero.length} 件 ${zero.map((i) => '[' + i + ']').join('')} (上限 ${EXPECTED.maxZeroCourses})`);
 console.log(`  参照 (合否に使わない): 凍結時と完走数が異なるコース ${drift.length} 件 ` +
   drift.map((i) => `[${i}]${EXPECTED.perCourse[i]}->${perCourse[i]}`).join(' '));
+
+// ===== D: 舵角限界ベンチ (AY2) が「既定サンプルでは通れないまま」か =====
+// C から外した分の代替。**枠を緩めた分をここで取り返す**: 意図せず通れるようになったら赤にする。
+//   追加時 (2026-09-08) の実測は 7 コース合計 1/21 (通ったのは R_out/R_min=1.02・道幅 3.5 台分の 1 台のみ。
+//   このセルだけ比が 1 を上回る = 舵で通せる側)。上限は連続量マージンを 2 台ぶん残して 3 に置く。
+console.log('\n=== D: 舵角限界ベンチ (AY2・bench 持ち) が既定サンプルでは通れないままか ===');
+// **被験と対照を混ぜない**（層 4 レビュー D1）: 7 本のうち `ratioOutMin < 1` の 5 本が「舵では原理的に
+//   曲がれない」被験セル、`>= 1` の 2 本（比 1.02）は「舵で通せる側」の対照セル。守るべきは被験 5 本で、
+//   そこは**構造的にゼロ**（恣意的な上限を置かない）。対照の完走数は軌道カオスで上下するので記録に留める。
+// **本数も固定する**（同 D2）: 両辺とも courses.json 由来の比較では、ベンチが減っても気づけない
+//   （変異テストで実証済み: 2 本削っても緑だった）。内訳 5/2 をハード固定する。
+const benchSpecs = specs.filter((s) => s.bench);
+const benchIdx = Object.keys(bench);
+const isSubject = (i) => (built[+i].spec.ratioOutMin < 1);
+const subjIdx = benchIdx.filter(isSubject), ctrlIdx = benchIdx.filter((i) => !isSubject(i));
+const subjTotal = subjIdx.reduce((a, i) => a + bench[i], 0);
+const ctrlTotal = ctrlIdx.reduce((a, i) => a + bench[i], 0);
+ok(benchIdx.length === benchSpecs.length && subjIdx.length === 5 && ctrlIdx.length === 2,
+  `舵角限界ベンチの内訳が 被験(R_out/R_min<1) 5 本 ＋ 対照(>=1) 2 本 でない ` +
+  `(実測 測定 ${benchIdx.length} / courses.json ${benchSpecs.length} / 被験 ${subjIdx.length} / 対照 ${ctrlIdx.length}` +
+  `。finish 線を失った・spec が消えた・比を書き替えた のいずれか)`);
+ok(subjTotal === 0,
+  `舵で通れないはずの被験 ${subjIdx.length} 本で既定サンプルが ${subjTotal}/${subjIdx.length * 3} 台完走した ` +
+  `(= 通れるようになった。意図した物理変更なら AY1 のベンチを測り直して結論ごと刻み直す)`);
+console.log(`  被験 ${subjIdx.length} 本(R_out/R_min<1)・完走総数 ${subjTotal}/${subjIdx.length * 3} (要求 0)・内訳 ${subjIdx.map((i) => `[${i}]${bench[i]}`).join(' ')}`);
+// desc に書いた完走数そのものを照合する（層 4 レビュー 2 巡目 ⑨）。physics_model・アプリ Q&A・CHANGELOG の
+//   看板数値「1/21」はこの 7 本の合計なので、ここが黙って古くなると外部文書が一斉に嘘になる。
+//   desc の表記 = 「動力学(卓上の既定エンジン) X/3・精密v2 Y/3」。本ゲートは既定エンジン＝動力学で走るので X を照合する。
+{
+  const bad = [];
+  for (const i of benchIdx) {
+    const d = built[+i].spec.desc || '';
+    const m = d.match(/動力学\(卓上の既定エンジン\) (\d+)\/3/);
+    if (!m) { bad.push(`[${i}] desc に「動力学(卓上の既定エンジン) X/3」が無い`); continue; }
+    if (Number(m[1]) !== bench[i]) bad.push(`[${i}] desc=${m[1]}/3 実測=${bench[i]}/3`);
+  }
+  ok(bad.length === 0,
+    `D 各ベンチの desc に書いた既定サンプル完走数が実測と一致 (不一致 ${bad.length}${bad.length ? ': ' + bad.join(' / ') : ''}) ` +
+    `⇒ 合計 ${benchIdx.reduce((a, i) => a + bench[i], 0)}/${benchIdx.length * 3} が外部文書の「1/21」の出所`);
+}
+console.log(`  対照 ${ctrlIdx.length} 本(R_out/R_min>=1・舵で通せる側)・完走総数 ${ctrlTotal}/${ctrlIdx.length * 3} (記録・合否に使わない=軌道カオス)・内訳 ${ctrlIdx.map((i) => `[${i}]${bench[i]}`).join(' ')}`);
 
 console.log(`\n合計: PASS ${pass} / FAIL ${fail}`);
 if (fail) { console.error('FAIL: AS3 ゲート不合格'); process.exit(1); }

@@ -87,12 +87,16 @@ const v = validateEntry({ class: 'budget', budget: { total: BUDGET } }, { carDef
 ok(v.ok === false && v.reason === 'budget', 'budget 超過ビルドが validateEntry で弾かれない (退行)');
 
 // ===== B: 実レース (39 コース) での勝者多様性 (母集団述語・CI-14) =====
-console.log('=== B: 実レースでの勝者多様性 (' + built.length + ' コース) ===');
+// AY2 (2026-09-08): 舵角限界ベンチ (`bench`) は B/C の母集団から外す。**意図的に通れないコース**は
+//   分子を 1 も増やさず分母だけ増やすので、どちらの下限判定も余裕だけが希釈される（C は 8.1pt→2.8pt の実測）。
+//   同じ理由づけを 1 つのゲート内で二重基準にしない。
+const builtC = built.filter(({ spec }) => !spec.bench);
+console.log('=== B: 実レースでの勝者多様性 (' + builtC.length + ' コース・舵角限界ベンチ ' + (built.length - builtC.length) + ' 本は母集団外) ===');
 const prog = PROGRAM_BY_KEY['normal_fr'];   // AS3 で頑健化した既定サンプル (Apex Hunter)
 const raceField = () => builds.map((b) => ({ name: b.key, lang: 'c', src: prog.code, carDef: b.def }));
 const winCount = {}; builds.forEach((b) => { winCount[b.key] = 0; });
 let coursesWithFinisher = 0;
-for (const { spec, course } of built) {
+for (const { spec, course } of builtC) {
   const res = runRace({ course, regime: spec.noRace ? 'fullscale' : null, laps: spec.kind === 'touge' ? undefined : 3,
     field: raceField(), crashRule: { rejoin: false, penaltySec: 3 }, interact: true, report: false });
   if (res.finishers.length) { coursesWithFinisher++; winCount[res.finishers[0].name]++; }
@@ -101,28 +105,33 @@ const distinctWinners = Object.values(winCount).filter((n) => n > 0).length;
 const maxWinShare = Math.max(...Object.values(winCount)) / (coursesWithFinisher || 1);
 console.log(`  完走者が出たコース ${coursesWithFinisher}/${built.length}・優勝内訳 ${JSON.stringify(winCount)}`);
 console.log(`  distinct winners = ${distinctWinners}/${builds.length}  max win share = ${(maxWinShare * 100).toFixed(1)}%`);
-ok(coursesWithFinisher >= 25, `完走者が出たコースが ${coursesWithFinisher}/${built.length} (基準 >=25。実測は37前後)`);
+ok(coursesWithFinisher >= 25, `完走者が出たコースが ${coursesWithFinisher}/${builtC.length} (基準 >=25。実測は 48 前後 (2026-09-08・66 コースから舵角限界ベンチ 7 本を除いた 57 コース中))`);
 ok(distinctWinners >= 4, `優勝ビルドの多様性が ${distinctWinners}/${builds.length} (基準 >=4。「単一最強ビルド」を検出)`);
 ok(maxWinShare <= 0.65, `最多優勝ビルドの勝率シェアが ${(maxWinShare * 100).toFixed(1)}% (基準 <=65%。「単一最強ビルド」を検出)`);
 
 // ===== C: FILLER_POOL の完走可能性 (母集団述語) =====
-console.log('=== C: FILLER_POOL の完走可能性 (' + built.length + ' コース) ===');
+// AY2 (2026-09-08): 舵角限界ベンチ (`bench`) は **母集団から外す**。これは「補充車のプログラム品質」を測る
+//   述語で、意図的に通れないコースは分子を 1 も増やさず分母だけ増やす＝下限 0.40 までの余裕を希釈する
+//   （実測: 除外しないと 137/285=48.1% → 137/320=42.8% ＝ 余裕が 8.1pt → 2.8pt へ 65% 減る）。
+//   同種の追加をあと 2 回やると filler の品質が何も変わらないのにここが赤になるので、分母を揃える。
+
+console.log('=== C: FILLER_POOL の完走可能性 (' + builtC.length + ' コース・舵角限界ベンチ ' + (built.length - builtC.length) + ' 本は母集団外) ===');
 const fillerField = formField({ minField: FILLER_POOL.length }, []);
 ok(fillerField.length === FILLER_POOL.length, `FILLER_POOL 全5台が補充されない (実際 ${fillerField.length} 台)`);
 ok(fillerField.every((f) => f.src && f.src.length > 10), 'filler の src が空/極端に短い (progKey 解決の破損)');
 let pairFinish = 0, courseWithFillerFinisher = 0;
 const perFiller = {}; fillerField.forEach((f) => { perFiller[f.name] = 0; });
-for (const { spec, course } of built) {
+for (const { spec, course } of builtC) {
   const res = runRace({ course, regime: spec.noRace ? 'fullscale' : null, laps: spec.kind === 'touge' ? undefined : 3,
     field: fillerField, crashRule: { rejoin: false, penaltySec: 3 }, interact: true, report: false });
   pairFinish += res.finishers.length;
   if (res.finishers.length) courseWithFillerFinisher++;
   for (const f of res.finishers) perFiller[f.name]++;
 }
-const pairTotal = built.length * fillerField.length;
-console.log(`  完走した(補充車,コース)ペア ${pairFinish}/${pairTotal} (${(100 * pairFinish / pairTotal).toFixed(1)}%)・1台以上完走コース ${courseWithFillerFinisher}/${built.length}`);
+const pairTotal = builtC.length * fillerField.length;
+console.log(`  完走した(補充車,コース)ペア ${pairFinish}/${pairTotal} (${(100 * pairFinish / pairTotal).toFixed(1)}%)・1台以上完走コース ${courseWithFillerFinisher}/${builtC.length}`);
 console.log(`  filler 別完走数: ${JSON.stringify(perFiller)}`);
-ok(courseWithFillerFinisher >= 30, `filler が1台も完走しないコースが多すぎる (完走コース ${courseWithFillerFinisher}/${built.length}・基準 >=30)`);
+ok(courseWithFillerFinisher >= 30, `filler が1台も完走しないコースが多すぎる (完走コース ${courseWithFillerFinisher}/${builtC.length}・基準 >=30)`);
 ok(pairFinish / pairTotal >= 0.40, `filler の population 完走率が ${(100 * pairFinish / pairTotal).toFixed(1)}% (基準 >=40%)`);
 ok(Object.values(perFiller).every((n) => n >= 1), `1台も完走できない filler が存在 (${JSON.stringify(perFiller)})`);
 

@@ -71,12 +71,17 @@ out.push('---');
 out.push('');
 out.push('### Verifying this release yourself');
 out.push('');
+// **AY2 (2026-09-08) 是正**: 旧文面は `cd Simulator` / `Simulator/browser/` と書いていたが、
+//   このリポジトリは AT4 (2026-08-05) でフラット化され、**ルート直下が直接シミュレータ**である
+//   (`git ls-files` に `Simulator/` は 1 件も無い)。v8.0.0〜v8.1.1 の Release 本文に誤った手順が
+//   載っていたので直す。手順は「クローンしてルートで走らせる」。
 out.push('```sh');
-out.push('cd Simulator');
+out.push('git clone https://github.com/RumiCar-group/RumiCar-Simulator.git');
+out.push('cd RumiCar-Simulator');
 out.push('node wf_run_all.mjs        # the full assertion-gate suite');
 out.push('```');
 out.push('');
 out.push('The suite runs from a fresh clone with no dependencies beyond Node.js.');
-out.push('The real-browser checks under `Simulator/browser/` additionally need `npm install` and a display.');
+out.push('The real-browser checks under `browser/` additionally need `npm install` and a display.');
 
 console.log(out.join('\n'));

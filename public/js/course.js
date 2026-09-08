@@ -340,6 +340,10 @@ export function buildFromSpec(spec) {
   // とする (重複フィールドを作らない)。
   if (spec.diff != null) c.diff = +spec.diff;
   if (spec.beginner) c.beginner = true;
+  // 教材ベンチ印 (任意・データ透過のみ・物理非干渉・AY2)。R_out < R_min を見せるために逆算した
+  // コースは「舵では原理的に曲がれない」ことが主題で、完走を前提にしていない。チャレンジの完走
+  // バッジ母集団から外すのに使う (challenge.js)。**表示・当たり判定・物理には一切関与しない。**
+  if (spec.bench) c.bench = true;
   // 路面グリップ (任意, 1=ドライ標準, <1=ウェット)。spawn 経由で各車へ伝える。
   if (spec.grip != null) { const g = Math.max(0, +spec.grip); c.grip = g; c.start = { ...c.start, grip: g }; }
   // 路面 muDecay (任意・0..1・省略時=タイヤセット既定=旧エンジンは非参照)。§5・AO8: ピーク後の漸近
@@ -423,6 +427,8 @@ export function normalizeCourse(data) {
   if (data.desc_en) c.desc_en = data.desc_en;
   // 投稿/保存コースが難易度/入門メタを持てば透過 (任意・表示専用・AB5)。
   if (data.diff != null) c.diff = +data.diff;
+  // 教材ベンチ印も透過 (buildFromSpec 側と対称にしておく。落とすと保存/投稿を経た瞬間に印が消える)。
+  if (data.bench) c.bench = true;
   if (data.beginner) c.beginner = true;
   return withForward(c);
 }

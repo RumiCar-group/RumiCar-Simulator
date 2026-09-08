@@ -44,6 +44,7 @@
 //          node wf_ax3_block.mjs --full   （全掃引・docs 転記用・長い）
 //          node wf_ax3_block.mjs --json   （表を JSON で）
 // ══════════════════════════════════════════════════════════════════════════════════════
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -91,14 +92,32 @@ console.log(`\n[H-0] 走行条件と派生コース`);
   console.log(`  大域: physics=${PHYSICS.mode} regime=${REGIME_STATE.active}`);
   ok(engOK, `H-0a エンジン/領域 = v2 × 卓上（Stage AX の固定条件・SAX-PREP H1）`);
   if (!engOK) { console.log(`\n[結果] pass=${pass} fail=${fail}  ← 条件が違うので以降の測定は行わない`); process.exit(1); }
-  // 派生コースは末尾に 18 本（6 峠 × 3 水準・峠優先の順）。既存索引をずらさない（wf_as3_expected の perCourse は索引キー）。
-  const nBase = specs.length - DERIVED.length;
-  const tailOK = specs.slice(nBase).every((s) => s.derivedFrom) && specs.slice(0, nBase).every((s) => !s.derivedFrom);
+  // 派生コースは 18 本（6 峠 × 3 水準・峠優先の順）が **連続した 1 ブロック**として並び、その **開始索引が
+  //   41（AX3 以前の出荷 41 本の直後）で固定**であること。既存索引をずらさない（wf_as3_expected の perCourse は索引キー）。
+  // AY2 (2026-09-08): 旧実装は `nBase = specs.length - DERIVED.length` で「派生は配列の末尾」を前提にしていたが、
+  //   AY2 が舵角限界ベンチ 7 本を**さらに末尾へ**足したのでこの前提が崩れた。守るべき性質は「末尾にあること」では
+  //   なく「**既存索引がずれないこと**」なので、開始索引の固定＋連続性で書き直す（後から何を足しても壊れない）。
+  const DERIVED_START = 41;
+  const idxs = specs.map((s, i) => (s.derivedFrom ? i : -1)).filter((i) => i >= 0);
+  const nBase = idxs.length ? idxs[0] : specs.length;
+  const contiguous = idxs.length > 0 && idxs[idxs.length - 1] - idxs[0] + 1 === idxs.length;
+  // **旧実装の 2 つの `.every(...)` は恒真だった**（nBase = idxs[0]、スライス開始が最後の派生+1 なので定義上真）。
+  //   削除し、代わりに**本当に守りたい性質＝索引 0〜40 の中身が動いていないこと**を凍結する。
+  //   （層 4 レビュー 2 巡目で実証: 索引 5 を消して 40 に別コースを挿す／索引 0 と 1 を入れ替える、の
+  //     どちらも旧述語では緑だった。`wf_as3_expected.json` の perCourse は索引キーなので、ここが動くと
+  //     完走マトリクスの凍結値が黙って別コースを指す。）
+  const baseNames = specs.slice(0, DERIVED_START).map((s) => s.name).join(' | ');
+  const BASE_SHA = createHash('sha256').update(baseNames).digest('hex').slice(0, 12);
+  const BASE_SHA_PIN = '084cb7d7bce1';   // 実測で刻む。既存コースを意図的に増減/入替/改名したときだけ刻み直す。
+  const baseOK = BASE_SHA === BASE_SHA_PIN;
+  const tailOK = nBase === DERIVED_START && contiguous && baseOK;
+  console.log(`  出荷 ${DERIVED_START} 本(索引 0〜${DERIVED_START - 1})の名前列 sha256[0:12] = ${BASE_SHA}（pin ${BASE_SHA_PIN}）` +
+              `${baseOK ? '' : '  ← **不一致: 既存コースが増減/入替/改名された。意図した変更なら BASE_SHA_PIN を刻み直す**'}`);
   const expectNames = [];
   for (const b of BASES) for (const w of AX3.WIDTH_LEVELS) expectNames.push(derivedTougeSpec(b, w).name);
   const orderOK = DERIVED.map((s) => s.name).join('|') === expectNames.join('|');
   ok(DERIVED.length === BASES.length * AX3.WIDTH_LEVELS.length && tailOK && orderOK,
-    `H-0b 派生コース ${DERIVED.length} 本 = 峠 ${BASES.length} × 水準 ${AX3.WIDTH_LEVELS.length}、courses.json の末尾に峠優先の順で並ぶ（先頭 ${nBase} 本は非派生）`);
+    `H-0b 派生コース ${DERIVED.length} 本 = 峠 ${BASES.length} × 水準 ${AX3.WIDTH_LEVELS.length}、courses.json の索引 ${nBase}〜${idxs[idxs.length - 1]} に峠優先の順で連続して並ぶ` + `（開始索引 ${DERIVED_START} 固定＋**索引 0〜${DERIVED_START - 1} の名前列 sha256 が pin と一致**＝先頭 ${nBase} 本の索引は不変。索引 ${idxs[idxs.length - 1] + 1} 以降は AY2 以降の追加分 ${specs.length - idxs[idxs.length - 1] - 1} 本）`);
   // 各派生コースは「hw だけ替えた spec」と幾何が一致する（壁以外を変えていない）。**desc/desc_en は全文を再生成して照合**する
   //   （完走数の正本 = wf_as3_expected.json の perCourse[索引]・日付 = AX3.DESC_STAMP。利用者向けの数字が壊れても緑にならない）。
   let geomBad = 0, metaBad = 0, descBad = 0;

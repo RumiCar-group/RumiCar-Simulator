@@ -6,7 +6,7 @@
 // 楽め込みを解消した。検査 (本ゲートは prototype を一切 patch しない=容量プローブ走行が計装を汚染しない):
 //   (A) 正準レース verifyHash 不変 (クリーン/公式記録=リカバリ/順次化を含まない横並びグリッド=byte 不変)。
 //       ＝発走順次化ゲートが f0/f1 で構造 no-op であることの実証 (held が立てば hash が変わる)。
-//   (B) 「凍結車ゼロ」: 全59×1..6台×tabletop/0.8 のどの実フィールド車も spawn から FROZEN(=0.05m) より大きく
+//   (B) 「凍結車ゼロ」: 全66×1..6台×tabletop/0.8 のどの実フィールド車も spawn から FROZEN(=0.05m) より大きく
 //       動く (=報告の元バグ net~0.004 で発走位置に永久固着 が一掃されている)。
 //   (C) 「走り出せない車 (最大変位<carLen)」は **実態容量超過 (n > driveableCapN(course)) に限る** (=ライブが
 //       自動で台数を絞る範囲の外。容量内 n≤capN では一台も走り出せない車は無い=完全0)。単調性も同時に検査
@@ -42,9 +42,9 @@ console.log('A) 正準レース verifyHash 不変 (発走順次化ゲートが�
   ok(r2.verifyHash === FROZEN_HASH.f1, `f1(oval2rejoin) verifyHash=${r2.verifyHash} (期待 ${FROZEN_HASH.f1} = AM1 コーン測距で再凍結)`);
 }
 
-// (B)(C)(D) 全 59 コース（出荷 41 ＋ AX3 派生峠 18）×1..6台 tabletop/0.8 を本物の runRace (trackNet=観測のみ) で回し、各車の最大変位・recoverN を測る。
+// (B)(C)(D) 全 66 コース（出荷 41 ＋ AX3 派生峠 18 ＋ AY2 舵角限界ベンチ 7）×1..6台 tabletop/0.8 を本物の runRace (trackNet=観測のみ) で回し、各車の最大変位・recoverN を測る。
 // prototype を patch しない=本ゲート内の driveableCapN プローブ走行が計装を汚染しない (AK7 で計装非依存化)。
-console.log('B/C/D) 凍結車0・走り出せない車⊆実態容量超過・recoverN 発散なし (全59コース×1..6台 tabletop/0.8・既知の例外は KNOWN_STUCK)');
+console.log('B/C/D) 凍結車0・走り出せない車⊆実態容量超過・recoverN 発散なし (全66コース×1..6台 tabletop/0.8・既知の例外は KNOWN_STUCK)');
 let minMaxNet = Infinity, maxArmAll = 0, totStuck = 0, totCars = 0;
 const offCap = [], capped = [];
 // AX3 (2026-09-07): 道幅比の派生峠（`derivedFrom` 持ち・車幅 2.0〜4.5 台分の狭路）を公開に追加した。(B)(C) の契約「容量内なら

@@ -81,15 +81,28 @@ console.log('\n=== B) D14: フルスケール latLoadK — 極端駆動でも状
 console.log('\n=== C) D12: lap 武装距離 — 出荷コースは 0.25 不変・極小ループは到達可能な閾値で計上 ===');
 {
   // 出荷の全 (非峠) コースで armDist===0.25 (=arming byte 不変)。峠は touge 分岐で armDist 未使用。
-  let nonTougeChanged = 0, built = 0;
+  // AY2 (2026-09-08): 舵角限界ベンチ (`bench` 持ち) は **本節が用意した縮小機構そのものの対象**＝極小ループで、
+  //   0.25 のままだと永久に武装せず 1 周も計上できない (下の「極小ループ」検査と同じ現象)。∴ 0.25 不変の対象からは
+  //   外し、**代わりに「縮小が効いていること」を積極的に検査する** (枠を緩めるのではなく別の述語を足す)。
+  //   既存コースの verifyHash 不変はベンチが末尾追加ゆえ影響を受けない。
+  let nonTougeChanged = 0, built = 0, benchN = 0, benchShrunk = 0, benchMin = Infinity, benchMax = -Infinity;
   for (const spec of specs) {
     let c; try { c = buildFromSpec(JSON.parse(JSON.stringify(spec))); } catch (e) { continue; }
     if (!c.finish || !c.walls) continue;
     built++;
     const lt = new LapTracker(c, { persist: false });
+    if (spec.bench) {
+      benchN++;
+      if (lt.armDist > 0 && lt.armDist < 0.25) benchShrunk++;
+      benchMin = Math.min(benchMin, lt.armDist); benchMax = Math.max(benchMax, lt.armDist);
+      continue;
+    }
     if (!c.touge && lt.armDist !== 0.25) nonTougeChanged++;
   }
-  ok(nonTougeChanged === 0, `非峠の出荷コース ${built} 件すべて armDist===0.25 (arming byte 不変・違反 ${nonTougeChanged})`);
+  ok(nonTougeChanged === 0, `非峠の出荷コース ${built - benchN} 件 (ベンチ ${benchN} 件を除く) すべて armDist===0.25 (arming byte 不変・違反 ${nonTougeChanged})`);
+  ok(benchN > 0 && benchShrunk === benchN,
+    `舵角限界ベンチ ${benchN} 件すべてで armDist が 0<x<0.25 へ縮小 (実測 ${benchMin === Infinity ? '--' : benchMin.toFixed(4)}〜${benchMax === -Infinity ? '--' : benchMax.toFixed(4)}・縮小 ${benchShrunk}/${benchN}) ` +
+    `= 極小ループでも周回を計上できる (0.25 固定なら 0 周のまま=下の検出力検査と同じ現象)`);
   const ovalLt = new LapTracker(oval, { persist: false });
   ok(ovalLt.armDist === 0.25, `正準オーバル armDist===0.25 (厳密・verifyHash 不変の根拠)`);
 
