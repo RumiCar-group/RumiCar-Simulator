@@ -279,16 +279,63 @@ export async function fetchCommunityCourse(downloadUrl) {
   return res.json();
 }
 
-// 現在のコース JSON を GitHub の「新規ファイル作成」画面に渡す URL を作る。
-// 開くと内容が事前入力され、コミットすると PR が作られる (書込権限が無ければ自動 fork)。
-export function shareCourseUrl(json) {
+// ===== 投稿導線 (AZ1・2026-09-12) =================================================
+// 【なぜ方式を変えたか — 実測】
+// 以前は GitHub の「新規ファイル作成」画面の `?value=` に投稿物の全文を載せていた。
+// ところが **github.com の受理上限は約 6,600 文字** (実測: 6,692→302 正常 / 7,092→500 /
+// 8,092→接続断 / 9,092 以上→414)。利用者の実投稿コース (壁 366 本) は 5 桁に丸めた
+// 提出ファイルでも 80,391 文字、編集器が持つ生の値では 250,233 文字で、**12〜38 倍の超過**。
+// 超過時は 414 が返るか、送り終える前に接続を切られる (どちらになるかはタイミング次第)。
+// 利用者からは **ボタンを押しても何も開かない** ように見える。2026-09-11 の実報告がこれ。
+// 同梱プログラムでも 23 本中 18 本が超過していた (日本語コメントは URL 符号化で約 3 倍に膨らむ)。
+// minify・座標 3 桁丸め・壁の配列化まで全部やっても 36,829 文字 = なお上限の 5.6 倍なので、
+// **「URL に載せる」方式そのものが成立しない**。
+//
+// 【新方式】データを URL から外す。
+//   ① 投稿物をファイルとして書き出す (ここは必ず成功させる — ②が塞がれても手元に残る)
+//   ② GitHub の**アップロード画面**を開き、そのファイルを置いてもらう
+// 遷移先 URL は投稿物の大きさに **一切依存しない** (下記 uploadPageUrl は本文を含まない)。
+//
+// ⚠ **未実測**: 「書込権限の無いログイン済み利用者に GitHub が fork 導線を出す」ことは
+// `/upload/` では**確かめていない** (実測済みなのは「未ログインでも HTTP 200 を返す」ことだけ。
+// 200 を返すことと fork 導線が出ることは別の事実)。旧 `/new/` では自動 fork が既知の挙動だった。
+// **設計全体がこの 1 点に乗っている**ので、実アカウントで 1 回確認して記録すること。
+// ---------------------------------------------------------------------------------
+// slug 化。空なら時刻フォールバック (shareCarUrl/races と同型)。
+// **長さを切る**: GitHub のパス構成要素は 255 byte が上限で、超えると投稿そのものが通らない。
+// 投稿者は名前を自由に付けられる (300 文字の名前を実測で踏んだ) ので、ここで必ず抑える。
+// 拡張子 (最長 '.json' = 5) を足しても余る 200 に切り、切り口にハイフンを残さない。
+const SLUG_MAX = 200;
+function slugify(s, fallbackPrefix) {
+  let base = String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  if (base.length > SLUG_MAX) base = base.slice(0, SLUG_MAX).replace(/-+$/, '');
+  return base || (fallbackPrefix + '-' + Date.now());
+}
+
+/**
+ * 投稿先ディレクトリの「ファイルをアップロード」画面の URL。
+ * **投稿物を一切含まない**ので、壁が 8 本でも 10,000 本でも長さは変わらない。
+ * (未ログインでも HTTP 200 を返すことを実測確認。`/new/` は 302→ログインへ飛ぶ)
+ */
+export function uploadPageUrl(dir) {
   const { owner, repo, branch } = COURSE_REPO;
-  const base = (json.name || 'course').toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  const slug = base || ('course-' + Date.now());
-  const content = JSON.stringify(json, null, 2);
-  return `https://github.com/${owner}/${repo}/new/${branch}/${COMMUNITY_DIR}`
-    + `?filename=${encodeURIComponent(slug)}.json&value=${encodeURIComponent(content)}`;
+  // dir を取り違えると `.../master/undefined` という実在しないページを開いてしまい、
+  // 「開いたのに投稿できない」という AZ1 が潰したはずの失敗形に戻る。ここで止める。
+  if (typeof dir !== 'string' || !dir) throw new Error('uploadPageUrl: dir が不正です');
+  return `https://github.com/${owner}/${repo}/upload/${branch}/${dir}`;
+}
+
+/**
+ * コースの投稿物を組み立てる。**URL は返さない**(返すと再び URL に載せる誘惑が生まれる)。
+ * 戻り値 { dir, filename, text, mime } は UI 側が ①書き出し ②uploadPageUrl(dir) に使う。
+ */
+export function courseSubmission(json) {
+  return {
+    dir: COMMUNITY_DIR,
+    filename: slugify(json && json.name, 'course') + '.json',
+    text: JSON.stringify(json, null, 2),
+    mime: 'application/json',
+  };
 }
 
 // ===== コミュニティ走行プログラム (GitHub の programs/community/ で共有) =====
@@ -308,16 +355,23 @@ export async function listCommunityPrograms() {
     }));
 }
 
-// 現在のプログラム本文を GitHub の「新規ファイル作成」画面に渡す URL を作る (別名保存)。
-// lang に応じた拡張子で programs/community/ に新規ファイルとして開く (上書きしない)。
-export function shareProgramUrl(code, name, lang = 'c') {
-  const { owner, repo, branch } = COURSE_REPO;
+/**
+ * プログラムの投稿物を組み立てる (別名で追加する運用)。コースと同じ理由で URL に載せない
+ * — ⚠ 旧 `/new/` は**新規作成専用の endpoint** だったので「上書きしない」ことを endpoint が
+ * 構造的に保証していたが、`/upload/` にはその保証が無い。既定名は `<プログラム名>-custom` で
+ * 別々の利用者が既定のまま押すと**同名になりうる**。ゆえに文言からも「上書きしません」という
+ * 断定を外してある (main.js 側の案内も同様)。
+ * — 同梱 23 本のうち 18 本が旧方式では上限超過だった (最大 40,747 文字)。
+ * lang に応じた拡張子を付ける (c→.ino / py→.py / js→.js)。
+ */
+export function programSubmission(code, name, lang = 'c') {
   const ext = lang === 'py' ? 'py' : (lang === 'js' ? 'js' : 'ino');
-  const base = (name || 'my-program').toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  const slug = base || ('program-' + Date.now());
-  return `https://github.com/${owner}/${repo}/new/${branch}/${COMMUNITY_PROGRAM_DIR}`
-    + `?filename=${encodeURIComponent(slug)}.${ext}&value=${encodeURIComponent(code || '')}`;
+  return {
+    dir: COMMUNITY_PROGRAM_DIR,
+    filename: slugify(name, 'program') + '.' + ext,
+    text: String(code == null ? '' : code),
+    mime: 'text/plain',
+  };
 }
 
 // ===== コミュニティ車種 (GitHub の cars/community/ で共有・V4) =====
@@ -366,12 +420,6 @@ export function shareCarUrl(json) {
 // 外部不可逆＝人間承認 (CI-11)。未作成のうちは listOfficialRaces が null (取得失敗) を返し、呼び出し側が
 // 通知 1 行を出して本体は止めない (Q1/V4 と同契約＝失敗 null / 正常 0 件 [] を区別)。
 const RACE_DIR = 'races';
-
-// slug 化 (shareCourseUrl/shareCarUrl と同型)。空なら時刻フォールバック。
-function slugify(s, fallbackPrefix) {
-  const base = String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  return base || (fallbackPrefix + '-' + Date.now());
-}
 
 // 公式レース一覧を取得 (races/ 直下のディレクトリ = eventId)。**取得失敗** (未作成 404/レート制限
 // /オフライン/JSON 異常) 時は `null`・**正常取得** 時は配列 (0 件なら `[]`) を返す (Q1/V4 同契約)。

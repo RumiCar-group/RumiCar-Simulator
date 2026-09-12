@@ -8,9 +8,14 @@
 //   ⑤ 純粋性: 入力オブジェクトを変更しない (Object.freeze 下でも throw しない)
 //   ⑥ 特殊文字 (& = % 空白 絵文字 日本語 超長文) の往復保全
 //   ⑦ 型強制 (laps 整数化 / noise 三値 / 文字列 trim・空→null・上限長)
+// さらに **投稿導線 (loader.js)** を検査する (AZ1・2026-09-12):
+//   ⑧ 投稿先 URL が **投稿物の大きさに依存しない** = 壁を増やしても長さが 1 byte も動かない
+//   ⑨ 投稿物が URL に載らない / 往復で欠けない / ファイル名が安全
 // 1 つでも失敗したら非ゼロ終了 (本番 import パスで実行=CI-8/9)。
 
 import { encodeState, decodeState, normalizeState, SHARE_FIELDS, SHARE_VERSION, hasShareState } from './public/js/share.js';
+import * as loader from './public/js/loader.js';
+import { uploadPageUrl, courseSubmission, programSubmission } from './public/js/loader.js';
 
 let pass = 0, fail = 0;
 const fails = [];
@@ -180,10 +185,171 @@ ok(decodeState(encodeState({ steerSet: 'prop' })).steerSet === 'prop', 'AS12: st
 ok(decodeState(encodeState({ steerSet: 'tri' })).steerSet === 'tri', 'AS12: steerSet=tri も明示すれば往復 (捕捉側が省略するだけ)');
 ok(encodeState({ susp: 'soft', steerSet: 'prop' }).indexOf('sp=') < encodeState({ susp: 'soft', steerSet: 'prop' }).indexOf('ss='), 'AS12: 新フィールドは末尾 (既存キーの並び順を動かさない)');
 
+// ===== ⑧⑨ 投稿導線 (loader.js) — URL 長への非依存 (AZ1・2026-09-12) ==============
+// 【この節が守っている事実 (実測)】
+// github.com がクエリ付き URL を受理する上限は **約 6,600 文字**
+//   (6,692→302 正常 / 7,092→500 / 8,092→接続断 / 9,092 以上→414)。
+// 旧方式は投稿物の全文を `?value=` に載せていたため、
+//   ・利用者の実投稿コース (壁 366 本) = 丸めた提出ファイルで 80,391 / 編集器の生値で 250,233 文字
+//   ・同梱プログラム 23 本中 18 本 (最大 40,747 文字)
+// が上限を超え、**ボタンを押しても何も開かない** 状態だった。
+// 圧縮では届かない (minify + 3 桁丸め + 壁の配列化まで行っても 36,829 = 上限の 5.6 倍) ので、
+// **URL からデータを外した**。この節は「また載せ始めていないか」を機械で見張る。
+// 判定は二値で終わらせず、**上限に対するマージンを連続量で出す** (CI-14)。
+const GH_URL_LIMIT = 6600;          // 実測した github.com の受理上限 (文字)
+const NAV_URL_BUDGET = 2000;        // 受け入れ基準 (AZ1): 遷移先 URL は 2,000 文字未満
+
+// 決定論の合成コース。座標は **丸めない** = 編集器 (course_editor.js toJSON) が持つ生の倍精度
+// を模す。丸めた提出ファイルより 3 倍長くなる側 = 最悪ケースで検査する。
+function synthCourse(nWalls, name = 'gate-course') {
+  const walls = [];
+  for (let i = 0; i < nWalls; i++) {
+    const a = (i * Math.PI) / 97, b = (i * Math.E) / 89;   // 無理数比 = 循環しない桁を作る
+    walls.push({ x1: 1 + Math.sin(a) / 3, y1: 1 + Math.cos(a) / 3,
+                 x2: 1 + Math.sin(b) / 3, y2: 1 + Math.cos(b) / 3 });
+  }
+  return { name, bounds: { w: 18.36326, h: 18.70771 },
+           start: { x: 4.131, y: 7.649, theta: 0.639579127024498 },
+           finish: { x1: 4.04147, y1: 7.76935, x2: 4.22053, y2: 7.52865 }, walls };
+}
+
+// --- ⑧-1 旧ビルダー (URL に本文を載せる経路) が再導入されていないこと ---
+ok(!('shareCourseUrl' in loader),
+   '⑧ loader.js が shareCourseUrl を再び export していない (URL に本文を載せる経路の復活)');
+ok(!('shareProgramUrl' in loader),
+   '⑧ loader.js が shareProgramUrl を再び export していない (同上)');
+ok(typeof uploadPageUrl === 'function' && typeof courseSubmission === 'function'
+   && typeof programSubmission === 'function', '⑧ 新方式の 3 関数が export されている');
+// **データを受け取る口そのものを持たせない**。長さだけを見る検査は、引数を増やして
+// `?value=` を付け足す変異を素通りさせた (本ゲートの変異試験で実測)。ゆえに
+//   (a) uploadPageUrl の引数は dir の 1 つだけ
+//   (b) 返す URL にクエリもフラグメントも無い
+// という**構造**を固定する。これなら中身が空でも「載せる口ができた」時点で赤になる。
+ok(uploadPageUrl.length === 1,
+   `⑧ uploadPageUrl の引数は dir の 1 つだけ = 投稿物を渡す口が無い (実測 ${uploadPageUrl.length} 個)`);
+// ⚠ **Function.length は既定値の手前までしか数えない**。`uploadPageUrl(dir, value = '')` と書けば
+// length は 1 のままで、本文を**パスに**埋めればクエリ検査も素通りする (層 4 レビューで実証された)。
+// 長さ・引数個数・部分一致では足りない。**遷移先 URL が取りうる値そのもの**を固定する:
+//   origin + pathname が `https://github.com/<owner>/<repo>/upload/<branch>/<dir>` と**完全一致**。
+// これ 1 本で「endpoint を /new/ に戻す」「データをパスに埋める」「投稿先をずらす」を同時に塞ぐ。
+const { owner: OWNER, repo: REPO, branch: BRANCH } = loader.COURSE_REPO;
+function expectNav(dir) { return `https://github.com/${OWNER}/${REPO}/upload/${BRANCH}/${dir}`; }
+for (const dir of ['courses/community', 'programs/community']) {
+  ok(uploadPageUrl(dir) === expectNav(dir),
+     `⑧ 遷移先 URL が期待値と完全一致 (${dir}): 実測 ${uploadPageUrl(dir)} / 期待 ${expectNav(dir)}`);
+  ok(new URL(uploadPageUrl(dir)).pathname === `/${OWNER}/${REPO}/upload/${BRANCH}/${dir}`,
+     `⑧ pathname が完全一致 = 本文をパスに埋める変異も落ちる (${dir})`);
+}
+// dir の取り違えは黙って `.../undefined` を開かせるので throw させる。
+for (const bad of [undefined, null, '', 0, {}, []]) {
+  let threw = false;
+  try { uploadPageUrl(bad); } catch (e) { threw = true; }
+  ok(threw, `⑧ uploadPageUrl(${JSON.stringify(bad)}) は throw する (実在しないページを開かせない)`);
+}
+
+// --- ⑧-2 遷移先 URL が投稿物の大きさに **1 byte も** 依存しないこと ---
+const WALL_COUNTS = [0, 8, 24, 366, 2000, 10000];   // 実投稿は 366 本。上下に広く掃く
+const navUrls = [];
+let maxTextLen = 0;
+for (const n of WALL_COUNTS) {
+  const sub = courseSubmission(synthCourse(n));
+  const nav = uploadPageUrl(sub.dir);
+  navUrls.push(nav);
+  maxTextLen = Math.max(maxTextLen, sub.text.length);
+  ok(nav.length < NAV_URL_BUDGET,
+     `⑧ 壁 ${n} 本でも遷移先 URL < ${NAV_URL_BUDGET} 文字 (実測 ${nav.length})`);
+  ok(!/[?&#]/.test(nav),
+     `⑧ 壁 ${n} 本: 遷移先 URL にクエリ/フラグメントが無い (データを載せる場所そのものが無い): ${nav}`);
+  ok(!nav.includes(String(sub.text.length)) || n === 0,
+     `⑧ 壁 ${n} 本: 遷移先 URL に本文長が現れない`);
+  // 本文の一部 (末尾の壁座標) が URL に混ざっていないこと = 「載せ始めた」の直接検出
+  if (n > 0) {
+    const probe = String(sub.text).slice(-40);
+    ok(!nav.includes(probe), `⑧ 壁 ${n} 本: 遷移先 URL に本文の断片が含まれない`);
+  }
+}
+const uniqNav = new Set(navUrls);
+ok(uniqNav.size === 1,
+   `⑧ 遷移先 URL は投稿物によらず **同一文字列** (壁 ${WALL_COUNTS.join('/')} 本で ${uniqNav.size} 種): `
+   + [...uniqNav].join(' | '));
+const navLen = navUrls[0].length;
+ok(navLen < NAV_URL_BUDGET, `⑧ 遷移先 URL 長 ${navLen} < 予算 ${NAV_URL_BUDGET}`);
+// マージン (連続量)。旧方式は最大 250,233 文字で上限の 38 倍だった。
+const marginChars = GH_URL_LIMIT - navLen;
+const marginRatio = GH_URL_LIMIT / navLen;
+ok(marginChars > 0,
+   `⑧ 受理上限 ${GH_URL_LIMIT} に対するマージン ${marginChars} 文字 (${marginRatio.toFixed(1)} 倍の余裕)`);
+ok(maxTextLen > 100000,
+   `⑧ 検査に使った最大投稿物が十分大きい (実測 ${maxTextLen} 文字 = 実投稿 366 本の worst case を超える)`);
+
+// --- ⑧-3 プログラム側も同じ性質を持つこと (同梱 23 本中 18 本が旧方式では超過していた) ---
+for (const [lang, ext] of [['c', 'ino'], ['py', 'py'], ['js', 'js'], ['zzz', 'ino']]) {
+  for (const len of [0, 1000, 40000, 300000]) {
+    const sub = programSubmission('あ'.repeat(len), 'my program', lang);   // 日本語 = 符号化で約 3 倍
+    const nav = uploadPageUrl(sub.dir);
+    ok(nav.length < NAV_URL_BUDGET,
+       `⑧ プログラム ${lang}/${len} 文字でも遷移先 URL < ${NAV_URL_BUDGET} (実測 ${nav.length})`);
+    ok(!/[?&#]/.test(nav), `⑧ プログラム ${lang}/${len}: 遷移先 URL にクエリ/フラグメントが無い`);
+    ok(sub.filename.endsWith('.' + ext),
+       `⑧ 拡張子 ${lang} → .${ext} (実測 ${sub.filename})`);
+    ok(sub.text.length === len, `⑧ プログラム本文が欠けない (${lang}/${len} → ${sub.text.length})`);
+  }
+}
+const progNav = uploadPageUrl(programSubmission('x', 'n', 'c').dir);
+ok(progNav !== navUrls[0], '⑧ コースとプログラムの投稿先ディレクトリは別');
+// **投稿先そのものを固定する**。上の「期待値と完全一致」は dir を引数で渡しているので、
+// COMMUNITY_DIR をずらす変異 (例: 'courses/community/sub') では期待値も一緒に動いて素通りした
+// (層 4 レビュー後の再変異試験で実測)。submission が返す dir を literal で釘付けにする。
+ok(courseSubmission({ name: 'x', walls: [] }).dir === 'courses/community',
+   `⑧ コースの投稿先は courses/community に固定 (実測 ${courseSubmission({ name: 'x', walls: [] }).dir})`);
+ok(programSubmission('x', 'n', 'c').dir === 'programs/community',
+   `⑧ プログラムの投稿先は programs/community に固定 (実測 ${programSubmission('x', 'n', 'c').dir})`);
+ok(navUrls[0] === expectNav('courses/community'),
+   `⑧ コースの遷移先が期待値と完全一致: ${navUrls[0]}`);
+ok(progNav === expectNav('programs/community'),
+   `⑧ プログラムの遷移先が期待値と完全一致: ${progNav}`);
+
+// --- ⑨-1 投稿物が往復で欠けないこと (URL を通らなくなっても中身は同じ) ---
+{
+  const src = synthCourse(366, '富士スピードウェイ');
+  const sub = courseSubmission(src);
+  ok(!('url' in sub), '⑨ 投稿物に url フィールドが無い (URL に載せる誘惑を構造的に断つ)');
+  let back = null;
+  noThrow(() => { back = JSON.parse(sub.text); }, '⑨ 投稿物の text が JSON として読める');
+  ok(eq(back, src), '⑨ 投稿物が原本と deep-equal (壁 366 本・丸めなし)');
+  ok(sub.mime === 'application/json', '⑨ コースの mime は application/json');
+}
+
+// --- ⑨-2 ファイル名が安全であること (投稿者が自由に名前を付ける = 素性不明の文字列) ---
+const NAMES = ['富士スピードウェイ', 'My Course #1', '../../etc/passwd', 'a/b\\c',
+               '  ', '', 'ALL CAPS', 'x'.repeat(300), 'a#b?c&d=e', '🚗💨'];
+for (const nm of NAMES) {
+  for (const sub of [courseSubmission({ name: nm, walls: [] }), programSubmission('x', nm, 'c')]) {
+    ok(!/[/\\]/.test(sub.filename), `⑨ ファイル名に区切り文字が無い: ${JSON.stringify(nm)} → ${sub.filename}`);
+    ok(!sub.filename.startsWith('.'), `⑨ ファイル名が . で始まらない: ${JSON.stringify(nm)} → ${sub.filename}`);
+    ok(sub.filename === encodeURIComponent(sub.filename).replace(/%2F/gi, '/'),
+       `⑨ ファイル名が URL 符号化不要の文字だけ: ${JSON.stringify(nm)} → ${sub.filename}`);
+    ok(sub.filename.length > 4, `⑨ ファイル名が空にならない: ${JSON.stringify(nm)} → ${sub.filename}`);
+    // **上限も見る**。GitHub のパス構成要素は 255 byte 上限で、超えると投稿そのものが通らない。
+    // 300 文字の名前は上の NAMES に実際に入っている — 踏んでいるのに見ていない状態を作らない。
+    ok(Buffer.byteLength(sub.filename, 'utf8') <= 255,
+       `⑨ ファイル名が GitHub のパス上限 255 byte 以内: ${JSON.stringify(nm).slice(0, 40)} → ${sub.filename.length} 文字 / ${Buffer.byteLength(sub.filename, 'utf8')} byte`);
+    ok(typeof sub.mime === 'string' && sub.mime.length > 0,
+       `⑨ mime が入っている (course/program 両方): ${sub.filename} → ${sub.mime}`);
+  }
+}
+// 空名は時刻フォールバックに落ちる (決定論ではないので、形だけ検査する)
+ok(/^course-\d+\.json$/.test(courseSubmission({ name: '', walls: [] }).filename),
+   '⑨ 空のコース名は course-<時刻>.json へ落ちる');
+ok(/^program-\d+\.ino$/.test(programSubmission('x', '', 'c').filename),
+   '⑨ 空のプログラム名は program-<時刻>.ino へ落ちる');
+
 // ---- 結果 ---------------------------------------------------------------------
 const line = '─'.repeat(60);
 console.log(line);
 console.log('AF1 share.js 卓上ゲート  (encodeState/decodeState round-trip + 不正入力耐性)');
+console.log('  + AZ1 投稿導線ゲート (loader.js: 遷移先 URL の投稿物非依存)');
+console.log(`  遷移先 URL = ${navLen} 文字 (固定) / 受理上限 ${GH_URL_LIMIT} に対し ${marginRatio.toFixed(1)} 倍の余裕`);
 console.log(line);
 console.log(`  検査: ${pass + fail} 件 / PASS ${pass} / FAIL ${fail}`);
 if (fail) {

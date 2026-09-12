@@ -27,10 +27,10 @@ import { aggregate, worldBest, beatenChecks } from './race_ladder.js';
 import { challengeState } from './challenge.js';   // AS13: 練習記録から難度別チャレンジ進捗/バッジ (純関数)
 import {
   fetchFromGithub, readFile, listRepoDir, fetchRawFile,
-  listCommunityCourses, fetchCommunityCourse, shareCourseUrl,
-  listCommunityPrograms, shareProgramUrl,
-  listCommunityCars, fetchCommunityCar, shareCarUrl,
-  listOfficialRaces, fetchRace, shareEventUrl, shareEntryUrl, shareResultUrl,
+  listCommunityCourses, fetchCommunityCourse, courseSubmission,
+  listCommunityPrograms, programSubmission, uploadPageUrl,
+  listCommunityCars, fetchCommunityCar,
+  listOfficialRaces, fetchRace, shareEventUrl,
 } from './loader.js';
 import { SAMPLES } from './samples.js';
 import { makeBackupEnvelope, parseBackup, previewImport, applyImport } from './data_backup.js';
@@ -204,6 +204,50 @@ function logLine(msg, nl = true) {
   const a = activeSlot();
   const pre = (opts.timestamp && nl) ? `[${fmtTime(a && a.lap ? a.lap.totalTime : 0)}] ` : '';
   appendLog((nl ? pre : '') + msg + (nl ? '\n' : ' '));
+}
+
+// ---- 投稿導線 (AZ1): GitHub へコース/プログラムを投稿する共通処理 ----
+// loader.js の courseSubmission/programSubmission が組んだ投稿物を、
+//   ① ファイルとして書き出し
+//   ② 投稿先ディレクトリのアップロード画面を新しいタブで開く
+// の順に処理する。**URL に投稿物を載せない** (載せると github.com の受理上限
+// 約 6,600 文字を実データが 12〜38 倍超過して「押しても開かない」= AZ1 の欠陥 1)。
+//
+// ①を先に・独立して行うのは、②が塞がれても投稿物を残せるようにするため。ただし
+// **「必ず手元に残る」とは言えない**: `a.click()` はダウンロードが拒否されても例外を投げず、
+// JS には完了を確かめる API が無い (Chrome の「自動ダウンロードを許可しない」設定・企業ポリシー・
+// 拡張で普通に起きる。CDP で deny にして実測済み)。ゆえに `started` は「開始した」までしか
+// 意味せず、利用者向けの文言もそこまでしか言わない。**測っていないことを言わない。**
+//
+// window.open に 'noopener' を渡さないのは、渡すと**成功時も null が返る**仕様のため
+// (阻止されたのか成功したのか区別できなくなる)。代わりに戻り値で判定し、
+// 新しいタブがまだ about:blank のうちに opener を切る。
+// これは `noopener` と同一ではない (browsing context group は分かれない) が、
+// **tabnabbing に対する保護は同等**。実 github.com ページ上で window.opener === null を実測済み。
+function submitToGithub({ dir, filename, text, mime }) {
+  let started = false;
+  try {
+    const blob = new Blob([text], { type: mime || 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    started = true;
+  } catch (e) {
+    logLine(t('log.submit.saveFail', { file: filename, e: e.message }));
+  }
+  let url = null, opened = false;
+  try {
+    url = uploadPageUrl(dir);
+    const w = window.open(url, '_blank');
+    // 阻止されると null。ブロッカーによっては「即座に閉じた窓」を返すので closed も見る。
+    if (w && !w.closed) { opened = true; try { w.opener = null; } catch (e) { /* 既に遷移済み */ } }
+  } catch (e) {
+    logLine(t('log.submit.openFail', { e: e.message }));
+  }
+  if (url && !opened) logLine(t('log.submit.popupBlocked', { url }));
+  return { started, opened, filename, url };
 }
 
 // ---- コース読込 ----
@@ -2207,9 +2251,16 @@ $('edShare').addEventListener('click', () => {
   if (!editor) return;
   const json = editor.toJSON();
   json.name = ($('edName').value || json.name || t('ed.name.default')).trim();
-  // GitHub の新規ファイル作成画面 (内容事前入力) を新規タブで開く → コミットで PR 作成
-  window.open(shareCourseUrl(json), '_blank', 'noopener');
-  logLine(t('log.courseShareOpened', { name: json.name }));
+  // ①コース JSON を書き出し ②GitHub のアップロード画面を開く (AZ1)。
+  // 投稿物の組み立て (JSON.stringify) 自体が投げても「押しても何も起きない」にしない。
+  let r;
+  try { r = submitToGithub(courseSubmission(json)); }
+  catch (e) { logLine(t('log.submit.buildFail', { e: e.message })); return; }
+  // 開けなかったときに「開いた GitHub のページに」と言わない (矛盾する 2 行を出さない)。
+  if (r.started) {
+    logLine(t(r.opened ? 'log.courseSubmitReady' : 'log.courseSubmitSavedOnly',
+              { name: json.name, file: r.filename }));
+  }
 });
 $('edDelete').addEventListener('click', () => {
   const n = $('courseSel').value;
@@ -2359,8 +2410,14 @@ function shareProgram(i) {
   const name = window.prompt(t('prompt.shareProg'), def);
   if (name == null) return; // キャンセル
   const trimmed = name.trim() || def;
-  window.open(shareProgramUrl(s.src, trimmed, s.lang), '_blank', 'noopener');
-  logLine(t('log.progShareOpened', { name: trimmed }));
+  // ①プログラム本文を書き出し ②GitHub のアップロード画面を開く (AZ1)。
+  let r;
+  try { r = submitToGithub(programSubmission(s.src, trimmed, s.lang)); }
+  catch (e) { logLine(t('log.submit.buildFail', { e: e.message })); return; }
+  if (r.started) {
+    logLine(t(r.opened ? 'log.progSubmitReady' : 'log.progSubmitSavedOnly',
+              { name: trimmed, file: r.filename }));
+  }
 }
 async function uploadTo(file) {
   try {

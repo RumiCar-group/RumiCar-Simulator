@@ -143,7 +143,7 @@ export const MESSAGES = {
   'ed.export':        { ja: 'JSON 書出',           en: 'Export JSON' },
   'ed.import':        { ja: 'JSON 読込',           en: 'Import JSON' },
   'ed.share':         { ja: '🌐 GitHubで共有',      en: '🌐 Share on GitHub' },
-  'ed.share.title':   { ja: 'このコースを GitHub に投稿 (プルリクエスト)。承認されると全利用者が選べます', en: 'Submit this course to GitHub (pull request). Once approved, everyone can pick it.' },
+  'ed.share.title':   { ja: 'このコースを JSON ファイルとしてダウンロードし、GitHub の投稿ページを開きます。そのページにファイルを置いてコミットすると投稿されます (書込権限が無い場合は GitHub 側で fork を作る案内が出ます)。承認されると全利用者が選べます', en: 'Downloads this course as a JSON file and opens the GitHub upload page. Drop the file there and commit to submit it (if you lack write access, GitHub offers to create a fork). Once approved, everyone can pick it.' },
   'ed.delete':        { ja: '保存コース削除',       en: 'Delete saved course' },
   'ed.apply':         { ja: '適用して走行へ',       en: 'Apply and drive' },
 
@@ -633,7 +633,7 @@ export const MESSAGES = {
   'cc.repo.title':     { ja: 'RumiCar サンプルを参照して取込', en: 'Browse and load RumiCar samples' },
   'cc.up.title':       { ja: 'ファイルから取込',   en: 'Load from a file' },
   'cc.share':          { ja: '🌐保存',           en: '🌐 Save' },
-  'cc.share.title':    { ja: '今のプログラムを別名で GitHub に保存 (プルリクエスト)。承認されると全利用者が選べます', en: 'Save the current program to GitHub under a new name (pull request). Once approved, everyone can pick it.' },
+  'cc.share.title':    { ja: '今のプログラムを別名でファイルにダウンロードし、GitHub の投稿ページを開きます。そのページにファイルを置いてコミットすると投稿されます (既存のプログラムは置き換えず、別ファイルとして追加します)。承認されると全利用者が選べます', en: 'Downloads the current program to a file under a new name and opens the GitHub upload page. Drop the file there and commit to submit it (it is added as a separate file rather than replacing an existing program). Once approved, everyone can pick it.' },
   'cc.progLabel':      { ja: 'プログラム',         en: 'Program' },
   'cc.expand':         { ja: '⤢ 拡大',           en: '⤢ Expand' },
   'cc.expand.title':   { ja: '大きなエディタで開いて編集 (行番号つき)', en: 'Open in a large editor (with line numbers)' },
@@ -710,7 +710,20 @@ export const MESSAGES = {
   'log.courseApplied':  { ja: 'コース「{name}」を適用しました', en: 'Applied course "{name}"' },
   'log.courseSaved':    { ja: 'コース「{name}」を保存しました', en: 'Saved course "{name}"' },
   'log.courseJsonLoaded': { ja: 'コース JSON を読み込みました: {name}', en: 'Loaded course JSON: {name}' },
-  'log.courseShareOpened': { ja: 'コース「{name}」を GitHub 投稿画面で開きました。コミットするとプルリクエストが作成されます。', en: 'Opened the GitHub submit page for course "{name}". Committing creates a pull request.' },
+  // 「保存しました」と断定しない: a.click() はダウンロードが拒否されても例外を投げず、JS に完了確認 API が
+  // 無い (Chrome の自動ダウンロード禁止・企業ポリシー・拡張で起きる。CDP deny で実測)。**測った範囲で言う。**
+  // コース名は ASCII 英数以外が slug から落ちるので、日本語名は course-<時刻> になる。利用者が
+  // アップロード前にファイル名を変えられるよう、実際の保存名 {file} を必ず見せる。
+  'log.courseSubmitReady': { ja: 'コース「{name}」を {file} としてダウンロードを開始しました (ブラウザの保存先を確認してください)。開いた GitHub のページにこのファイルを置いて (ドラッグ＆ドロップ) コミットすると投稿できます。置く前にファイル名は変えられます。', en: 'Started downloading course "{name}" as {file} (check your browser\'s download folder). Drop this file onto the GitHub page that just opened and commit to submit it. You can rename the file before dropping it.' },
+  // 投稿ページが開けなかったときは「開いた GitHub のページ」と言わない (矛盾する 2 行を出さない)。
+  'log.courseSubmitSavedOnly': { ja: 'コース「{name}」を {file} としてダウンロードを開始しました (ブラウザの保存先を確認してください)。上に出ている投稿ページを自分で開き、このファイルを置いてコミットしてください。', en: 'Started downloading course "{name}" as {file} (check your browser\'s download folder). Open the submit page shown above yourself and drop this file there, then commit.' },
+  // 投稿導線の共通ログ (AZ1)。書き出しと投稿ページの起動は独立した 2 段なので、失敗も別々に通知する
+  // — どちらが起きたのか分からない通知は「押しても何も起きない」と同じで、原因に辿り着けない。
+  'log.submit.buildFail':  { ja: '投稿データを作れませんでした: {e}', en: 'Could not build the submission data: {e}' },
+  'log.submit.saveFail':   { ja: 'ファイル {file} の保存に失敗しました: {e}', en: 'Failed to save the file {file}: {e}' },
+  'log.submit.openFail':   { ja: '投稿ページの URL を作れませんでした: {e}', en: 'Could not build the submit page URL: {e}' },
+  // 保存できたかは確かめられないので「保存したファイル」と断定せず「ダウンロードしたファイル」と言う。
+  'log.submit.popupBlocked': { ja: '投稿ページを開けませんでした (ポップアップがブロックされた可能性)。次のページを自分で開き、ダウンロードしたファイルを置いてください: {url}', en: 'Could not open the submit page (a pop-up blocker may have stopped it). Open this page yourself and drop the downloaded file there: {url}' },
   'log.savedCourseDeleted': { ja: '保存コースを削除: {name}', en: 'Deleted saved course: {name}' },
   'log.presetNoDelete': { ja: 'プリセットは削除できません', en: 'Presets cannot be deleted' },
   'log.interact.on':    { ja: '他車を障害物として扱う: ON (検知・重なり防止)', en: 'Other cars as obstacles: ON (detect & no overlap)' },
@@ -778,7 +791,8 @@ export const MESSAGES = {
   'log.fetchOk':        { ja: '取得成功: {name} ({lang}) → {target}', en: 'Fetched: {name} ({lang}) → {target}' },
   'log.uploadOk':       { ja: '読み込み: {name} ({lang}) → {target}', en: 'Loaded: {name} ({lang}) → {target}' },
   'log.progEmpty':      { ja: 'プログラムが空です', en: 'The program is empty' },
-  'log.progShareOpened':{ ja: 'プログラム「{name}」を GitHub 保存画面で開きました。コミットするとプルリクエストが作成されます (別名で追加)。', en: 'Opened the GitHub save page for program "{name}". Committing creates a pull request (added under a new name).' },
+  'log.progSubmitReady':{ ja: 'プログラム「{name}」を {file} としてダウンロードを開始しました (ブラウザの保存先を確認してください)。開いた GitHub のページにこのファイルを置いて (ドラッグ＆ドロップ) コミットすると投稿できます。置く前にファイル名は変えられます。', en: 'Started downloading program "{name}" as {file} (check your browser\'s download folder). Drop this file onto the GitHub page that just opened and commit to submit it. You can rename the file before dropping it.' },
+  'log.progSubmitSavedOnly':{ ja: 'プログラム「{name}」を {file} としてダウンロードを開始しました (ブラウザの保存先を確認してください)。上に出ている投稿ページを自分で開き、このファイルを置いてコミットしてください。', en: 'Started downloading program "{name}" as {file} (check your browser\'s download folder). Open the submit page shown above yourself and drop this file there, then commit.' },
   'log.err.setup':      { ja: '【エラー】{e}', en: '[Error] {e}' },
   'log.err.json':       { ja: '【JSON エラー】{e}', en: '[JSON error] {e}' },
   'log.err.fetch':      { ja: '【取得エラー】{e}', en: '[Fetch error] {e}' },
@@ -847,8 +861,8 @@ export const MESSAGES = {
   'usage.s5.lap':       { ja: 'フィニッシュライン通過でラップ計測。ソロ走行は「練習走行 (非公式)」で、ベストラップは<b>コース×車種別</b>の練習記録としてこのブラウザに保存されます (公式レースとは別経路)。', en: 'Crossing the finish line measures a lap. Solo driving is a "practice run (unofficial)", and best laps are saved as practice records <b>per course × car type</b> in this browser (a separate path from official races).', h: '44d52161' },
   'usage.s5.theme':     { ja: '右上の「テーマ」で画面配色を5種から選べます (保存されます)。', en: 'The "Theme" selector at the top right lets you choose from 5 color schemes (saved).', h: '4feb6ae1' },
   'usage.s6.h':         { ja: '6. GitHub で共有する (作る → 走らせる → 保存 → みんなで再利用)', en: '6. Share on GitHub (create → run → save → reuse together)', h: '6a719ade' },
-  'usage.s6.course':    { ja: '<b>コースを共有</b>: コース編集で作ったコースを「🌐 GitHubで共有」ボタンで投稿 (プルリクエスト)。承認されると全利用者の「🌐」コースに並びます。', en: '<b>Share a course</b>: post a course you built in the course editor with the "🌐 Share on GitHub" button (a pull request). Once approved it appears in every user\'s "🌐" courses.', h: 'ddf9951e' },
-  'usage.s6.prog':      { ja: '<b>プログラムを共有</b>: 編集して納得したら各車の「🌐保存」ボタンで<b>別名保存</b> (上書きしません)。承認されると「🌐 みんなの投稿」に並び、誰でも再利用できます。', en: '<b>Share a program</b>: once you are happy with your edits, use each car\'s "🌐 Save" button to <b>save under a new name</b> (it does not overwrite). Once approved it appears in "🌐 Community posts" for anyone to reuse.', h: 'd64ca6c3' },
+  'usage.s6.course':    { ja: '<b>コースを共有</b>: コース編集で作ったコースを「🌐 GitHubで共有」ボタンで投稿します。JSON が手元に保存され、GitHub の投稿ページが開くので、そのファイルを置いてコミットしてください (プルリクエストになります)。承認されると全利用者の「🌐」コースに並びます。', en: '<b>Share a course</b>: post a course you built in the course editor with the "🌐 Share on GitHub" button. The JSON is saved to your computer and the GitHub upload page opens — drop that file there and commit (it becomes a pull request). Once approved it appears in every user\'s "🌐" courses.', h: '529fc399' },
+  'usage.s6.prog':      { ja: '<b>プログラムを共有</b>: 編集して納得したら各車の「🌐保存」ボタンで<b>別名保存</b> (上書きしません)。ファイルが手元に保存され、GitHub の投稿ページが開くので、そのファイルを置いてコミットしてください。承認されると「🌐 みんなの投稿」に並び、誰でも再利用できます。', en: '<b>Share a program</b>: once you are happy with your edits, use each car\'s "🌐 Save" button to <b>save under a new name</b> (it does not overwrite). The file is saved to your computer and the GitHub upload page opens — drop that file there and commit. Once approved it appears in "🌐 Community posts" for anyone to reuse.', h: '922784d3' },
   'usage.s6.account':   { ja: '投稿には GitHub アカウントが必要です (書込権限が無ければ自動 fork)。削除は GitHub 上で管理します。', en: 'Posting requires a GitHub account (it auto-forks if you lack write access). Deletion is managed on GitHub.', h: '99b5635d' },
   'usage.s7.h':         { ja: '7. プログラミング API (主要)', en: '7. Programming API (main)', h: '05495d12' },
   'usage.s7.steer':     { ja: '<code>RC_steer(LEFT / CENTER / RIGHT)</code> — 操舵 (3値・実機準拠)。<b>比例操舵サーボ(任意装備)</b>を選んだときだけ <code>RC_steer(方向, 0〜255)</code> で舵の強さも指定できる (未装備なら 0 を返して指令は変わらない)', en: '<code>RC_steer(LEFT / CENTER / RIGHT)</code> — steering (3 values, as on the real car). Only when the <b>proportional steering servo (optional equipment)</b> is fitted can you also call <code>RC_steer(direction, 0-255)</code> to set how much lock you want (without it the call returns 0 and leaves the command unchanged)', h: 'da4bb2f5' },

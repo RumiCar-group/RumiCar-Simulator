@@ -47,12 +47,17 @@ await setLang(page, 'ja');
   const truth = await page.evaluate(async () => {
     const [ch, co] = await Promise.all([import('./js/challenge.js'), import('./js/course.js')]);
     const built = co.PRESETS.map((f) => f());
-    return { total: built.filter(ch.isCompletable).length, excluded: built.filter((c) => !ch.isCompletable(c)).length,
-      all: built.length };
+    // 母集団は **isChallengeCourse**（= isCompletable かつ bench でない）。UI と同じ述語を使う。
+    // AY2 (ed255eb) が `bench` 印つきコース 7 本を入れた時点で `isCompletable`(64) と UI(57) が
+    // 割れていたのに、この検査は古い述語のままだった＝AY2 以降ずっと赤。実測で確定して是正:
+    //   courses.json 66 本 / isCompletable 64 / bench 7 / 64-7 = 57 = UI 表示。
+    // `excluded` は「完走が定義されないコース」(2 本) のままでよい（UI もそちらを表示する）。
+    return { total: built.filter(ch.isChallengeCourse).length, excluded: built.filter((c) => !ch.isCompletable(c)).length,
+      all: built.length, bench: built.filter((c) => c.bench).length };
   });
   const totalTxt = (await page.locator('#chalBody .chal-total').innerText()).trim();
   ok('T1-c 母集団 = 完走が定義されるコースだけ (配信 courses.json 由来)',
-    totalTxt.includes(`/ ${truth.total}`), `表示="${totalTxt}" / 配信物の実測 total=${truth.total} (全 ${truth.all}・除外 ${truth.excluded})`);
+    totalTxt.includes(`/ ${truth.total}`), `表示="${totalTxt}" / 配信物の実測 total=${truth.total} (全 ${truth.all}・完走定義なし ${truth.excluded}・ベンチ ${truth.bench})`);
   ok('T1-d 除外件数を黙らず表示する (沈黙截断の禁止)',
     (await page.locator('#chalBody').innerText()).includes(String(truth.excluded)), `除外 ${truth.excluded} 件`);
   ok('T1-e 新規プロファイルは完走 0 から始まる (前回の記録が漏れていない)',
