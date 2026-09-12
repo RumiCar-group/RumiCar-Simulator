@@ -214,6 +214,20 @@ export function fitsAllCars(course, n) {
   return true;
 }
 
+// 実態収容容量 (Stage AZ2・CI-14)。capN = max{ n ∈ 0..maxN : fitsAllCars(course,n) }。
+// **0 を返せることが肝**。従来この計算は呼び出し側に `while (capN > 1 && !fitsAllCars(..)) capN--` と
+// 書かれており、「1 台は必ず置ける」という仮定が **構文そのものに埋め込まれていた** (main.js ⑤・
+// race_engine.js・capacity.js の 3 箇所に同型)。実測 (利用者投稿コース 富士スピードウェイ: 外形
+// 18.36×18.71m だがスタート地点の廊下幅 0.300m) では fullscale で 1 台も置けず capN=0 になるが、
+// この書き方は **嘘の capN=1 を名乗る** = 車が壁の中に湧いたまま「収まっている」ことになる。
+// 外形が広くても廊下が狭ければ収容ゼロはありうる = 代理量 (0.25×外形最小辺) でなく実態で測る。
+// 判定は再実装しない = 本物の fitsAllCars (実 freeSpawn/checkCollision/carEdges) をそのまま呼ぶ (CI-9)。
+export function capacityOf(course, maxN = FLEET.maxCars) {
+  let n = maxN;
+  while (n >= 1 && !fitsAllCars(course, n)) n--;
+  return n;   // 0 = このコース×領域×スケールでは 1 台も置けない (呼び出し側は無言で握りつぶさないこと)
+}
+
 // 2線分の最短距離 (交差していれば 0)。本物の距離オラクル distToSeg/segIntersect を使う (CI-9)。
 function segSegDist(a, b, c, d) {
   if (segIntersect(a, b, c, d)) return 0;

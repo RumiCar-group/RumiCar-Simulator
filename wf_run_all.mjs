@@ -76,6 +76,11 @@ const GATES = [
   //   --full は予算 2 倍・二分探索を細かく（docs 転記用）。本体の最適化器は library `wf_drift_opt.mjs`
   //   （= wf_drift_reexam から純粋抽出したもの。下の EXCLUDED に明示）。
   'wf_ay1_rmin_bench.mjs',
+  // AZ2: フィットガードが落ち着いた先で「実態収容 capN ≥ 1」（＝車が壁の中に湧いたまま留まらない）。
+  //   出荷全コース × 3 領域 × 6 carScale の全格子で改修前後の落ち着き先を突き合わせ（救済以外の変化を 0 に
+  //   固定）、閉じた細い廊下の治具で欠陥の再現を保ち、product 側に「1 台は必ず置ける」仮定が戻っていないかを
+  //   ソースの構造条件で検査する。所要は本ホスト実測 62.8s（2026-09-12・wf_run_all 内）。
+  'wf_az2_fitguard.mjs',
 ].map((name) => ({ name, args: [] }));
 
 // official_result は決定論2回照合→result.json 再検証→Node pin 照合の複合ゲート (AP20)。

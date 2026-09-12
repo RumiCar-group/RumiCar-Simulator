@@ -703,6 +703,13 @@ export const MESSAGES = {
   'log.autoTabletop':   { ja: '🔭 「{name}」はフルスケール領域では車体が大きすぎて入りません。比率を正すため領域を「卓上 (実機相当)」に自動で戻しました (変えたいときは領域セレクタで変更)。', en: '🔭 "{name}" is too small for the full-scale regime (the car would not fit). Switched the regime back to "Tabletop (real-car equivalent)" automatically to fix the ratio (change it via the regime selector if you want).' },
   'log.autoCarScale':   { ja: '🔭 「{name}」では車体スケールが大きすぎてコースに収まりません。比率を正すため車体スケールを {scale}× に自動で縮小しました (大きくしたいときはコースを変更)。', en: '🔭 The car scale is too large to fit "{name}". Reduced the car scale to {scale}× automatically to fix the ratio (switch to a larger course if you want it bigger).' },
   'log.capReduced':     { ja: '🚦 「{name}」はこの大きさ・スケールでは最大 {n} 台しか壁に当たらず走り出せません。台数を {was} 台から {n} 台に自動調整しました (もっと並べたいときは大きいコースへ)。', en: '🚦 "{name}" can only hold {n} car(s) that start clear of the walls at this size/scale. Adjusted the field from {was} to {n} automatically (switch to a larger course to line up more).' },
+  // AZ2: 代理量 (外形の 1/4) は「収まる」と言うのに実際には 1 台も置けないコース向けの救済と、
+  // 救済しても収まらない場合の警告。無言で壁の中に湧かせない。
+  // **文言は fitsAllCars が偽になる理由だけを言う** (壁交差／前方の発走余地／start 団子)。
+  // 「通路が狭い」「外形は広いのに」は判定が見ていない量なので書かない (CI-14: 測っていないことを断定しない。
+  // 実際 wf_capacity_fit は出荷 24 構成で「壁ではなく driveable 起因の capN=0」を実測している)。
+  'log.autoTabletopFit': { ja: '🔭 「{name}」はこの領域では車を 1 台も置けません (壁に当たらず、前方に発走の余地を残せる位置が見つかりません)。領域を「卓上 (実機相当)」に自動で戻しました (変えたいときは領域セレクタで変更)。', en: '🔭 Not a single car can be placed in "{name}" in this regime (no position is clear of the walls with room ahead to pull away). Switched the regime back to "Tabletop (real-car equivalent)" automatically (change it via the regime selector if you want).' },
+  'log.capZeroWarn':    { ja: '⚠ 「{name}」はこの大きさ・スケールでは車を 1 台も置けません (壁に当たらず、前方に発走の余地を残せる位置が見つかりません)。台数を {was} 台から {n} 台にしますが、この 1 台はスタート地点で壁と重なっている可能性があります — コースの通路幅と、スタート地点の前方の余地をご確認ください。', en: '⚠ Not a single car fits in "{name}" at this size/scale (no position is clear of the walls with room ahead to pull away). Setting the field from {was} to {n}, but that car may overlap a wall at the start — please check the corridor width and the space ahead of the start position.' },
   'log.carAdded':       { ja: '車両 {name} を追加しました (計 {n} 台)', en: 'Added car {name} ({n} total)' },
   'log.fragileClearance': { ja: '⚠ 最小クリアランス {v}（脆弱）— {n} 台が接触寸前まで詰まっています。台数を減らすか、より広いコースにすると安定します。', en: '⚠ Min clearance {v} (fragile) — {n} cars are packed nearly touching. Reduce the number of cars or use a wider course for stability.' },
   'log.carRemoved':     { ja: '車両 {name} を削除しました (計 {n} 台)', en: 'Removed car {name} ({n} total)' },
