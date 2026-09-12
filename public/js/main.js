@@ -30,7 +30,7 @@ import {
   listCommunityCourses, fetchCommunityCourse, courseSubmission,
   listCommunityPrograms, programSubmission, uploadPageUrl,
   listCommunityCars, fetchCommunityCar,
-  listOfficialRaces, fetchRace, shareEventUrl,
+  listOfficialRaces, fetchRace, eventSubmission, slugify,
 } from './loader.js';
 import { SAMPLES } from './samples.js';
 import { makeBackupEnvelope, parseBackup, previewImport, applyImport } from './data_backup.js';
@@ -799,13 +799,15 @@ function closeAndRace() {
   }
 }
 
-// GitHub で公式開催 (W5): 現在の 📋 開催 設定からイベント定義を組み、shareEventUrl で
-// races/<id>/event.json の新規ファイル作成画面 (PR) を開く。締切窓は主催が PR で設定する。
+// GitHub で公式開催 (W5): 現在の 📋 開催 設定からイベント定義を組み、①event.json を書き出し
+// ②races/<id>/ のアップロード画面を開く (AZ4)。締切窓は主催が PR で設定する。
 function hostOfficialEvent() {
   readEventConfig();
   const regime = $('regimeSel') ? $('regimeSel').value : 'fullscale';
-  const slug = course.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  const id = slug || ('race-' + Date.now());
+  // **投稿先を組む側と同じ `slugify` を使う** (AZ4)。以前はここに独自の inline slug があり
+  // 200 文字上限が無かったため、コース名が 300 文字だと event.json の id は 300 文字のまま、
+  // 置くディレクトリは 200 文字に切られて食い違った (`#edName` に maxlength は無い)。
+  const id = slugify(course.name, 'race');
   const event = {
     id, title: course.name, course: course.name, regime,
     laps: raceEvent.laps,
@@ -826,8 +828,13 @@ function hostOfficialEvent() {
     ...(wearOn ? { wear: true } : {}),
     entryWindow: { open: '', close: '' },   // 主催が PR で設定 (空=即受付の運用も可)
   };
-  window.open(shareEventUrl(event), '_blank');
-  $('evMsg').textContent = t('event.share.opened');
+  // ①event.json を書き出し ②races/<id>/ のアップロード画面を開く (AZ4)。
+  // 旧実装は定義全文を URL に載せたうえ、開けたかどうかを見ずに必ず「開きました」と表示していた。
+  let r;
+  try { r = submitToGithub(eventSubmission(event)); }
+  catch (e) { $('evMsg').textContent = t('log.submit.buildFail', { e: e.message }); return; }
+  if (!r.started) { $('evMsg').textContent = t('event.share.saveFail'); return; }
+  $('evMsg').textContent = t(r.opened ? 'event.share.opened' : 'event.share.savedOnly', { file: r.filename });
 }
 
 // ============================================================================
@@ -836,7 +843,7 @@ function hostOfficialEvent() {
 //  エントリー (PR)。**公式の確定は固定環境の正準エンジンで判定 = ブラウザは参考** (W_spec §5.1/§7)。
 //  取得失敗 (未シード/レート制限) は通知1行で本体継続 (Q1/V4 契約)。races/ のシードは人間 (CI-11)。
 // ============================================================================
-const RU = initRaceUI({ $, escapeHtml, logLine, activeSlot, exitEdit, courseDisplayName, carTypeLabel, entryCarLabel, setActiveProgram, playCountdown, resolveRaceCourse });
+const RU = initRaceUI({ $, escapeHtml, logLine, activeSlot, exitEdit, courseDisplayName, carTypeLabel, entryCarLabel, setActiveProgram, playCountdown, resolveRaceCourse, submitToGithub });
 const { renderRaceResult, loadOfficialRaces, loadAllOfficialData, checkBeaten, openOfficialDlg, reloadOfficial, selectOfficialRace, submitOfficialEntry, toggleProgSrc, forkOfficialEntry, openRankingsDlg, reloadRankings, renderRankings, saveMe, ghostVsWorld, openGhostReplay } = RU;
 // イベントの course (名前 or 同梱 courseDef) → 走行可能なコースに解決。組込名→プリセット、
 // community 名→投稿コース、object→正規化。見つからなければ null (再実行不可)。
@@ -2185,7 +2192,7 @@ document.querySelectorAll('.infohint').forEach((h) =>
   }));
 
 // ---- ③ 車種パラメータの公開 + 独自車種の追加 ----
-const CC = initCarCrud({ $, escapeHtml, carTypeName, logLine, buildFleetColumns, pruneSlotCarTypes });
+const CC = initCarCrud({ $, escapeHtml, carTypeName, logLine, buildFleetColumns, pruneSlotCarTypes, submitToGithub });
 const { loadCustomCars, isBuiltinKey, renderCarParamTable, renderCarForm, readCarForm } = CC;
 // 削除/編集で key が消えたスロットは既定車種へ戻す (セレクタの stale option を防ぐ)。
 function pruneSlotCarTypes() {
@@ -2468,7 +2475,9 @@ async function loadGithubTo(i, url) {
   } catch (e) { logLine(t('log.err.fetch', { e: e.message })); }
 }
 
-// 今のプログラムを「別名で」GitHub へ保存 (PR)。上書きせず programs/community/ に新規ファイル。
+// 今のプログラムを「別名で」GitHub へ保存 (PR)。投稿先は programs/community/。
+// **「上書きしない」とは言えない** (AZ4): 旧 `/new/` は新規作成専用の endpoint だったが
+// `/upload/` にその保証は無く、既定名 `<プログラム名>-custom` は別々の利用者で同名になりうる。
 function shareProgram(i) {
   const s = slots[i]; if (!s) return;
   if (!(s.src || '').trim()) { logLine(t('log.progEmpty')); return; }

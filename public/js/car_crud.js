@@ -7,10 +7,10 @@
 import { CAR_TYPES, CAR_TYPE_BY_KEY, CAR_TYPE_DEFAULT, CAR_PARAM_DOC, registerCarType, unregisterCarType } from './config.js';
 import { safeSetItem } from './storage.js';
 import { t, hasKey } from './i18n.js';
-import { shareCarUrl } from './loader.js';
+import { carSubmission } from './loader.js';
 
 // --- 依存注入スロット ---
-let $, escapeHtml, carTypeName, logLine, buildFleetColumns, pruneSlotCarTypes;
+let $, escapeHtml, carTypeName, logLine, buildFleetColumns, pruneSlotCarTypes, submitToGithub;
 
 const CUSTOM_CARS_KEY = 'rumicar.customCars';
 function loadCustomCars() {
@@ -374,7 +374,7 @@ function clearAllOverrides() {
 }
 
 export function initCarCrud(deps) {
-  ({ $, escapeHtml, carTypeName, logLine, buildFleetColumns, pruneSlotCarTypes } = deps);
+  ({ $, escapeHtml, carTypeName, logLine, buildFleetColumns, pruneSlotCarTypes, submitToGithub } = deps);
   // 起動時: 保存済みの独自車種を登録 (車種メニューに反映)
   for (const def of loadCustomCars()) { try { registerCarType(def); } catch (e) {} }
   // 起動時の組込上書き適用 (CAR_NUM_PARAMS/DRIFT_NUM_PARAMS/fillCarDef 定義後)
@@ -426,7 +426,15 @@ export function initCarCrud(deps) {
     msg.textContent = t('cars.add.added', { name: def.name }); msg.style.color = 'var(--green)';
     logLine(t('log.customCarAdded', { name: def.name }));
   });
-  // V4: 今フォーム/JSON にある車種定義を GitHub の新規ファイル作成画面 (cars/community/) で開く (PR 共有)。
+  // V4: 今フォーム/JSON にある車種定義を cars/community/ へ投稿する (PR 共有)。
+  // AZ4: ①JSON を書き出し ②アップロード画面を開く方式へ。旧実装は定義全文を URL に載せ、
+  // さらに 'noopener' 付きの window.open だったので**成功時も null が返り、阻止されたかを
+  // 原理的に判定できない**まま必ず「開きました」と表示していた。
+  // submitToGithub は戻り値で判定するため noopener を渡さず、遷移前 (まだ about:blank) に
+  // opener を切る。**「noopener と同等の保護」とまでは測れていない**: github.com は
+  // Cross-Origin-Opener-Policy を送るので、遷移後に opener が null なのは当方の代入の効果か
+  // COOP の効果かを区別できない。ここで言えるのは「遷移前の about:blank に対する保険を掛けた」
+  // ことと「browsing context group は noopener と違って分かれない」ことだけ。
   $('carShareBtn').addEventListener('click', () => {
     const msg = $('carAddMsg');
     let def;
@@ -434,9 +442,14 @@ export function initCarCrud(deps) {
     catch (e) { msg.textContent = t('cars.add.errJson', { e: e.message }); msg.style.color = 'var(--red)'; return; }
     const v = validateCarDef(def);
     if (!v.ok) { msg.textContent = v.msg; msg.style.color = 'var(--red)'; return; }
-    window.open(shareCarUrl(def), '_blank', 'noopener');
-    msg.textContent = t('cars.share.opened', { name: def.name }); msg.style.color = 'var(--green)';
-    logLine(t('log.carShareOpened', { name: def.name }));
+    let r;
+    try { r = submitToGithub(carSubmission(def)); }
+    catch (e) { msg.textContent = t('log.submit.buildFail', { e: e.message }); msg.style.color = 'var(--red)'; return; }
+    if (!r.started) { msg.textContent = t('cars.share.saveFail'); msg.style.color = 'var(--red)'; return; }
+    msg.textContent = t(r.opened ? 'cars.share.opened' : 'cars.share.savedOnly', { name: def.name, file: r.filename });
+    // 開けなかったときは利用者の追加操作 (自分で投稿ページを開く) が要る = 注意喚起色にする。
+    msg.style.color = r.opened ? 'var(--green)' : 'var(--red)';
+    logLine(t(r.opened ? 'log.carShareOpened' : 'log.carShareSavedOnly', { name: def.name, file: r.filename }));
   });
   $('carClearBtn').addEventListener('click', () => {
     if (!loadCustomCars().length) { $('carAddMsg').textContent = t('cars.add.cleared'); $('carAddMsg').style.color = 'var(--text-dim)'; return; }

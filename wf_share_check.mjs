@@ -11,11 +11,15 @@
 // さらに **投稿導線 (loader.js)** を検査する (AZ1・2026-09-12):
 //   ⑧ 投稿先 URL が **投稿物の大きさに依存しない** = 壁を増やしても長さが 1 byte も動かない
 //   ⑨ 投稿物が URL に載らない / 往復で欠けない / ファイル名が安全
+// さらに **公式レースと車種の投稿導線** を検査する (AZ4・2026-09-12):
+//   ⑩ races/cars も同じ門を通る = loader.js に「URL に本文を載せるビルダー」が 1 本も残っていない
 // 1 つでも失敗したら非ゼロ終了 (本番 import パスで実行=CI-8/9)。
 
 import { encodeState, decodeState, normalizeState, SHARE_FIELDS, SHARE_VERSION, hasShareState } from './public/js/share.js';
 import * as loader from './public/js/loader.js';
-import { uploadPageUrl, courseSubmission, programSubmission } from './public/js/loader.js';
+import { uploadPageUrl, courseSubmission, programSubmission, carSubmission, eventSubmission, entrySubmission, slugify } from './public/js/loader.js';
+import { PROGRAMS } from './public/js/programs.js';
+import { CAR_TYPES, CAR_TYPE_BY_KEY, APP_VERSION } from './public/js/config.js';
 
 let pass = 0, fail = 0;
 const fails = [];
@@ -239,6 +243,12 @@ for (const dir of ['courses/community', 'programs/community']) {
      `⑧ 遷移先 URL が期待値と完全一致 (${dir}): 実測 ${uploadPageUrl(dir)} / 期待 ${expectNav(dir)}`);
   ok(new URL(uploadPageUrl(dir)).pathname === `/${OWNER}/${REPO}/upload/${BRANCH}/${dir}`,
      `⑧ pathname が完全一致 = 本文をパスに埋める変異も落ちる (${dir})`);
+  // **口が無いことを、口を叩いて確かめる** (AZ4 の変異試験で判明した残穴)。
+  // `uploadPageUrl(dir, payload = '')` と書けば Function.length は 1 のままで、
+  // 上の完全一致検査も「1 引数で呼んでいる」ので素通りする — 実際に AZ4 の M8 変異が通った。
+  // 余分な引数を渡しても **出力が 1 byte も変わらない** ことを直接固定する。
+  ok(uploadPageUrl(dir, 'PAYLOAD-THAT-MUST-NOT-APPEAR', { v: 1 }) === uploadPageUrl(dir),
+     `⑧ uploadPageUrl は余分な引数を無視する = 投稿物を渡す口が本当に無い (${dir})`);
 }
 // dir の取り違えは黙って `.../undefined` を開かせるので throw させる。
 for (const bad of [undefined, null, '', 0, {}, []]) {
@@ -343,6 +353,241 @@ ok(/^course-\d+\.json$/.test(courseSubmission({ name: '', walls: [] }).filename)
    '⑨ 空のコース名は course-<時刻>.json へ落ちる');
 ok(/^program-\d+\.ino$/.test(programSubmission('x', '', 'c').filename),
    '⑨ 空のプログラム名は program-<時刻>.ino へ落ちる');
+
+// ================================================================================
+//  ⑩ 公式レース (races/) と車種 (cars/community/) の投稿導線  — AZ4 (2026-09-12)
+// ================================================================================
+// AZ1 が直したのは course と program の 2 本だけで、**残る 4 本は `?value=` のままだった**。
+// 本節を足す前の実測 (同梱 PROGRAMS 23 本・出荷 6 車種・出荷 66 コース):
+//   ・shareEntryUrl  … 23 本中 **20 本が上限超過**・最大 42,317 文字 (プログラム全文＋車種 def 同梱)
+//   ・shareEventUrl  … 出荷コースでは最大 1,512 だが、コース名 300 文字で **6,360＝上限の 96%**
+//   ・shareCarUrl    … 出荷 6 車種 721〜1,092 だが、車種名 1,000 文字で **9,639＝超過**
+//                      (「壁配列を持たないので原理的に膨らまない」は誤りだった。key/name は利用者入力)
+//   ・shareResultUrl … 初版から**呼び出し 0 件**のデッドコード (公式の確定は pinned Node・W_spec §5.1)
+// ∴ entry/event/car を submission 方式へ寄せ、result は削除した。この節は
+// 「4 本のどれかが戻っていないか」「新しい経路が同じ門を通っているか」を機械で見張る。
+
+// --- ⑩-1 URL に本文を載せるビルダーが **1 本も残っていない** ---
+for (const dead of ['shareCourseUrl', 'shareProgramUrl', 'shareCarUrl', 'shareEventUrl',
+                    'shareEntryUrl', 'shareResultUrl']) {
+  ok(!(dead in loader), `⑩ loader.js が ${dead} を export していない (URL に本文を載せる経路の復活)`);
+}
+ok(typeof carSubmission === 'function' && typeof eventSubmission === 'function'
+   && typeof entrySubmission === 'function', '⑩ AZ4 の 3 関数 (car/event/entry) が export されている');
+// **関数を消しただけでは足りない**。名前を変えて同じことをする関数が生えたら意味が無いので、
+// 構造でも塞ぐ。2 本立てにする:
+//   (a) 投稿導線の名前空間 (share*/upload*/submit*) に居てよい関数は uploadPageUrl 1 本だけ
+//   (b) export された関数の本文に旧方式の署名 (`?value=` / GitHub の `/new/` endpoint) が現れない
+// ⚠ **(b) は tripwire であって網羅ではない**。文字列の存在しか見ないので、
+// `'/n' + 'ew/'` のように連結で綴れば素通りする (層 4 レビューが複製ツリーで実証)。
+// 本質的な防御は下の ⑩-2 (投稿先 dir の literal 固定) と ⑩-3 (遷移先 URL の完全一致)、
+// および実ブラウザゲートの「生 URL にクエリ/フラグメントが無い」。(b) は不注意な復活を拾う網。
+// (b) は **コメントを剥がしてから**照合する — loader.js は「なぜ旧方式をやめたか」を
+// コメントで残しており、素の文字列照合だと自分の説明文に当たって常に赤になる
+// (AZ2 の D) 構造検査で「コメントを剥がしてから照合する」を学んだのと同じ型)。
+{
+  const submitLike = Object.entries(loader)
+    .filter(([k, v]) => typeof v === 'function' && /^(share|upload|submit)/i.test(k))
+    .map(([k]) => k);
+  ok(submitLike.length === 1 && submitLike[0] === 'uploadPageUrl',
+     `⑩ 投稿導線の名前空間に居る関数は uploadPageUrl だけ (実測 ${JSON.stringify(submitLike)})`);
+  const stripComments = (src) => String(src)
+    .replace(/\/\*[\s\S]*?\*\//g, ' ')
+    .replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+  for (const [k, v] of Object.entries(loader)) {
+    if (typeof v !== 'function') continue;
+    const body = stripComments(v);
+    ok(!body.includes('?value='),
+       `⑩ export 関数 ${k} の本文に "?value=" が無い (投稿物を URL に載せる署名)`);
+    ok(!/github\.com\/[^'"`]*\/new\//.test(body),
+       `⑩ export 関数 ${k} の本文に GitHub の /new/ endpoint が無い (旧方式の署名)`);
+  }
+}
+
+// --- ⑩-2 投稿先ディレクトリを literal で固定する ---
+// AZ1 の再変異試験で「dir をずらす変異は、期待値も一緒に動くので素通りする」と分かっている。
+// races は大会 ID が可変なので、**可変部を挟む前後を literal で釘付け**にする。
+ok(carSubmission({ key: 'x' }).dir === 'cars/community',
+   `⑩ 車種の投稿先は cars/community に固定 (実測 ${carSubmission({ key: 'x' }).dir})`);
+ok(eventSubmission({ id: 'oval-2026' }).dir === 'races/oval-2026',
+   `⑩ イベントの投稿先は races/<id> に固定 (実測 ${eventSubmission({ id: 'oval-2026' }).dir})`);
+ok(entrySubmission('oval-2026', { author: 'octocat' }).dir === 'races/oval-2026/entries',
+   `⑩ エントリーの投稿先は races/<大会>/entries に固定 (実測 ${entrySubmission('oval-2026', { author: 'octocat' }).dir})`);
+ok(eventSubmission({ id: 'oval-2026' }).filename === 'event.json',
+   '⑩ イベントのファイル名は event.json に固定');
+ok(entrySubmission('oval-2026', { author: 'Octo Cat!' }).filename === 'octo-cat.json',
+   `⑩ エントリーのファイル名は <author> の slug (実測 ${entrySubmission('oval-2026', { author: 'Octo Cat!' }).filename})`);
+// **大会 ID は slug 化しない**。上流の実在ディレクトリ名なので、加工すると実在しない場所を開く
+// (旧 shareEntryUrl は slugify(event.id) を使っていた = AZ4 で是正した欠陥そのもの)。
+ok(entrySubmission('Round_1', { author: 'a' }).dir === 'races/Round_1/entries',
+   `⑩ 大会ディレクトリ名は slug 化せずそのまま使う (実測 ${entrySubmission('Round_1', { author: 'a' }).dir})`);
+ok(uploadPageUrl(entrySubmission('Round_1', { author: 'a' }).dir)
+   === expectNav('races/Round_1/entries'),
+   '⑩ 大文字/アンダースコアの大会でも遷移先が実在ディレクトリを指す');
+// 大会ディレクトリ名は上流 PR で誰でも足せる = 素性不明。パスを脱出させない。
+for (const bad of [undefined, null, '', 0, {}, [], '../../etc', 'a/b', 'a\\b', '.', '..']) {
+  let threw = false;
+  try { entrySubmission(bad, { author: 'a' }); } catch (e) { threw = true; }
+  ok(threw, `⑩ entrySubmission(${JSON.stringify(bad)}) は throw する (パス脱出・実在しない場所を開かせない)`);
+}
+for (const bad of ['races/../x', 'races//x', 'races/./x']) {
+  let threw = false;
+  try { uploadPageUrl(bad); } catch (e) { threw = true; }
+  ok(threw, `⑩ uploadPageUrl(${JSON.stringify(bad)}) は throw する (区切りの検査)`);
+}
+// --- ⑩-2b 符号化 ---
+// ⚠ **`new URL()` を通して判定してはいけない**。`new URL()` は非 ASCII を自分で percent-encode
+// するので、`encodeURIComponent` が有っても無くても同じ pathname になる —— 実際、初版の本節は
+// 非 ASCII しか使わず `new URL().pathname` と比べていたため、**符号化を丸ごと外す変異が
+// 1193/1193 緑のまま素通りした** (層 4 レビューが複製ツリーで実測)。
+// ゆえに (1) **生の URL 文字列**で判定し、(2) **符号化が無いと必ず壊れる入力** (`#` `?` `%` 空白)
+// を使う。`NAME_OK` (loader.js) が弾くのは `/` `\` `.` `..` `index.json` だけなので、
+// `Round#1` という大会ディレクトリは上流 PR で実際に作れる。符号化が無ければ
+// `.../races/Round#1/entries` は `.../races/Round` を開き、残りはフラグメントになる
+// ＝「開いたのに投稿できない」(AZ-0 が潰した失敗形) に戻る。
+for (const raw of ['Round#1', 'Round?1', 'a%2Fb', 'a b', '第1戦']) {
+  const nav = uploadPageUrl(entrySubmission(raw, { author: 'a' }).dir);
+  ok(!/[?#]/.test(nav),
+     `⑩ 大会 ${JSON.stringify(raw)}: **生の** URL 文字列にクエリ/フラグメントが無い (実測 ${nav})`);
+  ok(nav === expectNav(`races/${encodeURIComponent(raw)}/entries`),
+     `⑩ 大会 ${JSON.stringify(raw)}: 区切りが 1 回だけ符号化される (実測 ${nav})`);
+  ok(decodeURIComponent(new URL(nav).pathname).endsWith(`races/${raw}/entries`),
+     `⑩ 大会 ${JSON.stringify(raw)}: 復号すると元のディレクトリ名に戻る (二重符号化していない)`);
+}
+
+// --- ⑩-2c 名付ける側と投稿先を組む側が同じ計算を使うこと (id ≠ dir を作らない) ---
+// `hostOfficialEvent` は以前 200 文字上限の無い inline slug で id を作っており、300 文字の
+// コース名だと event.json の id (300 文字) と置くディレクトリ (200 文字) が食い違った。
+ok(typeof slugify === 'function', '⑩ slugify が export されている (名付ける側と共有するため)');
+{
+  const long = 'x'.repeat(300);
+  const id = slugify(long, 'race');
+  ok(id.length === 200, `⑩ slugify は 200 文字で切る (実測 ${id.length})`);
+  const sub = eventSubmission({ id });
+  ok(sub.dir === `races/${id}`,
+     `⑩ 200 文字の id はそのまま dir になる (再 slug 化で更に削られない・実測 ${sub.dir.length} 文字)`);
+  ok(JSON.parse(sub.text).id === id,
+     '⑩ 書き出す event.json の id と置くディレクトリ名が一致する (id ≠ dir を作らない)');
+  // main.js の inline slug (200 文字上限なし) が復活したら、この 2 つが食い違う。
+  const inline = long.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  ok(inline !== id,
+     `⑩ 旧 inline slug は 200 文字で切らない (${inline.length} 文字) = 共有しないと食い違う、という前提の確認`);
+}
+// AZ1 の既存 dir は 1 byte も動いていないこと (この節を足したことによる巻き添えが無い)
+ok(uploadPageUrl('courses/community') === expectNav('courses/community'),
+   '⑩ AZ1 のコース遷移先が符号化の導入で変わっていない');
+ok(uploadPageUrl('programs/community') === expectNav('programs/community'),
+   '⑩ AZ1 のプログラム遷移先が符号化の導入で変わっていない');
+
+// --- ⑩-3 遷移先 URL が投稿物の大きさに依存しないこと (**実データで**) ---
+// 同梱 PROGRAMS 23 本 × 実車種 def = 旧 shareEntryUrl が 20 本で壊れていた母集団そのもの。
+function carDefForEntry(carType) {           // race_ui.js の carDefForEntry と同じ形
+  const ct = CAR_TYPE_BY_KEY[carType];
+  if (!ct) return null;
+  const def = {};
+  for (const k of Object.keys(ct)) { if (k === 'custom' || k === 'community') continue; def[k] = ct[k]; }
+  return JSON.parse(JSON.stringify(def));
+}
+{
+  const navs = new Set();
+  let maxText = 0, overOld = 0, oldMax = 0;
+  for (const p of PROGRAMS) {
+    const entry = {
+      name: p.name, author: 'octocat',
+      program: { lang: p.lang, src: p.code },
+      carType: p.carType, carDef: carDefForEntry(p.carType),
+      submittedAt: '2026-09-12T00:00:00.000Z',
+    };
+    const sub = entrySubmission('oval-2026', entry);
+    const nav = uploadPageUrl(sub.dir);
+    navs.add(nav);
+    maxText = Math.max(maxText, sub.text.length);
+    // 旧方式ならこの投稿物が URL に載っていた。**主張と同じ量を測る**ため、削除した
+    // shareEntryUrl が組んでいた URL 全長をここで再構成して数える (関数を復活させるのではなく、
+    // 回帰の重さを数字で残すための計算式)。本文の符号化長だけを数えると 19 本になり、
+    // 記録した「20 本」と食い違う — 差は base+filename の約 110 文字ぶんで、境界の 1 本が動く。
+    const oldUrl = `https://github.com/${OWNER}/${REPO}/new/${BRANCH}/races/oval-2026/entries`
+      + `?filename=${encodeURIComponent('octocat')}.json&value=${encodeURIComponent(sub.text)}`;
+    oldMax = Math.max(oldMax, oldUrl.length);
+    if (oldUrl.length > GH_URL_LIMIT) overOld++;
+    ok(nav.length < NAV_URL_BUDGET, `⑩ entry ${p.key}: 遷移先 URL ${nav.length} < ${NAV_URL_BUDGET}`);
+    ok(!/[?&#]/.test(nav), `⑩ entry ${p.key}: 遷移先 URL にクエリ/フラグメントが無い`);
+    ok(!nav.includes(String(sub.text).slice(-40)), `⑩ entry ${p.key}: 遷移先 URL に本文の断片が無い`);
+  }
+  ok(navs.size === 1,
+     `⑩ 同梱 PROGRAMS ${PROGRAMS.length} 本すべてで遷移先 URL が **同一文字列** (実測 ${navs.size} 種)`);
+  ok(maxText > 10000, `⑩ 検査に使った最大 entry が十分大きい (実測 ${maxText} 文字)`);
+  // **下限で見る**。ここは product の不変条件ではなく「旧方式がどれだけ壊れていたか」の
+  // 歴史的観測値 (2026-09-12 実測 20/23) なので、等式で固定すると同梱プログラムを 1 本足した
+  // だけで product が健全なのに赤くなる。ゲートが偽陽性を出すと、ゲート全体が信用されなくなる。
+  ok(overOld >= 15,
+     `⑩ 旧方式ならこの母集団の ${overOld}/${PROGRAMS.length} 本が上限 ${GH_URL_LIMIT} 超過だった (2026-09-12 実測は 20 本)`);
+  ok(oldMax > 40000,
+     `⑩ 旧方式の最悪 URL は ${oldMax} 文字＝上限の ${(oldMax / GH_URL_LIMIT).toFixed(1)} 倍だった (現行は ${navs.size === 1 ? [...navs][0].length : '?'} 文字で固定)`);
+}
+// イベント: コース名は投稿者が自由に付ける。300 文字 (AZ1 が実測で踏んだ長さ) でも遷移先は不変。
+{
+  const navs = new Set();
+  for (const len of [0, 20, 300, 3000]) {
+    const nm = len ? 'あ'.repeat(len) : 'オーバル';
+    const ev = { id: 'oval-2026', title: nm, course: nm, regime: 'fullscale', laps: 30,
+                 engineVer: APP_VERSION, entryWindow: { open: '', close: '' } };
+    const sub = eventSubmission(ev);
+    const nav = uploadPageUrl(sub.dir);
+    navs.add(nav);
+    ok(nav.length < NAV_URL_BUDGET, `⑩ event コース名 ${len} 文字: 遷移先 URL ${nav.length} < ${NAV_URL_BUDGET}`);
+    ok(sub.text.includes(nm), `⑩ event コース名 ${len} 文字: 投稿物側には全文が入っている`);
+  }
+  ok(navs.size === 1, `⑩ コース名を変えても event の遷移先は同一 (実測 ${navs.size} 種)`);
+}
+// 車種: 出荷 6 車種＋利用者入力の長い名前。旧方式は 1,000 文字で上限超過していた。
+{
+  const navs = new Set();
+  for (const ct of CAR_TYPES) {
+    const sub = carSubmission(carDefForEntry(ct.key));
+    navs.add(uploadPageUrl(sub.dir));
+    ok(uploadPageUrl(sub.dir).length < NAV_URL_BUDGET, `⑩ car ${ct.key}: 遷移先 URL < ${NAV_URL_BUDGET}`);
+  }
+  for (const len of [300, 1000, 5000]) {
+    const def = { ...carDefForEntry('normal_fr'), key: 'custom_x', name: 'あ'.repeat(len) };
+    const sub = carSubmission(def);
+    navs.add(uploadPageUrl(sub.dir));
+    ok(uploadPageUrl(sub.dir).length < NAV_URL_BUDGET,
+       `⑩ car 名 ${len} 文字: 遷移先 URL ${uploadPageUrl(sub.dir).length} < ${NAV_URL_BUDGET} (旧方式は 1,000 文字で 9,639 = 超過)`);
+    ok(sub.text.includes('あ'.repeat(len)), `⑩ car 名 ${len} 文字: 投稿物側には全文が入っている`);
+  }
+  ok(navs.size === 1, `⑩ 車種を変えても遷移先は同一 (実測 ${navs.size} 種)`);
+}
+
+// --- ⑩-4 投稿物が往復で欠けない / ファイル名が安全 (⑨ と同じ門を races/cars にも) ---
+{
+  const entry = { name: 'エントリー', author: 'octocat',
+                  program: { lang: 'c', src: 'あ'.repeat(50000) },
+                  carDef: carDefForEntry('drift_fr'), submittedAt: '2026-09-12T00:00:00.000Z' };
+  const sub = entrySubmission('oval-2026', entry);
+  ok(!('url' in sub), '⑩ entry の投稿物に url フィールドが無い');
+  let back = null;
+  noThrow(() => { back = JSON.parse(sub.text); }, '⑩ entry の text が JSON として読める');
+  ok(eq(back, entry), `⑩ entry の投稿物が原本と deep-equal (${sub.text.length} 文字・プログラム 5 万字)`);
+  ok(sub.mime === 'application/json', '⑩ entry の mime は application/json');
+}
+for (const nm of ['富士 太郎', '../../etc/passwd', 'a/b\\c', '', '  ', 'x'.repeat(300), '🚗💨', 'a#b?c&d=e']) {
+  for (const [label, sub] of [['entry', entrySubmission('oval-2026', { author: nm })],
+                              ['car', carSubmission({ key: nm, name: nm })]]) {
+    ok(!/[/\\]/.test(sub.filename), `⑩ ${label} ファイル名に区切り文字が無い: ${JSON.stringify(nm).slice(0, 30)} → ${sub.filename}`);
+    ok(!sub.filename.startsWith('.'), `⑩ ${label} ファイル名が . で始まらない: ${sub.filename}`);
+    ok(sub.filename === encodeURIComponent(sub.filename), `⑩ ${label} ファイル名が符号化不要: ${sub.filename}`);
+    ok(Buffer.byteLength(sub.filename, 'utf8') <= 255,
+       `⑩ ${label} ファイル名が GitHub のパス上限 255 byte 以内: ${sub.filename.length} 文字`);
+    ok(typeof sub.mime === 'string' && sub.mime.length > 0, `⑩ ${label} mime が入っている`);
+  }
+}
+ok(/^entry-\d+\.json$/.test(entrySubmission('oval-2026', {}).filename),
+   '⑩ 空の author は entry-<時刻>.json へ落ちる');
+ok(/^car-\d+\.json$/.test(carSubmission({}).filename),
+   '⑩ 空の車種名は car-<時刻>.json へ落ちる');
+ok(/^event-\d+$/.test(eventSubmission({}).dir.slice('races/'.length)),
+   `⑩ 空のイベント ID は races/event-<時刻> へ落ちる (実測 ${eventSubmission({}).dir})`);
 
 // ---- 結果 ---------------------------------------------------------------------
 const line = '─'.repeat(60);

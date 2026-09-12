@@ -96,9 +96,9 @@
       </ul>
       <h3 data-i18n="usage.s6.h">6. GitHub で共有する (作る → 走らせる → 保存 → みんなで再利用)</h3>
       <ul>
-        <li data-i18n-html="usage.s6.course"><b>コースを共有</b>: コース編集で作ったコースを「🌐 GitHubで共有」ボタンで投稿します。JSON が手元に保存され、GitHub の投稿ページが開くので、そのファイルを置いてコミットしてください (プルリクエストになります)。承認されると全利用者の「🌐」コースに並びます。</li>
-        <li data-i18n-html="usage.s6.prog"><b>プログラムを共有</b>: 編集して納得したら各車の「🌐保存」ボタンで<b>別名保存</b> (上書きしません)。ファイルが手元に保存され、GitHub の投稿ページが開くので、そのファイルを置いてコミットしてください。承認されると「🌐 みんなの投稿」に並び、誰でも再利用できます。</li>
-        <li data-i18n="usage.s6.account">投稿には GitHub アカウントが必要です (書込権限が無ければ自動 fork)。削除は GitHub 上で管理します。</li>
+        <li data-i18n-html="usage.s6.course"><b>コースを共有</b>: コース編集で作ったコースを「🌐 GitHubで共有」ボタンで投稿します。JSON のダウンロードが始まり、GitHub の投稿ページが開くので、そのファイルを置いてコミットしてください (プルリクエストになります)。承認されると全利用者の「🌐」コースに並びます。</li>
+        <li data-i18n-html="usage.s6.prog"><b>プログラムを共有</b>: 編集して納得したら各車の「🌐保存」ボタンで<b>別名保存</b>します。ファイルのダウンロードが始まり、GitHub の投稿ページが開くので、そのファイルを置いてコミットしてください (置く前にファイル名は変えられます — 同名のファイルがあると置き換わります)。承認されると「🌐 みんなの投稿」に並び、誰でも再利用できます。</li>
+        <li data-i18n="usage.s6.account">投稿には GitHub アカウントが必要です (書込権限が無い場合、GitHub 側で fork を作るよう促されます)。削除は GitHub 上で管理します。</li>
       </ul>
       <h3 data-i18n="usage.s7.h">7. プログラミング API (主要)</h3>
       <ul class="api">
@@ -205,7 +205,7 @@
         <li><code>drift</code>: <code>null</code>＝滑らない。ドリフト車は <code>{trigger, grip, gain, minSp, slipYaw, slipSlide, attack, release, brakeDrift}</code> で滑り出し点と挙動を定義します。</li>
         <li><b>独自車種</b>は localStorage <code>rumicar.customCars</code> に保存 (このブラウザのみ・サーバー送信なし)。登録済みの独自車種は一覧から<b>個別に 編集／複製／削除</b>できます。例: <code>{"key":"light_fr","name":"軽量FR","mass":980,"accel":1.1,"brake":1.1,"maxSpeed":1.04,"us":0.06,"os":0.08,"powerOs":0.30,"drift":null}</code></li>
         <li><b>組込6車種の上書き</b>: 組込車種もパラメータ表の「編集」でローカルに上書きできます (実験用)。上書きは localStorage <code>rumicar.carOverrides</code> に<b>差分パラメータのみ</b>保存し、出荷時の既定 (卓上の物理 byte) は変えません。「既定に戻す」(個別)・「全上書き解除」で完全に元へ戻せます。</li>
-        <li><b>GitHub 共有</b>: 作った車種は「<b>🌐 GitHubで共有</b>」で <code>RumiCar-group/RumiCar</code> の <code>cars/community/</code> へ<b>別名投稿</b> (プルリクエスト・上書きなし) できます。承認された投稿車種は起動時に GitHub から取り込まれ (<b>localStorage には保存しない</b>)、車種メニューに「🌐 名前」として並びます。</li>
+        <li><b>GitHub 共有</b>: 作った車種は「<b>🌐 GitHubで共有</b>」で <code>RumiCar-group/RumiCar</code> の <code>cars/community/</code> へ<b>別名投稿</b> (プルリクエスト) できます。JSON のダウンロードが始まり GitHub のアップロード画面が開くので、そのファイルを置いてコミットしてください (置く前にファイル名は変えられます)。承認された投稿車種は起動時に GitHub から取り込まれ (<b>localStorage には保存しない</b>)、車種メニューに「🌐 名前」として並びます。</li>
       </ul>
 
       <h3 data-i18n="sys.prog.h">プログラム API（学習側）</h3>
@@ -464,7 +464,7 @@
       <h3 data-i18n="cars.list.title">登録済みの独自車種</h3>
       <p data-i18n="cars.list.hint">各車種を個別に編集 (上の欄へ読込)・複製・削除できます。組込の6車種はこの一覧には出ません (上の車種パラメータ表「編集」で上書きできます)。</p>
       <div id="customCarList"></div>
-      <p style="margin-top:10px;color:var(--text-faint);font-size:12px" data-i18n="cars.future">作った車種は「🌐 GitHubで共有」ボタンで投稿でき (プルリクエスト方式)、承認後は全利用者の車種メニューに「🌐 名前」として並びます。まずは自分のブラウザで自由に試せます。</p>
+      <p style="margin-top:10px;color:var(--text-faint);font-size:12px" data-i18n="cars.future">作った車種は「🌐 GitHubで共有」ボタンで投稿できます (JSON のダウンロードが始まり GitHub の投稿ページが開くので、そのファイルを置いてコミット＝プルリクエスト方式)。承認後は全利用者の車種メニューに「🌐 名前」として並びます。まずは自分のブラウザで自由に試せます。</p>
     </div>
   </dialog>
 
@@ -515,7 +515,7 @@
         <button id="evAddFleet" data-i18n="event.addFleet" data-i18n-title="event.addFleet.title" title="今の車両編成 (各列のプログラム+車種) をエントリーに追加。クラス規定を満たさない車は弾かれます">＋ 現在の編成をエントリー</button>
         <button id="evClear" data-i18n="event.clear">エントリー全消去</button>
         <button id="evRace" class="primary" data-i18n="event.race" data-i18n-title="event.race.title" title="エントリーを締め切り、3台未満なら補充車で成立させて決定論レースを実行します">締切してレース 🏁</button>
-        <button id="evShare" data-i18n="event.share" data-i18n-title="event.share.title" title="今の設定で GitHub の races/ にイベント定義 (event.json) を新規作成する画面を開きます。コミットでプルリクエストになり全世界の公式大会になります">🌐 GitHubで公式開催</button>
+        <button id="evShare" data-i18n="event.share" data-i18n-title="event.share.title" title="今の設定でイベント定義 (event.json) を手元に保存し、GitHub の races/&lt;大会&gt;/ アップロード画面を開きます。そのファイルを置いてコミットするとプルリクエストになり全世界の公式大会になります">🌐 GitHubで公式開催</button>
       </div>
       <div id="evMsg" class="event-msg"></div>
       <div id="evEntries" class="event-entries"></div>
@@ -552,7 +552,7 @@
           <label><span data-i18n="official.entry.name">車両名</span> <input id="ofName" type="text" maxlength="40"></label>
           <label><span data-i18n="official.entry.author">GitHub アカウント</span> <input id="ofAuthor" type="text" maxlength="40" placeholder="octocat"></label>
           <label class="official-introlbl"><span data-i18n="official.entry.intro">解説 (任意・締切後に公開)</span> <textarea id="ofIntro" rows="2" maxlength="400" data-i18n-placeholder="official.entry.intro.ph" placeholder="あなたのロジックの工夫や狙いを書けます (締切後に公開されます)"></textarea></label>
-          <button id="ofSubmit" class="primary" data-i18n="official.entry.submit" data-i18n-title="official.entry.submit.title" title="エントリーを GitHub の races/<大会>/entries/ に新規ファイルとして作成する画面を開きます。コミットでプルリクエストになります">🌐 この大会にエントリー (PR)</button>
+          <button id="ofSubmit" class="primary" data-i18n="official.entry.submit" data-i18n-title="official.entry.submit.title" title="エントリーを手元に保存し、GitHub の races/&lt;大会&gt;/entries/ アップロード画面を開きます。そのファイルを置いてコミットするとプルリクエストになります">🌐 この大会にエントリー (PR)</button>
         </div>
       </div>
     </div>

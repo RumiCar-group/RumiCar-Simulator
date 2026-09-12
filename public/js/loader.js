@@ -306,7 +306,11 @@ export async function fetchCommunityCourse(downloadUrl) {
 // 投稿者は名前を自由に付けられる (300 文字の名前を実測で踏んだ) ので、ここで必ず抑える。
 // 拡張子 (最長 '.json' = 5) を足しても余る 200 に切り、切り口にハイフンを残さない。
 const SLUG_MAX = 200;
-function slugify(s, fallbackPrefix) {
+// **export する理由 (AZ4)**: `hostOfficialEvent` が独自の inline slug で大会 ID を作っており、
+// そちらには 200 文字の上限が無かった。300 文字のコース名で「event.json の中身の id (300 文字)」と
+// 「置くディレクトリ名 (200 文字)」が食い違う —— AZ4 が entry 側で潰した「id ≠ dir」の同族。
+// 名付ける側と投稿先を組む側が **同じ 1 つの計算**を使うようにする。
+export function slugify(s, fallbackPrefix) {
   let base = String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
   if (base.length > SLUG_MAX) base = base.slice(0, SLUG_MAX).replace(/-+$/, '');
   return base || (fallbackPrefix + '-' + Date.now());
@@ -316,13 +320,29 @@ function slugify(s, fallbackPrefix) {
  * 投稿先ディレクトリの「ファイルをアップロード」画面の URL。
  * **投稿物を一切含まない**ので、壁が 8 本でも 10,000 本でも長さは変わらない。
  * (未ログインでも HTTP 200 を返すことを実測確認。`/new/` は 302→ログインへ飛ぶ)
+ *
+ * AZ4: **まだ存在しないディレクトリでも 200 で本物の「Upload files」画面が返る**ことを実測した
+ * (`races/` は `/tree` が 404 なのに `/upload` は 200・title は既存ディレクトリと同一)。
+ * これで公式レース (races/<大会>/entries) のように「投稿と同時に作られる」場所にも使える。
+ *
+ * dir は **投稿先の生パス** (符号化前) を渡す。ここで区切りごとに符号化するので、
+ * 大会 ID のような**上流由来の素性不明な文字列**を呼び出し側で加工する必要が無い
+ * — 逆に呼び出し側が符号化して渡すと二重符号化になるので渡さないこと。
  */
 export function uploadPageUrl(dir) {
   const { owner, repo, branch } = COURSE_REPO;
   // dir を取り違えると `.../master/undefined` という実在しないページを開いてしまい、
   // 「開いたのに投稿できない」という AZ1 が潰したはずの失敗形に戻る。ここで止める。
   if (typeof dir !== 'string' || !dir) throw new Error('uploadPageUrl: dir が不正です');
-  return `https://github.com/${owner}/${repo}/upload/${branch}/${dir}`;
+  // 区切りごとに検査してから符号化する。races/<大会> の <大会> は上流のディレクトリ名
+  // (投稿 PR で誰でも足せる) なので、`..` や空区切りを URL のパスへ通さない
+  // — listDirCached の NAME_OK と同じ門を、URL を組む側にも置く (二重の防御)。
+  const parts = dir.split('/');
+  for (const p of parts) {
+    if (!p || p === '.' || p === '..') throw new Error(`uploadPageUrl: dir の区切りが不正です (${JSON.stringify(dir)})`);
+  }
+  const path = parts.map(encodeURIComponent).join('/');
+  return `https://github.com/${owner}/${repo}/upload/${branch}/${path}`;
 }
 
 /**
@@ -399,16 +419,28 @@ export async function fetchCommunityCar(downloadUrl) {
   return res.json();
 }
 
-// 車種 def を GitHub の「新規ファイル作成」画面に渡す URL を作る (cars/community/ に新規・上書きなし)。
-// ファイル名は車種 key を slug 化したものを優先 (無ければ name → 'car-<時刻>')。
-export function shareCarUrl(json) {
-  const { owner, repo, branch } = COURSE_REPO;
-  const base = String(json.key || json.name || 'car').toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-  const slug = base || ('car-' + Date.now());
-  const content = JSON.stringify(json, null, 2);
-  return `https://github.com/${owner}/${repo}/new/${branch}/${COMMUNITY_CAR_DIR}`
-    + `?filename=${encodeURIComponent(slug)}.json&value=${encodeURIComponent(content)}`;
+/**
+ * 車種の投稿物を組み立てる (cars/community/ へ別名で追加)。ファイル名は車種 key を slug 化した
+ * ものを優先 (無ければ name → 'car-<時刻>')。
+ *
+ * AZ4: **旧 `shareCarUrl` は「原理的に膨らまない」と書かれていたが誤りだった**。車種 def の
+ * 数値欄は固定でも `key`/`name` は利用者が自由に入力する欄で、実測は
+ * 出荷 6 車種 721〜1,092 文字 / 名前 300 文字で 3,339 / **1,000 文字で 9,639＝受理上限 6,600 を超過**。
+ * 「今のところ短いから大丈夫」は性質ではなく偶然なので、コース・プログラムと**同じ門**に通す。
+ * (同じ門を全経路に通す＝RATELIMIT-1 で `listItem()` に集約したのと同じ是正)
+ *
+ * ⚠ **上書きは防げない**: 旧 `/new/` は新規作成専用の endpoint だったが `/upload/` には
+ * その保証が無い。`key` は利用者が自由に付けるので、別の投稿車種と同名になりうる。
+ * 「別名投稿」は組込 6 車種と別名という意味で、投稿車種どうしの衝突までは防がない。
+ */
+export function carSubmission(json) {
+  const src = json || {};
+  return {
+    dir: COMMUNITY_CAR_DIR,
+    filename: slugify(src.key || src.name, 'car') + '.json',
+    text: JSON.stringify(src, null, 2),
+    mime: 'application/json',
+  };
 }
 
 // ===== 公式レース (GitHub の races/ で開催・W5) =====
@@ -467,33 +499,64 @@ export async function fetchRace(eventId) {
   return { event, entries, result };
 }
 
-// イベント定義を GitHub の「新規ファイル作成」画面に渡す URL (races/<id>/event.json 新規・PR・上書きなし)。
-export function shareEventUrl(event) {
-  const { owner, repo, branch } = COURSE_REPO;
-  const id = slugify(event.id, 'event');
-  const content = JSON.stringify(event, null, 2);
-  return `https://github.com/${owner}/${repo}/new/${branch}/${RACE_DIR}/${encodeURIComponent(id)}`
-    + `?filename=event.json&value=${encodeURIComponent(content)}`;
+// ===== 公式レースの投稿物 (AZ4・2026-09-12) ======================================
+// コース/プログラム/車種と**同じ門**に通す。旧 `shareEntryUrl`/`shareEventUrl`/`shareResultUrl` は
+// 投稿物の全文を `?value=` に載せていたので、受理上限 (実測 約 6,600 文字) を超えると
+// 「押しても何も開かない」に落ちていた。**実測 (2026-09-12・同梱 PROGRAMS 23 本)**:
+//   ・shareEntryUrl  … 23 本中 **20 本が超過**・最大 42,317 文字 (プログラム全文＋車種 def 同梱のため)
+//   ・shareEventUrl  … 出荷 66 コースで最大 1,512 だが、コース名は投稿者が自由に付けられ
+//                      **300 文字なら 6,360 文字＝上限の 96%**。「短いから安全」は性質ではない
+//   ・shareResultUrl … **初版から呼び出し 0 件のデッドコード**だったので新設せず削除した
+//                      (公式の確定は固定環境の正準エンジン `wf_official_result.mjs` が行う＝W_spec §5.1。
+//                       ブラウザから result.json を投稿する導線は、あってはならないもの)
+//
+// 投稿先は「まだ無いディレクトリ」になりうる (races/<大会>/ は大会が立つまで存在しない) が、
+// `/upload/` はそれでも 200 で本物の画面を返すことを実測済み (uploadPageUrl の注記)。
+
+// イベント定義 (races/<id>/event.json) の投稿物。id はこのアプリが**これから名付ける**ものなので
+// slug 化する。`hostOfficialEvent` も **この同じ `slugify`** で id を作るので、書き出す JSON の
+// `id` と置くディレクトリ名は必ず一致する (以前は main.js 側に 200 文字上限が無く食い違った)。
+//
+// ⚠ **上書きは防げない**: `/upload/` は新規作成専用ではない。id はコース名の slug なので、
+// **同じコース名で 2 人が開催すると同じ `races/<slug>/event.json`** になり、後の PR が
+// 先の大会定義を置き換えうる。旧 `/new/` は endpoint がこれを構造的に防いでいた。
+export function eventSubmission(event) {
+  const id = slugify(event && event.id, 'event');
+  return {
+    dir: `${RACE_DIR}/${id}`,
+    filename: 'event.json',
+    text: JSON.stringify(event, null, 2),
+    mime: 'application/json',
+  };
 }
 
-// エントリーを GitHub の「新規ファイル作成」画面に渡す URL (races/<id>/entries/<author>.json 新規・PR)。
-// entry は **車種 def 全体 (carDef) を同梱** する (custom/override/community 車は shipped に無く key 参照
-// では再現不可＝ポータビリティのため・W_spec §1)。プログラムも program.src に焼き込む。
-export function shareEntryUrl(eventId, entry) {
-  const { owner, repo, branch } = COURSE_REPO;
-  const id = slugify(eventId, 'event');
-  const author = slugify(entry.author || entry.name, 'entry');
-  const content = JSON.stringify(entry, null, 2);
-  return `https://github.com/${owner}/${repo}/new/${branch}/${RACE_DIR}/${encodeURIComponent(id)}/entries`
-    + `?filename=${encodeURIComponent(author)}.json&value=${encodeURIComponent(content)}`;
-}
-
-// 確定結果を GitHub の「新規ファイル作成」画面に渡す URL (races/<id>/result.json 新規・PR)。
-// 公式 verifyHash は **固定環境の正準エンジン** (pinned Node) で算出したものを刻む (W_spec §5.1)。
-export function shareResultUrl(eventId, result) {
-  const { owner, repo, branch } = COURSE_REPO;
-  const id = slugify(eventId, 'event');
-  const content = JSON.stringify(result, null, 2);
-  return `https://github.com/${owner}/${repo}/new/${branch}/${RACE_DIR}/${encodeURIComponent(id)}`
-    + `?filename=result.json&value=${encodeURIComponent(content)}`;
+/**
+ * エントリー (races/<大会>/entries/<author>.json) の投稿物。
+ * entry は **車種 def 全体 (carDef) を同梱** する (custom/override/community 車は shipped に無く
+ * key 参照では再現不可＝ポータビリティのため・W_spec §1)。プログラムも program.src に焼き込む。
+ *
+ * ⚠ **第 1 引数は「上流に実在するディレクトリ名」であって `event.json` の `id` フィールドではない**。
+ * 旧 `shareEntryUrl` は `slugify(event.id)` を投稿先にしていたが、この 2 つは一致を強制されていない
+ * (`listOfficialRaces` はディレクトリ名を id として返し、`event.id` は JSON の中身)。食い違えば
+ * **実在しない場所の投稿画面を開く**＝AZ-0 が潰したはずの「開いたのに投稿できない」に戻る。
+ * ゆえに slug 化せず、`fetchRace` に渡した dir をそのまま使う (符号化は uploadPageUrl が行う)。
+ *
+ * ⚠ **上書きは防げない**: `/upload/` は新規作成専用ではないので、同じ author 名の先行エントリーが
+ * あれば置き換えうる (旧 `/new/` は endpoint が防いでいた)。
+ */
+export function entrySubmission(eventDir, entry) {
+  // `.` と `..` も弾く。uploadPageUrl が最終的に止めるので実害は出ないが、そこで throw すると
+  // **①のダウンロードだけ済んだ後**に落ちるため、利用者には「ログの URL を自分で開いてください」と
+  // 出るのに肝心の URL がログに無い、という筋の通らない状態になる。手前で止める。
+  if (typeof eventDir !== 'string' || !eventDir || /[/\\]/.test(eventDir)
+      || eventDir === '.' || eventDir === '..') {
+    throw new Error(`entrySubmission: 大会ディレクトリ名が不正です (${JSON.stringify(eventDir)})`);
+  }
+  const src = entry || {};
+  return {
+    dir: `${RACE_DIR}/${eventDir}/entries`,
+    filename: slugify(src.author || src.name, 'entry') + '.json',
+    text: JSON.stringify(src, null, 2),
+    mime: 'application/json',
+  };
 }

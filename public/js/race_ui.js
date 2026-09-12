@@ -16,12 +16,12 @@ import { PROGRAM_BY_KEY } from './programs.js';                  // AS13: progKe
 import { fmtTime, loadBestRec } from './lap.js';
 import * as SFX from './sfx.js';
 import { drawCourse, worldToScreen } from './course.js';
-import { fetchRace, listOfficialRaces, shareEntryUrl, clearListCache } from './loader.js';
+import { fetchRace, listOfficialRaces, entrySubmission, clearListCache } from './loader.js';
 import { t, applyI18n } from './i18n.js';
 import { course } from './state.js';
 
 // --- 依存注入スロット(initRaceUI で main.js から束縛。関数本文は bare 参照のまま=byte 不変) ---
-let $, escapeHtml, logLine, activeSlot, exitEdit, courseDisplayName, carTypeLabel, entryCarLabel, setActiveProgram, playCountdown, resolveRaceCourse;
+let $, escapeHtml, logLine, activeSlot, exitEdit, courseDisplayName, carTypeLabel, entryCarLabel, setActiveProgram, playCountdown, resolveRaceCourse, submitToGithub;
 
 function renderRaceResult(res, meta) {
   // 色は field(=結果)のインデックスで割当 (FLEET.colors)。W3 は field=slots 順なので live 列色と一致、
@@ -215,6 +215,10 @@ function drawRaceMap(res, colorOf, rc = course) {
 
 let officialRaces = null;     // listOfficialRaces の結果 (null=未取得/失敗・[]=0件・[...]=一覧)
 let officialCurrent = null;   // 選択中の { event, entries, result }
+// 選択中の大会の **上流ディレクトリ名** (fetchRace に渡した id)。投稿先は必ずこれで組む。
+// `event.id` (event.json の中身) と一致する保証は無く、食い違うと実在しない場所の投稿画面を
+// 開いてしまう (AZ4 で是正。旧 shareEntryUrl は slugify(event.id) を使っていた)。
+let officialCurrentDir = null;
 
 // 起動時に公式レース一覧を読み込む (失敗しても本体は止めない・Q1/V4 契約)。
 async function loadOfficialRaces() {
@@ -282,6 +286,7 @@ async function reloadOfficial() {
 // 大会を選択 → fetchRace → 詳細描画。
 async function selectOfficialRace(id) {
   officialCurrent = null;
+  officialCurrentDir = null;
   $('ofEntry').hidden = true;
   if (!id) { $('ofDetail').innerHTML = `<p class="hint">${escapeHtml(t('official.pickHint'))}</p>`; return; }
   $('ofDetail').innerHTML = `<p class="hint">${escapeHtml(t('official.loading'))}</p>`;
@@ -289,6 +294,7 @@ async function selectOfficialRace(id) {
   try { race = await fetchRace(id); } catch (e) { race = null; }
   if (!race) { $('ofDetail').innerHTML = `<p class="race-empty">${escapeHtml(t('official.fetchFail'))}</p>`; return; }
   officialCurrent = race;
+  officialCurrentDir = id;          // 投稿先はこの実在ディレクトリ名で組む (AZ4)
   renderOfficialDetail(race);
 }
 
@@ -438,6 +444,10 @@ function verifyOfficialLocally(race) {
 }
 
 // 現在のアクティブ車をこの大会にエントリー (PR)。車種 def を同梱 (独自車種も参加可・W_spec §1)。
+// AZ4: ①entry JSON を書き出し ②races/<大会>/entries のアップロード画面を開く。
+// 旧実装はプログラム全文と車種 def を URL の ?value= に載せていたため、同梱 23 本中 20 本
+// (最大 42,317 文字) が github.com の受理上限 約 6,600 文字を超えて**何も開かなかった**。
+// しかも window.open の戻り値を見ずに必ず「開きました」と表示していた。
 function submitOfficialEntry() {
   if (!officialCurrent) return;
   const { event, result } = officialCurrent;
@@ -457,8 +467,11 @@ function submitOfficialEntry() {
   };
   if (intro) entry.intro = intro;
   saveMe(author);                            // 自分の GitHub を記憶 (打破通知・ランキングのハイライト用・W6)
-  window.open(shareEntryUrl(event.id, entry), '_blank');
-  $('ofMsg').textContent = t('official.entry.opened');
+  let r;
+  try { r = submitToGithub(entrySubmission(officialCurrentDir, entry)); }
+  catch (e) { $('ofMsg').textContent = t('log.submit.buildFail', { e: e.message }); return; }
+  if (!r.started) { $('ofMsg').textContent = t('official.entry.saveFail'); return; }
+  $('ofMsg').textContent = t(r.opened ? 'official.entry.opened' : 'official.entry.savedOnly', { file: r.filename });
 }
 
 // ============================================================================
@@ -972,7 +985,7 @@ function ghostResetOrder(a) {
 }
 
 export function initRaceUI(deps) {
-  ({ $, escapeHtml, logLine, activeSlot, exitEdit, courseDisplayName, carTypeLabel, entryCarLabel, setActiveProgram, playCountdown, resolveRaceCourse } = deps);
+  ({ $, escapeHtml, logLine, activeSlot, exitEdit, courseDisplayName, carTypeLabel, entryCarLabel, setActiveProgram, playCountdown, resolveRaceCourse, submitToGithub } = deps);
   $('raceGhost').addEventListener('click', () => { if (pendingRaceGhost) openGhostReplay(pendingRaceGhost); });
   $('ghostPlay').addEventListener('click', () => {
     if (!ghostAnim) return;
