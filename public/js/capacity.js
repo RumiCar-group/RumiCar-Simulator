@@ -35,12 +35,19 @@ export function stuckAtN(course, regime, n) {
 // wf_recover_model.mjs の既知例外リスト (単一真実源 = wf_touge_driver.mjs の AX3.KNOWN_STUCK) がこの 1 件を明示的に
 // 許容している ＝ **CI はこの破れでは落ちない**。利用者裁定 (2026-09-07) は「コースを公開に残し、コース説明に注記する」で、
 // driveableCapN 自体は変更していない。新しい破れは同リストに載っていないので従来どおり赤になる。
+// **【AZ5・2026-09-12 是正】0 を返せるようにした。** 旧実装は末尾に `if (cap < 1) cap = 1;` を置き
+// 「1台は必ず置ける (構造上の下限)」と注記していたが、これは **実走の結果に対する仮定であって構造では
+// ない**。実測 (卓上・閉じた部屋 幅 4×車幅 × 奥行 1.7×車長): 静的 fitsAllCars は 3 台まで真なのに
+// stuckAtN(1)=1 ＝ 1 台も carLen 動けない。旧実装はここで cap=0 を 1 へ丸めるため、呼び出し側
+// (main.js ⑥) は `log.capReduced`「最大 1 台なら走り出せます」と **嘘を告知していた**。
+// capacityOf (fleet.js・静的側) が AZ2 で 0 を返せるようになったのと同じ是正を、実走側にも当てる。
+// 0 = 「この構成では 1 台も走り出せない」。**呼び出し側は 0 を無言で握りつぶさないこと**
+// (main.js は capZero を立てて log.capZeroDriveWarn を出す)。
 export function driveableCapN(course, regime, maxN = FLEET.maxCars) {
   const key = `${course.name}|${regime || 'tabletop'}|${CAR.length.toFixed(4)}|${maxN}`;
   if (_cache.has(key)) return _cache.get(key);
   let cap = maxN;
   while (cap >= 1 && stuckAtN(course, regime, cap) > 0) cap--;
-  if (cap < 1) cap = 1;   // 1台は必ず置ける (構造上の下限)
   _cache.set(key, cap);
-  return cap;
+  return cap;   // 0 = 1台も走り出せない (呼び出し側が告知する)
 }

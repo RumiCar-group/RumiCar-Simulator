@@ -88,6 +88,13 @@ await page.waitForTimeout(200);
     const p = prg.PROGRAMS.find((x) => x.key === 'normal_fr');
     const trace = (sf) => eng.runRace({
       course: crs.buildFromSpec({ name: 'AV1 走行検査', kind: 'track', shape: 'stadium', L: 1.6, rr: 0.62, samples: 120, width: 0.42, grip: 0.6, ...(sf ? { surface: sf } : {}) }),
+      // **【AZ5・2026-09-12 是正】領域を明示する（node 版 `wf_av1_loose.mjs` A7 と同じ兄弟箇所）。**
+      //   この probe は冒頭で `dyn.applyRegime('fullscale')` するので、regime を渡さないこの呼び出しは
+      //   **fullscale を継いで**いた＝卓上サイズの治具 (3.62×2.02m) を車長 3.80m で走らせていた
+      //   （実測 capacityOf=0）。(d) の主張（loose は変わる／未指定と paved は 1 tick も変わらない）は
+      //   **卓上でも成立する**ことを実測で確認済み。AZ5 が fit ガードを 1 台編成にも効かせたことで表面化した
+      //   （旧ガードは `while (nFit > 1 …)` の形ゆえ 1 台編成では `fitsAllCars` を一度も呼ばなかった）。
+      regime: 'tabletop',
       laps: 2, interact: false, trace: true, physics: 'v2',
       field: [{ name: 'A', lang: 'c', src: p.code, carType: 'normal_fr' }],
       crashRule: { rejoin: false, penaltySec: 3 },

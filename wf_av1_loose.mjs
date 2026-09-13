@@ -166,6 +166,13 @@ console.log(`\n[A] 既定の完全縮退`);
   const prog = PROGRAMS.find((x) => x.key === 'normal_fr');
   const traceOf = (sf) => runRace({
     course: buildFromSpec({ name: 'AV1 配線検査', kind: 'track', shape: 'stadium', L: 1.6, rr: 0.62, samples: 120, width: 0.42, grip: 0.6, ...(sf ? { surface: sf } : {}) }),
+    // **【AZ5・2026-09-12 是正】領域を明示する。** 本ゲートは冒頭 (:53) で `applyRegime('fullscale')` するので、
+    //   regime を渡さないこの呼び出しは **fullscale を継いで**いた＝卓上サイズの治具 (3.62×2.02m) を
+    //   車長 3.80m で走らせていた（実測 capacityOf=0・車は freeSpawn の壁回避フォールバックに落ちる）。
+    //   意図した測定ではないので卓上を明示する。**A7 の主張は卓上でも成立する**（実測: 未指定=paved≠loose）。
+    //   AZ5 が fit ガードを 1 台編成にも効かせたことで表面化した（旧ガードは `while (nFit > 1 …)` の形ゆえ
+    //   1 台編成では `fitsAllCars` を一度も呼ばず、この取り違えが見えなかった）。
+    regime: 'tabletop',
     laps: 2, interact: false, trace: true, physics: 'v2',
     field: [{ name: 'A', lang: 'c', src: prog.code, carType: 'normal_fr' }],
     crashRule: { rejoin: false, penaltySec: 3 },

@@ -217,7 +217,10 @@ export function fitsAllCars(course, n) {
 // 実態収容容量 (Stage AZ2・CI-14)。capN = max{ n ∈ 0..maxN : fitsAllCars(course,n) }。
 // **0 を返せることが肝**。従来この計算は呼び出し側に `while (capN > 1 && !fitsAllCars(..)) capN--` と
 // 書かれており、「1 台は必ず置ける」という仮定が **構文そのものに埋め込まれていた** (main.js ⑤・
-// race_engine.js・capacity.js の 3 箇所に同型)。実測 (利用者投稿コース 富士スピードウェイ: 外形
+// race_engine.js・capacity.js の 3 箇所に同型)。
+// **【AZ5・2026-09-12】3 箇所とも解消した**: main.js ⑤ は AZ2 で本関数へ、race_engine.js の fit ガードも
+// AZ5 で本関数へ置換し、capacity.js の `driveableCapN` (実走側) は末尾の `if (cap < 1) cap = 1;` を外して
+// 0 を返せるようにした。**この形 (`while (n > 1 && …)` / `Math.max(1, …)`) を新たに書かないこと。**実測 (利用者投稿コース 富士スピードウェイ: 外形
 // 18.36×18.71m だがスタート地点の廊下幅 0.300m) では fullscale で 1 台も置けず capN=0 になるが、
 // この書き方は **嘘の capN=1 を名乗る** = 車が壁の中に湧いたまま「収まっている」ことになる。
 // 外形が広くても廊下が狭ければ収容ゼロはありうる = 代理量 (0.25×外形最小辺) でなく実態で測る。

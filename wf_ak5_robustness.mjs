@@ -9,9 +9,9 @@ import { runRace } from './public/js/race_engine.js';
 import { LapTracker } from './public/js/lap.js';
 import { applyRegime, DynCar } from './public/js/physics_dyn.js';
 import { raySeg, segIntersect, distToSeg } from './public/js/geom.js';
-import { fitsAllCars } from './public/js/fleet.js';
+import { fitsAllCars, capacityOf } from './public/js/fleet.js';   // AZ5: 0 を返せる共有オラクル
 import { PROGRAMS } from './public/js/programs.js';
-import { CONST } from './public/js/config.js';
+import { CONST, CAR } from './public/js/config.js';   // AZ5: 車長を「走り出せたか」の物差しに使う
 import { FROZEN } from './wf_frozen.mjs';   // AP3: 凍結値は中央マニフェスト経由
 
 let fails = 0;
@@ -134,14 +134,39 @@ console.log('\n=== C) D12: lap 武装距離 — 出荷コースは 0.25 不変�
 
 console.log('\n=== D) D8: レース fit ガード — 領域/コース不一致の超過は減・capacity は素通し ===');
 {
-  // 領域/コース不一致 (フルスケール車=巨大 を小オーバルに6台): 静的に収まらない → fit ガードが減らす。
+  // 領域/コース不一致 (フルスケール車=巨大 を小さなオーバルに6台): 静的に収まらない → fit ガードが減らす。
+  // **【AZ5・2026-09-12】ここは 2 ケースに分かれる。** 旧ゲートは `小オーバル` (2.4×1.5m を fullscale) 1 本だけを
+  //   見て `fitReduced > 0` を要求していたが、この治具は実態収容が **0 台**で、旧 fit ガードは
+  //   `while (nFit > 1 …)` の構文ゆえ 0 を表現できず **1 台へ丸めて走らせていた** (その 1 台は netMax 0.000m ＝
+  //   一切動けない)。AZ5 で 0 は NO_ROOM になったので、「減らす」ケースと「走らせない」ケースを**両方**固定する
+  //   (旧アサートを緩めたのではなく、治具を 1 本足して意図を分けた ＝ CI-7 の厳格化)。
+  // (D-1) 実態収容 1..5 台 → **減らして走る** (従来の D8 の意図そのもの)。
+  const midOval = buildFromSpec({ name: '中オーバル', kind: 'track', shape: 'ellipse', rx: 12, ry: 8, width: 6 });
+  // **寸法は領域に依存する。** runRace は内部で applyRegime してから fit ガードを評価し、finally で元へ戻す。
+  //   ∴ runRace の外で capacityOf を測るときは **自分で領域を合わせる**。旧コードの `staticFit6` は
+  //   「fullscale 適用後の CAR で評価される」とコメントしていたが実際は現在の領域 (卓上) で評価しており、
+  //   その値は一度も使われていなかったので誰も気づかなかった (2026-09-12 AZ5 で実測・変数ごと置換)。
+  const capAtFullscale = (c) => { applyRegime('fullscale'); const v = capacityOf(c, 6); applyRegime('tabletop'); return v; };
+  const capMid = capAtFullscale(midOval);   // 実測 5
+  const mm = runRace({ course: midOval, regime: 'fullscale', laps: 1, maxSec: 3, field: field('normal_fr', 6), crashRule: { rejoin: true, penaltySec: 3 } });
+  ok(capMid >= 1 && capMid < 6, `治具 中オーバル (fullscale): 実態収容 ${capMid} 台 (1..5 = 「減らす」ケースの母体)`);
+  ok(mm.fitReduced === 6 - capMid, `不一致 (fullscale×中オーバル×6台): fit ガードが ${mm.fitReduced}台 削減 (= 6-${capMid}・発走団子を防ぐ)`);
+  // (D-2) 実態収容 0 台 → **走らせず NO_ROOM を投げる** (AZ5)。1 台へ丸めて「走った」ことにしない。
   const smallOval = buildFromSpec({ name: '小オーバル', kind: 'track', shape: 'ellipse', rx: 1.2, ry: 0.75, width: 0.55 });
-  const staticFit6 = fitsAllCars(smallOval, 6);   // fullscale 適用後の CAR で評価される
-  const mm = runRace({ course: smallOval, regime: 'fullscale', laps: 1, maxSec: 3, field: field('normal_fr', 6), crashRule: { rejoin: true, penaltySec: 3 } });
-  ok(mm.fitReduced > 0, `不一致 (fullscale×小オーバル×6台): fit ガードが ${mm.fitReduced}台 削減 (発走団子を防ぐ)`);
+  ok(capAtFullscale(smallOval) === 0, `治具 小オーバル (fullscale): 実態収容 0 台 (「走らせない」ケースの母体)`);
+  let threw = null;
+  try { runRace({ course: smallOval, regime: 'fullscale', laps: 1, maxSec: 3, field: field('normal_fr', 6), crashRule: { rejoin: true, penaltySec: 3 } }); }
+  catch (e) { threw = e; }
+  ok(threw !== null && threw.code === 'NO_ROOM', `収容 0 台: runRace が NO_ROOM で停止 (code=${threw && threw.code})=0 台のレースを成立させない`);
+  // 旧挙動が実際に壊れていたことの測定 (1 台へ丸めた場合に、その 1 台が動けるか)。
+  const one = runRace({ course: smallOval, regime: 'fullscale', laps: 1, maxSec: 3, field: field('normal_fr', 1), crashRule: { rejoin: true, penaltySec: 3 }, trackNet: true, fitGuard: false });
+  // CAR.length も領域依存なので、比較する車長は **そのレースが走った領域 (fullscale)** の値で測る。
+  applyRegime('fullscale'); const lenFS = CAR.length; applyRegime('tabletop');
+  ok(one.netMax[0] < lenFS, `旧挙動の反証: 1 台へ丸めてもその車は ${one.netMax[0].toFixed(4)}m しか動けない (< fullscale 車長 ${lenFS.toFixed(3)}m)`);
   // capacity (実態容量を測る側) は fitGuard:false で素通し=団子を先に潰さない=AK7 を壊さない。
+  // **収容 0 台でも NO_ROOM を投げない** (投げると AK7 が実態容量を測れなくなる)。
   const cap = runRace({ course: smallOval, regime: 'fullscale', laps: 1, maxSec: 3, field: field('normal_fr', 6), crashRule: { rejoin: true, penaltySec: 3 }, trackNet: true, fitGuard: false });
-  ok(cap.fitReduced === 0, `capacity 経路 (fitGuard:false): fitReduced=0=素通し (実態容量を測れる=AK7 保全)`);
+  ok(cap.fitReduced === 0, `capacity 経路 (fitGuard:false): fitReduced=0=素通し (収容 0 台でも投げない=実態容量を測れる=AK7 保全)`);
 }
 
 console.log('\n' + (fails === 0 ? '────────── AK5 周辺正常化ゲート: 全パス ○ ──────────' : `────────── AK5 ゲート: ✗ ${fails} 件 NG ──────────`));

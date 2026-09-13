@@ -81,6 +81,12 @@ const GATES = [
   //   固定）、閉じた細い廊下の治具で欠陥の再現を保ち、product 側に「1 台は必ず置ける」仮定が戻っていないかを
   //   ソースの構造条件で検査する。所要は本ホスト実測 62.8s（2026-09-12・wf_run_all 内）。
   'wf_az2_fitguard.mjs',
+  // AZ5: 収容ゼロ (capN=0) をどの経路でも黙って 1 に丸めない。race_engine の fit ガードが 0 台のレースを
+  //   成立させないこと、capacity.js の driveableCapN が実走の 0 を返せること、main.js ⑥ と 4 つのレース
+  //   呼び出し側が 0 と減台を無言にしないことを、治具での再現・出荷コースの回帰・構造検査・変異試験で固定する。
+  //   所要は本ホスト実測 43.7s（2026-09-12・wf_run_all 内）。内訳の大半は B-1（出荷 66 コース × driveableCapN）と
+  //   B-2（実態収容 0 台の 74 セル × 旧挙動の反証レース）。
+  'wf_az5_capzero.mjs',
 ].map((name) => ({ name, args: [] }));
 
 // official_result は決定論2回照合→result.json 再検証→Node pin 照合の複合ゲート (AP20)。

@@ -224,7 +224,11 @@ for (const reg of ['tabletop', 'midscale', 'fullscale']) {
 console.log('\n=== D: 既定装備の完全縮退 (非既定を選んだときだけ記録条件が変わる) ===');
 const oval = buildFromSpec({ name: 'オーバル', kind: 'track', shape: 'ellipse', rx: 1.2, ry: 0.75, width: 0.55 });
 const PF = prog('normal_fr');
-const hashOf = (extra, phys) => runRace({ course: oval, laps: 2, physics: phys,
+// **【AZ5・2026-09-12 是正】領域を明示する。** 直前の C 節が fullscale を残すため、regime を渡さない
+//   この呼び出しは **fullscale を継いで**いた＝卓上の正準オーバル (2.4×1.5m) を車長 3.80m で走らせていた
+//   （実測 capacityOf=0）。D 節の主張（既定装備の縮退・非既定で hash が割れる）は**卓上でも成立する**ので
+//   意図どおり卓上を明示する。AZ5 が fit ガードを 1 台編成にも効かせたことで表面化した。
+const hashOf = (extra, phys) => runRace({ course: oval, regime: 'tabletop', laps: 2, physics: phys,
   field: [{ name: 'C0', lang: 'c', src: PF.code, carType: 'normal_fr', ...extra }],
   crashRule: { rejoin: false, penaltySec: 3 } }).verifyHash;
 for (const phys of [undefined, 'v2']) {
@@ -237,7 +241,8 @@ for (const phys of [undefined, 'v2']) {
 }
 // v2 でのみ物理が変わる (旧エンジンは装備を無視する) — 記録条件には載るが軌跡は同じ。
 {
-  const runTrace = (phys, extra) => runRace({ course: oval, laps: 2, physics: phys, trace: true,
+  // **【AZ5・2026-09-12】D の hashOf と同じ理由で領域を明示する**（兄弟箇所の取り残しを作らない）。
+  const runTrace = (phys, extra) => runRace({ course: oval, regime: 'tabletop', laps: 2, physics: phys, trace: true,
     field: [{ name: 'C0', lang: 'c', src: PF.code, carType: 'normal_fr', ...extra }],
     crashRule: { rejoin: false, penaltySec: 3 } }).traceHash;
   ok(runTrace(undefined, {}) === runTrace(undefined, { tire: 'rain', gear: 'auto2' }),

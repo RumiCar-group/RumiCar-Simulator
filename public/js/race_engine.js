@@ -18,7 +18,7 @@
 import { SIM, CONST, SENSOR_NOISE, SENSOR_HOLD, SENSOR_OPTICS, REGIME_STATE, REGIMES, registerCarType, SCALE_STATE, setCarScale, APP_VERSION, PHYSICS, setPhysicsMode } from './config.js';
 import { applyRegime } from './physics_dyn.js';
 import { carEdges } from './physics.js';
-import { makeSlot, rebuildSpawns, integrateSlot, integrateFleetV2, tickSlot, othersFor, releaseDrive, applyStartGate, fitsAllCars, normTire, normGear, normSusp, normSteer, normBrake } from './fleet.js';
+import { makeSlot, rebuildSpawns, integrateSlot, integrateFleetV2, tickSlot, othersFor, releaseDrive, applyStartGate, capacityOf, normTire, normGear, normSusp, normSteer, normBrake } from './fleet.js';
 import { buildController } from './runner.js';
 import { buildApi } from './api.js';
 
@@ -199,15 +199,48 @@ export function runRace(spec) {
   // 凍結グリッド (公式記録/fixture) は対象外=byte 不変の忠実再現。capacity.js は実態容量を「測る」
   // 側なので fitGuard:false で本ガードを外す (団子を先に潰すと実態容量が測れない=AK7 を壊さない)。
   // 出荷の全コース×卓上は静的に 6 台収まるので減らさない=既定レース/正準は no-op (verifyHash 不変)。
+  // **【AZ5・2026-09-12 是正】capN=0 を表現できるようにし、0 台では走らせない。**
+  //   旧実装は `while (nFit > 1 && !fitsAllCars(course, nFit)) nFit--;` と書かれており、AZ2 が main.js ⑤
+  //   から除いたのと同じ「1 台は必ず置ける」という仮定が **構文そのものに埋め込まれていた**。実測
+  //   (外形 18×18m・閉じた廊下 0.30m のコース × regime 'fullscale' × field 3 台): 1 台へ減らされ、その 1 台は
+  //   **一切動けない** (netMax 0.0000m・finishers 0・dnf 1)。壁の中には湧かない (freeSpawn は bestWall
+  //   フォールバックで壁交差しない点を返す) が、**レースとしては成立していないのに成立したことにされる**。
+  //   ∴ 走査を共有オラクル capacityOf (fleet.js・0 を返せる) に置換し、0 なら走らせず理由を投げる。
+  //   **再実装しない (CI-9)**: capacityOf は同じ `!fitsAllCars` 走査そのもの。呼び出し回数は、旧が
+  //   nFit=1 で止まっていた分だけ「1 台も置けない構成に限り +1 回」増える (純関数・副作用なし)。
+  //   出荷の全コース×卓上は 6 台収まるので **正準/既定レースは no-op** (f0〜f3 の verifyHash は byte 不変)。
+  //   凍結グリッド (grid != null = 公式記録の再現) は従来どおり対象外 ＝ 公式記録の再現性に影響しない。
+  // **【AZ5・層 4 レビュー是正】grid を正規化する（重-3）。** 空配列 `[]` は truthy なので
+  //   `grid == null` は偽 → fit ガードは「凍結グリッドだから」と外れるのに、`rebuildSpawns` 側は
+  //   `grid && grid[i]` が undefined なので **freeSpawn へフォールバック**していた＝ガードを外す前提
+  //   （凍結位置で忠実再現する）が成立していないのに外れる。実測: 収容 0 台のコースで `grid: []` を渡すと
+  //   NO_ROOM を投げずに 3 台のレースが verifyHash つきで成立した。`result.json` は公開リポジトリへ PR で
+  //   入ってくる外部データなので `"grid": []` は到達しうる。**判断と配置を同じ値で駆動する**ことで塞ぐ。
+  //   実配置の挙動は不変（`[]` も `null` も freeSpawn 経路）＝既存記録は byte 不変。
+  const gridUsed = (Array.isArray(grid) && grid.length > 0) ? grid : null;
   let fitField = field;
   let fitReduced = 0;
-  if (grid == null && spec.fitGuard !== false) {
-    let nFit = field.length;
-    while (nFit > 1 && !fitsAllCars(course, nFit)) nFit--;
-    if (nFit < field.length) { fitReduced = field.length - nFit; fitField = field.slice(0, nFit); }
-  }
 
   try {
+    // **fit ガードは try の内側に置く (AZ5・2026-09-12)。** 下の NO_ROOM は上の `setCarScale(1)` /
+    //   `applyRegime(regime)` の **後**に投げるので、try の外に置くと finally の live globals 復元
+    //   (SENSOR_NOISE/HOLD/OPTICS・regime・userK・physics mode) を飛ばして抜ける。既存の
+    //   `field.length === 0` の throw は**グローバルを触る前**なので安全だが、これは違う。
+    //   実測 (自分の初版で発生): fullscale の NO_ROOM レース 1 回のあと REGIME_STATE.active が
+    //   'fullscale' のまま残り、以後の卓上判定が全部おかしくなった (出荷 38 コースが「走り出せない」化)。
+    //   ライブなら利用者のノイズ/領域/carScale 設定が黙って壊れる。
+    if (gridUsed == null && spec.fitGuard !== false) {
+      const nFit = capacityOf(course, field.length);   // 0..field.length (0 = 1 台も置けない)
+      if (nFit < 1) {
+        // **0 台では走らせない。** 結果オブジェクトを返すと「レースが成立した」という嘘の記録
+        // (verifyHash つき) が生まれるため、既存の `field.length === 0` と同型で throw する。
+        // 呼び出し側が文言を出し分けられるよう code を付ける (メッセージ文字列に依存させない)。
+        const err = new Error('runRace: このコース×領域では車体スケール ×1 で 1 台も配置できません (実態収容 0 台)');
+        err.code = 'NO_ROOM';
+        throw err;
+      }
+      if (nFit < field.length) { fitReduced = field.length - nFit; fitField = field.slice(0, nFit); }
+    }
     // --- 持ち込み車種 (full JSON) を登録 ---
     for (const e of fitField) if (e.carDef && e.carDef.key) registerCarType(e.carDef);
 
@@ -245,7 +278,7 @@ export function runRace(spec) {
     });
 
     // --- spawn 配置 (grid 指定なら凍結位置で忠実再現・無ければ freeSpawn 算法) + 走行開始 ---
-    rebuildSpawns(slots, course, grid);
+    rebuildSpawns(slots, course, gridUsed);   // AZ5: ガードの判断と同じ値で配置する（`[]` は grid 無しと同義）
     // AD1: 実際に使った初期位置を配置データとして外部化する (result に刻めば算法非依存に再現可能)。
     const usedGrid = slots.map((s) => ({ x: s.spawn.x, y: s.spawn.y, theta: s.spawn.theta }));
     for (const s of slots) {

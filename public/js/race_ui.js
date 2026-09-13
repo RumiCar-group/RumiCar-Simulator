@@ -414,11 +414,21 @@ function verifyOfficialLocally(race) {
       recon: event.recon > 0 ? { laps: event.recon } : null,   // AO9: 記録の試走周回数で再走 (旧記録=未刻=0=従来)
       wear: !!event.wear });   // AO12: 記録のタイヤ摩耗設定で再走 (旧記録=未刻=false=従来)
   } catch (e) {
-    if (note) note.innerHTML = `<p class="official-verify-note warn">${escapeHtml(t('log.race.err', { e: (e && e.message) || e }))}</p>`;
+    // AZ5: 収容 0 台 (NO_ROOM) は技術メッセージで濁さず専用文言で出す。ここは**凍結グリッドが無い
+    //   旧記録**の再走でだけ起きうる (grid があれば fitGuard は発火しない ＝ 公式記録の再現性に影響しない)。
+    const cn0 = (event.course && typeof event.course === 'object') ? (event.course.name || '') : event.course;
+    const msg = (e && e.code === 'NO_ROOM') ? t('official.verify.noRoom', { name: cn0 })
+                                            : t('log.race.err', { e: (e && e.message) || e });
+    if (note) note.innerHTML = `<p class="official-verify-note warn">${escapeHtml(msg)}</p>`;
     return;
   }
   // 検証ノート: engineVer 差 → verifyHash 一致/不一致 (環境差で公式と一致しないことがある＝正準は固定環境)。
   let noteHtml = '';
+  // AZ5: 台数を減らして再走したなら**必ず言う**。減らせば結果は別物になり、verifyHash 不一致の理由が
+  //   「環境差」ではなく「そもそも同じ台数で走っていない」になる。無言だと利用者は環境差だと誤読する。
+  if (res.fitReduced > 0) {
+    noteHtml += `<p class="official-verify-note warn">${escapeHtml(t('official.verify.fitReduced', { was: field.length, n: field.length - res.fitReduced }))}</p>`;
+  }
   if (event.engineVer && event.engineVer !== APP_VERSION) {
     noteHtml += `<p class="official-verify-note warn">${escapeHtml(t('official.verify.engineDiff', { rec: event.engineVer, app: APP_VERSION }))}</p>`;
   }
@@ -765,7 +775,16 @@ function ghostVsWorld(cls, course) {
       crashRule: race.event.crashRule || { rejoin: false }, interact: false,
       maxSec: race.event.maxSec != null ? race.event.maxSec : 180,   // AB2: 記録の凍結 timeout で忠実再現
       ghost: true });
-  } catch (e) { logLine(t('log.race.err', { e: (e && e.message) || e })); return; }
+  } catch (e) {   // AZ5: 収容 0 台 (NO_ROOM) は専用文言 (検証再走と同じ扱い＝兄弟経路を取り残さない)
+    logLine((e && e.code === 'NO_ROOM') ? t('official.verify.noRoom', { name: rcourse.name })
+                                        : t('log.race.err', { e: (e && e.message) || e }));
+    return;
+  }
+  // AZ5: ゴースト対戦は 2 台。減って 1 台になったら「対戦」ではないので必ず言う。
+  //   **専用キーを使う（層 4 レビュー是正）**: この経路は verifyHash を一切照合しないので、
+  //   `official.verify.fitReduced`（「検証ハッシュの不一致は環境差ではない」と言う）を流用すると
+  //   **存在しない照合の話をする**ことになる。言えるのは「対戦として並んでいない」だけ。
+  if (res.fitReduced > 0) logLine(t('ghost.fitReduced', { was: field.length, n: field.length - res.fitReduced }));
   $('dlgRankings').close();
   // AK6: 公式記録は frames を保存しないため、世界ベストのゴーストは現行エンジンでの再走 (rerun)。記録の
   // engineVer を添えて「収録フレーム再生ではない=別物になり得る」を正直に表示する。

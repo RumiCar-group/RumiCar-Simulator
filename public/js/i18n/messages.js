@@ -435,6 +435,14 @@ export const MESSAGES = {
   'official.verify.engineDiff':{ ja: '⚠ 物理版が異なります (記録 engineVer {rec} / このアプリ {app})。別版の記録として扱われます。', en: '⚠ Physics version differs (record engineVer {rec} / this app {app}). It is treated as a record of a different version.' },
   'official.verify.noCourse':  { ja: 'コース「{name}」が見つからないため再実行できません (コース定義の同梱が必要かもしれません)。', en: 'Cannot re-run: course "{name}" was not found (the course definition may need to be bundled).' },
   'official.verify.refOnly':   { ja: 'この大会はまだ結果が未確定のため、ローカル再実行の参考値のみ表示します ({hash})。', en: 'No official result yet for this race; showing the local re-run reference value only ({hash}).' },
+  // AZ5: 再走が 0 台/減台で成立しなかったことを黙らない。減らして走れば結果は別物になり、verifyHash 不一致の
+  //   理由が「環境差」ではなく「同じ台数で走っていない」になる。無言だと利用者は環境差だと誤読する。
+  'official.verify.noRoom':     { ja: '⚠ 再実行は車体スケール ×1 (標準) で行います。その大きさではコース「{name}」のこの領域に車を 1 台も配置できないため、再実行しませんでした (壁に当たらず、前方に発走の余地を残せる位置が見つかりません)。', en: '⚠ The re-run uses car scale ×1 (standard). At that size not a single car can be placed in course "{name}" in this regime, so it was not re-run (no position is clear of the walls with room ahead to pull away).' },
+  // AZ5【層 4 レビュー是正】ゴースト対戦 (`ghostVsWorld`) は verifyHash を一切照合しない経路なので、
+  //   下の `official.verify.fitReduced`（検証ハッシュの不一致に言及する）を流用してはいけない。
+  //   ここで言うべきは「2 台のはずが減った＝対戦が成立していない」だけ。
+  'ghost.fitReduced':           { ja: '⚠ このコースには {was} 台すべては収まらないため、{n} 台で再生しました。対戦として並んでいません。', en: '⚠ Not all {was} cars fit this course, so the replay ran with {n}. They are not lined up as a head-to-head.' },
+  'official.verify.fitReduced': { ja: '⚠ このコースには {was} 台すべては収まらないため、{n} 台に減らして再実行しました。公式と同じ台数で走っていないため、検証ハッシュの不一致は環境差によるものではありません。', en: '⚠ Not all {was} cars fit this course, so the re-run used {n}. It did not run with the same field as the official record, so a verify-hash mismatch here is not an environment difference.' },
   // この大会にエントリー (PR)
   'official.entry.heading':  { ja: 'この大会にエントリー (PR)', en: 'Enter this race (PR)' },
   'official.entry.hint':     { ja: '現在の車 (アクティブな列のプログラム+車種) をエントリーします。車種定義 (carDef) を同梱するので独自車種でも参加できます。', en: 'Enters the current car (the active card\'s program + car type). The car definition (carDef) is bundled so custom cars can join too.' },
@@ -692,6 +700,20 @@ export const MESSAGES = {
   // AS3: finish ライン (完走判定) を持たない開けたコース。周回が計上されないためレースは成立しない。
   'log.race.nofinish':  { ja: '「{name}」はゴールライン(周回判定)を持たない開けたコースのため、レースは開催できません。ソロ走行(▶)でお使いください。', en: '"{name}" is an open course with no finish line (no lap counting), so a race cannot be held. Use solo driving (▶) instead.' },
   'log.race.err':       { ja: 'レース実行エラー: {e}', en: 'Race error: {e}' },
+  // AZ5: 収容ゼロを全経路で正直に扱う。runRace は 0 台では走らせず NO_ROOM を投げる (0 台のレース結果を
+  //   作ると「成立した」という嘘の記録が verifyHash つきで生まれるため)。文言は fitsAllCars が偽になる
+  //   理由だけを言う (壁交差／前方の発走余地／start 団子)。「通路が狭い」は判定が見ていない量なので書かない (CI-14)。
+  // **【層 4 レビュー是正 2026-09-12】「この大きさ・スケールでは」を外した。** `runRace` は AK2/D10 により
+  //   `setCarScale(1)` で userK を 1 へ正規化してから収容を測る (race_engine.js) ので、**判定は利用者の
+  //   スライダー値を見ていない**。実測: 廊下 0.8m×0.08m の保存コースは carScale 0.4 に落ち着いて
+  //   ライブ capacityOf=6 なのに、🏁 は ×1 で測って NO_ROOM になる。旧文言はその食い違いを隠したうえ
+  //   「車体スケールを変える」という**構造的に効かない**対処を案内していた (スライダーを動かしても
+  //   判定は 1 ミリも動かない)。∴ 測っている条件 (×1) を明示し、効く対処だけを案内する。
+  //   ライブ側の判定 (enforceFitRatio) が利用者スケールで測ることとの不整合は **AZ6 の申し送り**。
+  'log.race.noRoom':    { ja: '⚠ レースは車体スケール ×1 (標準) で走ります。その大きさでは「{name}」のこの領域に車を 1 台も配置できないため、レースを開始しませんでした (壁に当たらず、前方に発走の余地を残せる位置が見つかりません)。領域を変えるか、より広いコースをお使いください。', en: '⚠ Races always run at car scale ×1 (standard). At that size not a single car can be placed in "{name}" in this regime, so the race did not start (no position is clear of the walls with room ahead to pull away). Change the regime, or use a larger course.' },
+  // AZ5: エンジンは AK5 以来 fitReduced を返していたのに、呼び出し側が誰も読んでいなかった (実測 2026-09-12)。
+  //   「{was} 台で始めたはずが {n} 台で走っていた」を無言にしない。
+  'log.race.fitReduced':{ ja: '🚦 「{name}」には {was} 台すべては収まらないため、{n} 台に減らして走りました (残りはスタートできていません)。台数を減らすか、より広いコースをお使いください。', en: '🚦 Not all {was} cars fit in "{name}", so the race ran with {n} (the rest never started). Reduce the field or use a larger course.' },
   'log.event.start':    { ja: '📋 開催 {cls}: {n}台で成立 (補充 {filler}台) → 締切・決定論レース', en: '📋 Event {cls}: field of {n} (filler {filler}) → closed, deterministic race' },
   'log.langUnknown':    { ja: '言語不明', en: 'unknown lang' },
   'log.ghProgsLoaded':  { ja: 'GitHub 投稿プログラムを {n} 件読み込みました (走行メニューの「🌐 みんなの投稿」)。', en: 'Loaded {n} community program(s) from GitHub (see "🌐 Community" in the program menu).' },
@@ -715,6 +737,10 @@ export const MESSAGES = {
   // 実際 wf_capacity_fit は出荷 24 構成で「壁ではなく driveable 起因の capN=0」を実測している)。
   'log.autoTabletopFit': { ja: '🔭 「{name}」はこの領域では車を 1 台も置けません (壁に当たらず、前方に発走の余地を残せる位置が見つかりません)。領域を「卓上 (実機相当)」に自動で戻しました (変えたいときは領域セレクタで変更)。', en: '🔭 Not a single car can be placed in "{name}" in this regime (no position is clear of the walls with room ahead to pull away). Switched the regime back to "Tabletop (real-car equivalent)" automatically (change it via the regime selector if you want).' },
   'log.capZeroWarn':    { ja: '⚠ 「{name}」はこの大きさ・スケールでは車を 1 台も置けません (壁に当たらず、前方に発走の余地を残せる位置が見つかりません)。台数を {was} 台から {n} 台にしますが、この 1 台はスタート地点で壁と重なっている可能性があります — コースの通路幅と、スタート地点の前方の余地をご確認ください。', en: '⚠ Not a single car fits in "{name}" at this size/scale (no position is clear of the walls with room ahead to pull away). Setting the field from {was} to {n}, but that car may overlap a wall at the start — please check the corridor width and the space ahead of the start position.' },
+  // AZ5: ゼロには 2 種類ある。上の capZeroWarn は **静的に置けない** (fitsAllCars=偽)。こちらは
+  //   **静的には置けるが実走で 1 台も走り出せない** (driveableCapN=0・発走順次化ゲート込みの実走で
+  //   全車が車長ぶんも動けない)。理由が違うので同じ文言にしない (CI-14: 測っていないことを断定しない)。
+  'log.capZeroDriveWarn': { ja: '⚠ 「{name}」はこの大きさ・スケールでは、置くことはできても実際に走り出せる車が 1 台もありません (発走しても車体の長さぶんも動けません)。台数を {was} 台から {n} 台にしますが、この 1 台も走り出せない可能性があります — スタート地点の前方に走るための余地があるかご確認ください。', en: '⚠ In "{name}" at this size/scale the cars can be placed, but not one of them can actually pull away (none moves even its own car length after the start). Setting the field from {was} to {n}, but that car may not get going either — please check that there is room to drive ahead of the start position.' },
   'log.carAdded':       { ja: '車両 {name} を追加しました (計 {n} 台)', en: 'Added car {name} ({n} total)' },
   'log.fragileClearance': { ja: '⚠ 最小クリアランス {v}（脆弱）— {n} 台が接触寸前まで詰まっています。台数を減らすか、より広いコースにすると安定します。', en: '⚠ Min clearance {v} (fragile) — {n} cars are packed nearly touching. Reduce the number of cars or use a wider course for stability.' },
   'log.carRemoved':     { ja: '車両 {name} を削除しました (計 {n} 台)', en: 'Removed car {name} ({n} total)' },

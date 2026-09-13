@@ -229,13 +229,21 @@ function checkStructural(mainRaw, fleetRaw) {
     v.push('main.js ⑤ が capacityOf(course, FLEET.maxCars) を使っていない');
   if (/while\s*\(\s*capN\s*>\s*1\s*&&\s*!fitsAllCars/.test(mainSrc))
     v.push('main.js ⑤ に旧実装 `while (capN > 1 && !fitsAllCars…)` が復活している');
-  if (!/const capZero = capN < 1;/.test(mainSrc))
-    v.push('main.js ⑤ が capN=0 を判定していない（capZero が無い）');
+  // 【AZ5・2026-09-12 追随】⑤ はゼロを 2 種類（静的／実走）に分けた。**守る不変条件は不変**
+  //   （0 を黙って 1 に丸めない・0 のときに capReduced「最大 n 台なら走り出せる」と言わない・
+  //     減らす台数が無い経路でも黙らない）。パターンだけ新しい形に合わせる。
+  //   F) の変異試験が、この 3 条件それぞれを壊して赤くなることを毎回機械確認する。
+  if (!/let capZeroStatic = capN < 1;/.test(mainSrc))
+    v.push('main.js ⑤ が静的 capN=0 を判定していない（capZeroStatic が無い）');
+  if (!/const capZero = capZeroStatic \|\| capZeroDrive;/.test(mainSrc))
+    v.push('main.js ⑤ が 2 種類のゼロを束ねていない（capZero が無い）');
   if (!/if \(capZero\) capN = 1;/.test(mainSrc))
     v.push('main.js ⑤ の capN=0 → 1 の丸めが無い／形が変わった');
-  if (!/t\(capZero \? 'log\.capZeroWarn' : 'log\.capReduced'/.test(mainSrc))
+  if (!/const zeroKey = capZeroDrive \? 'log\.capZeroDriveWarn' : 'log\.capZeroWarn';/.test(mainSrc))
+    v.push('main.js ⑤ がゼロの理由（静的／実走）で文言を出し分けていない');
+  if (!/t\(capZero \? zeroKey : 'log\.capReduced'/.test(mainSrc))
     v.push('main.js ⑤ が capN=0 のときに capReduced（「最大 n 台なら走り出せる」）を出し分けていない＝矛盾する 2 行が出る');
-  if (!/\} else if \(capZero\) \{[\s\S]{0,200}?log\.capZeroWarn/.test(mainSrc))
+  if (!/\} else if \(capZero\) \{[\s\S]{0,200}?logLine\(t\(zeroKey/.test(mainSrc))
     v.push('main.js ⑤ で「減らす台数が無い」経路の capN=0 告知が無い（無言になる）');
   // --- main.js ④': 実態による救済が丸ごと残っていること ---
   const az4p = /if \(!noRace && sel\.value !== 'tabletop' && fits6 !== true && !fitsAllCars\(course, 1\)\) \{([\s\S]{0,600}?)\n    \}/.exec(mainSrc);
@@ -275,8 +283,11 @@ const MUTATIONS = [
   ["④' の救済本体（卓上へ戻す）を削除", m => m.replace("      sel.value = 'tabletop';\n      logLine(t('log.autoTabletopFit'", "      logLine(t('log.autoTabletopFit'"), null],
   ["④' 後の再クランプを削除", m => m.replace("      clampByProxy();\n      clampByFit();\n    }", "    }"), null],
   ['④ が下限でも true を返す', m => m.replace('if (!(userK > 0.4 + 1e-9)) return null;', 'if (!(userK > 0.4 + 1e-9)) return true;'), null],
-  ['⑤ の capZeroWarn 出し分けを削除（矛盾する 2 行に戻す）', m => m.replace("t(capZero ? 'log.capZeroWarn' : 'log.capReduced'", "t('log.capReduced'"), null],
-  ['⑤ の capN<1 判定を殺す', m => m.replace('const capZero = capN < 1;', 'const capZero = false;'), null],
+  ['⑤ の capZeroWarn 出し分けを削除（矛盾する 2 行に戻す）', m => m.replace("t(capZero ? zeroKey : 'log.capReduced'", "t('log.capReduced'"), null],
+  ['⑤ の静的 capN<1 判定を殺す', m => m.replace('let capZeroStatic = capN < 1;', 'let capZeroStatic = false;'), null],
+  ['⑤ の 2 種類のゼロの束ねを静的だけに戻す（AZ5 の実走ゼロを握りつぶす）', m => m.replace('const capZero = capZeroStatic || capZeroDrive;', 'const capZero = capZeroStatic;'), null],
+  ['⑤ のゼロ理由の出し分けを潰す（実走ゼロに静的の文言を当てる）', m => m.replace("const zeroKey = capZeroDrive ? 'log.capZeroDriveWarn' : 'log.capZeroWarn';", "const zeroKey = 'log.capZeroWarn';"), null],
+  ['⑤ の「減らす台数が無い」経路の告知を殺す', m => m.replace('logLine(t(zeroKey, { name: course.name, n: capN, was: slots.length }));', ''), null],
   ['capacityOf の走査を n>=2 にする', null, f => f.replace('while (n >= 1 && !fitsAllCars(course, n)) n--;', 'while (n >= 2 && !fitsAllCars(course, n)) n--;')],
   ['capacityOf の戻り値を 1 に丸める（「1 台は必ず置ける」の嘘を再注入）', null, f => f.replace('  return n;   //', '  return Math.max(1, n);   //')],
 ];

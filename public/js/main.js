@@ -609,6 +609,23 @@ function autoSpectate() { const c = $('raceWatch'); return !!(c && c.checked); }
 // AB13: お手本ライン トグル (PX-014)。ON のとき frame() が実走軌跡のなめらか基準線を重ねる。
 function refLineOn() { const c = $('refLine'); return !!(c && c.checked); }
 
+// Stage AZ5: レースエンジンの「収容」に関する 2 つの事実を、**どの経路でも同じ文言で**利用者へ返す。
+//   ① runRace が NO_ROOM を投げた = このコース×領域×スケールでは 1 台も配置できない (0 台では走らせない)。
+//   ② res.fitReduced > 0 = 収まらないぶんを減らして走った。**エンジンは AK5 以来ずっと報告していたのに、
+//      呼び出し側が誰も読んでいなかった** (実測 2026-09-12: fitReduced の参照は race_engine.js 自身と
+//      wf_ak5_robustness.mjs だけで、product は 0 件)。∴「3 台で始めたはずが 1 台で走っていた」ことが
+//      利用者に一切伝わらなかった。AZ1 の「失敗と 0 件を区別する」と同型で、ここも無言にしない。
+// 経路ごとに書かず 1 箇所へ集約する (フィルタを片側にだけ書くと、もう片方が本番で露出する)。
+function raceErrLine(e) {
+  return (e && e.code === 'NO_ROOM')
+    ? t('log.race.noRoom', { name: courseDisplayName(course) })
+    : t('log.race.err', { e: (e && e.message) || e });
+}
+function noteFitReduced(res, requested) {
+  if (!res || !(res.fitReduced > 0)) return;
+  logLine(t('log.race.fitReduced', { name: courseDisplayName(course), was: requested, n: requested - res.fitReduced }));
+}
+
 // AS3: 完走判定 (finish ライン) を持たないコース = 開けた raw コース (ドリフト広場 / 競技グラウンド)。
 //   lap.js は finish が無いと update() が即 return するため周回が **原理的に** 計上されず、レースを
 //   始めても全車が timeout DNF になるだけだった。開始せず理由を明示する (両コースの desc 自身が
@@ -642,9 +659,10 @@ function runRaceNow() {
     res = runRace({ course, regime, laps, field: buildRaceField(), crashRule, interact, report: true, ghost: true,
       recon: reconN > 0 ? { laps: reconN } : null, wear: wearOn });
   } catch (e) {
-    logLine(t('log.race.err', { e: (e && e.message) || e }));
+    logLine(raceErrLine(e));   // AZ5: 収容 0 台は専用文言 (技術メッセージで濁さない)
     return;
   }
+  noteFitReduced(res, slots.length);   // AZ5: 減らして走ったことを無言にしない
   const showResults = () => {
     renderRaceResult(res, { laps, regime, crashTxt });
     logLine(t('log.race.done', { fin: res.finishers.length, dnf: res.dnf.length, sec: res.simSec.toFixed(1), hash: res.verifyHash }));
@@ -777,7 +795,8 @@ function closeAndRace() {
   try {
     res = runRace({ course, regime, laps: raceEvent.laps, field, crashRule, interact, report: true, ghost: true,
       recon: reconN > 0 ? { laps: reconN } : null, wear: wearOn });   // AO12: タイヤ摩耗 (現 UI 設定・§6)
-  } catch (e) { logLine(t('log.race.err', { e: (e && e.message) || e })); return; }
+  } catch (e) { logLine(raceErrLine(e)); return; }   // AZ5: 収容 0 台は専用文言
+  noteFitReduced(res, field.length);                 // AZ5: 減らして走ったことを無言にしない
   $('dlgEvent').close();
   const eventInfo = {
     classLabel: evClassLabel(raceEvent.class),
@@ -1455,8 +1474,11 @@ function enforceFitRatio(reason) {
       // 告知は下の 1 箇所だけで行う: ここで先に出すと、直後の log.capReduced「最大 1 台しか走り出せません」と
       // **同じ経路で矛盾する 2 行**になる (main.js の投稿導線が「開けなかったのに『開いた』と言わない」と
       // 戒めているのと同じ型)。④' は noRace と卓上を対象外にするので、ここは卓上とは限らない。
-      const capZero = capN < 1;
-      if (capZero) capN = 1;
+      // **【AZ5】ゼロには 2 種類あり、理由が違うので文言も分ける** (CI-14「測っていないことを言わない」):
+      //   capZeroStatic … 静的に 1 台も置けない (壁交差 0・前方余地ありの位置が無い)        → log.capZeroWarn
+      //   capZeroDrive  … 静的には置けるが **実走で 1 台も走り出せない** (⑥ の driveableCapN=0) → log.capZeroDriveWarn
+      let capZeroStatic = capN < 1;
+      let capZeroDrive = false;
       // ⑥ 実態容量へ更に絞る (Stage AK7・GitHub #26 続報・CI-14): 静的に置けても normal_fr が単独で
       //    コーナー壁へ舵を切り込んで楽め込むコース (最狭のナローシケイン等) があり、静的幾何では正常スポーンと
       //    区別不可 (正準オーバルの方が静的クリアランスは悪いのに正常走行)。よって卓上は **実走で「実際に
@@ -1465,10 +1487,29 @@ function enforceFitRatio(reason) {
       //    fullscale/midscale は専用コース×凍結グリッドで判定述語の母体外=静的のまま (卓上の楽め込みバグの領分)。
       //    perf: 単独車 (slots.length≤1) は楽め込み (他車に押される) が原理上起きず縮小も発火しないので
       //    実走プローブを省く (コース閲覧の体感を保つ)。多台のときだけ実態容量を測る。発走直前 startAuto でも確定。
+      //    ⚠ **【AZ5・層 4 レビューの指摘を実測で確認・AZ6 へ申し送り】上の perf 理由は AZ5 の新しい失敗モードを
+      //    説明していない。** 「閉じた部屋で 1 台が自力で動けない」は他車と無関係に起きるので、`slots.length > 1`
+      //    で落とすと **既定 (1 台) の利用者には実走ゼロが一切告知されない**（実測: 幅 4×車幅 × 奥行 1.7×車長 の
+      //    部屋で 静的 capacityOf=3・stuckAtN(1)=1 なのに無言。🏁 も `capacityOf(course,1)=1` で NO_ROOM に
+      //    ならず「0台完走 / 1台リタイア」だけが出る）。
+      //    **AZ5 では広げない**: 1 台ぶんの実走プローブの実測コストは治具 27.7ms・出荷最大「ウェットテクニカル (雨)」
+      //    壁 960 本で **90.3ms** で、コース選択のたびに払うと UI の目安 50ms を超える。発走直前 (reason==='race')
+      //    に限れば払えるが、それは**発火条件そのものの変更**で、出荷 66 コース × 3 領域 × 6 carScale の
+      //    落ち着き先の全件列挙をやり直さないと「救済側以外の変化 0」(CI-7) を担保できない。
+      //    ∴ **判定コアを DOM から分離する AZ6 で、全格子の回帰と一緒に扱う。**
+      //    **【AZ5・2026-09-12 是正】driveableCapN が 0 を返せるようになった** (capacity.js)。旧実装は
+      //    `if (cap < 1) cap = 1;` で 0 を 1 へ丸めており、ここが受け取るのは常に ≥1 だった。その結果、
+      //    静的には置けるが実走で 1 台も走り出せない構成 (実測: 卓上・閉じた部屋 幅 4×車幅 × 奥行
+      //    1.7×車長 = 静的 capN 3・実走 0 台) で `log.capReduced`「最大 1 台なら走り出せます」という
+      //    **嘘を告知していた**。0 を受け取ったら capZeroDrive を立て、capN は表示可能な 1 に留める。
       const regNow = sel ? sel.value : 'tabletop';
-      if (regNow === 'tabletop' && reason !== 'carScale' && capN > 1 && slots.length > 1) {
-        capN = Math.min(capN, driveableCapN(course, regNow, capN));
+      if (!capZeroStatic && regNow === 'tabletop' && reason !== 'carScale' && capN > 1 && slots.length > 1) {
+        const drv = driveableCapN(course, regNow, capN);        // 0..capN (AZ5: 0 を返せる)
+        if (drv < 1) capZeroDrive = true; else capN = Math.min(capN, drv);
       }
+      const capZero = capZeroStatic || capZeroDrive;
+      if (capZero) capN = 1;                                   // 0 台は表示できないので 1 に留める (告知は下で必ず出す)
+      const zeroKey = capZeroDrive ? 'log.capZeroDriveWarn' : 'log.capZeroWarn';
       courseCapN = capN;                                       // carCap()/refreshColControls の追加上限
       if (!running && slots.length > capN) {
         const was = slots.length;
@@ -1478,10 +1519,10 @@ function enforceFitRatio(reason) {
         buildFleetColumns();
         selectCar(activeIdx);
         // 実態ゼロのときは「最大 n 台なら走り出せる」と言ってはいけない (capReduced はそう言う)。
-        logLine(t(capZero ? 'log.capZeroWarn' : 'log.capReduced', { name: course.name, n: capN, was }));
+        logLine(t(capZero ? zeroKey : 'log.capReduced', { name: course.name, n: capN, was }));
       } else if (capZero) {
         // 減らす台数が無い (既に 1 台・または走行中で splice しない) 場合も、実態ゼロは必ず伝える。
-        logLine(t('log.capZeroWarn', { name: course.name, n: capN, was: slots.length }));
+        logLine(t(zeroKey, { name: course.name, n: capN, was: slots.length }));
       }
     }
     warnFragileClearance();   // Stage AI: 比率補正/N台縮小が落ち着いた配置で連続クリアランスを監視

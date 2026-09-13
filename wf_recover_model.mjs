@@ -67,11 +67,17 @@ const knownHit = new Set();
 //   嘘になる ＝ B-2c が潰した「分子だけ刻み直して分母が腐る」と同型。ここで実測と突き合わせて固定する。
 const cellStuck = new Map();   // `${コース名}|${台数}` -> 走り出せない車の台数
 const capOf = new Map();       // コース名 -> driveableCapN
+const capZeroCourses = [];     // AZ5: driveableCapN=0 (1 台も走り出せない) の出荷コース。あってはならない。
 for (const spec of specs) {
   let course; try { course = buildFromSpec(spec); } catch { continue; }
   setRegimeScale(1); setCarScale(0.8);
   const cap = driveableCapN(course, 'tabletop', FLEET.maxCars);   // 本物の実態容量 (ライブと同一オラクル)
   capOf.set(spec.name, cap);
+  // **【AZ5・2026-09-12】cap は 0 を取りうるようになった** (旧実装は末尾で 0 を 1 へ丸めていた)。
+  //   下の (B)(C) はどれも `n <= cap` で絞るので、cap=0 のコースは **全台数が黙ってスキップされる**
+  //   ＝ 検査から消える (「語彙外の状態語で行が件数から消える」のと同じ型)。0 は「1 台も走り出せない
+  //   出荷コース」＝それ自体が重大な退行なので、消さずにここで赤くする。
+  if (cap < 1) capZeroCourses.push(spec.name);
   if (cap < FLEET.maxCars) capped.push(`${spec.name}(cap${cap})`);
   for (let n = 1; n <= FLEET.maxCars; n++) {
     setRegimeScale(1); setCarScale(0.8);
@@ -97,6 +103,7 @@ for (const spec of specs) {
     cellStuck.set(`${spec.name}|${n}`, nStuckCell);
   }
 }
+ok(capZeroCourses.length === 0, `実態容量ゼロの出荷コース 0 件 (driveableCapN=0 は 1 台も走り出せない＝下の n<=cap 検査から黙って消える・違反 ${capZeroCourses.length} 件${capZeroCourses.length ? ': ' + capZeroCourses.join(', ') : ''})`);
 ok(minMaxNet > FROZEN, `凍結車ゼロ: 全 ${totCars} 車の最小 最大変位 = ${minMaxNet.toFixed(3)}m > ${FROZEN}m (元バグ net~0.004 は一掃)`);
 ok(offCap.length === 0, `実態容量内 (n≤capN) で走り出せない車 0 = 完全0 (違反=${offCap.length}件${offCap.length ? ': ' + offCap.join(', ') : ''}・既知の例外 ${KNOWN_STUCK.length} 件は別掲)`);
 ok(knownHit.size === KNOWN_STUCK.length, `既知の例外 (KNOWN_STUCK) は全件が現に違反している ${knownHit.size}/${KNOWN_STUCK.length} (直ったらリストから外すこと: ${KNOWN_STUCK.map((e) => e.name + '|n=' + e.n).join(', ')})`);
