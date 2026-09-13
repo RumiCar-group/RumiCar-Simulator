@@ -44,6 +44,10 @@ const EVENT = {
   class: 'open', specCar: null, budget: null,
   crashRule: { rejoin: true, penaltySec: 3 },
   minField: 3, grid: 'entryOrder', interact: true, noise: false,
+  // engineVer は **わざと APP_VERSION と違える** (上流の大会は別の版で確定されているのが実態)。
+  // これにより race_ui.js の `event.engineVer !== APP_VERSION` 分岐 (版差の警告バナー) を常に通る。
+  // AZ3 の層 4 レビューで判明: v8.2.0 の間はたまたま一致して**警告の出ない経路**を踏んでおり、
+  // 版バンプのたびに暗黙に経路が変わる形だった。literal で固定して以後は動かさない。
   engineVer: 'v8.2.0', physicsMode: 'v2',
   entryWindow: { open: '', close: '' },           // 空 = 受付中 (raceStatus → 'open')
 };

@@ -27,6 +27,16 @@
 //       カタログ自身しか見ないので、**カタログだけ直してインライン本文を直し忘れると全部緑のまま**だった
 //       (AU2 で変異注入により実測: インライン本文を旧文言へ戻しても exit=0)。
 //       既存の陳腐化は EXPECTED_STALE で件数と顔ぶれを固定し、**増えたら赤・直ったらリストを外せと赤**にする。)
+//   ⑩ index.html の **静的 title=** (data-i18n-title 併記分) ≡ ja カタログ であること        … 違反で非ゼロ終了
+//      (AZ3・⑨ と同型の「見せかけの緑」の根治。`i18n.js:44` が JS 有効時に `el.title` をカタログで
+//       上書きするため、**静的な title= が古くても画面上は正しく見える**。②はキーの存在しか見ず、
+//       ⑨ は data-i18n-html の innerHTML しか見ないので、**title だけ腐ると全部緑のまま**だった。
+//       AZ3 の実測で 76 件中 13 件が不一致で、うち `fleet.brake.title` は **v8.0.0 で是正した旧主張**
+//       (「卓上/中スケールでは停止距離が 3 割ほど伸びる」) を JS 無効面に残し、`cars.share.title` は
+//       `title=""` の空だった。13 件すべて ja へ一致させたうえで、ここで固定する。
+//       **逆方向も課す**: ページ中の静的 `title=` の総数 ≡ 照合できた要素数 (＝`data-i18n-title` を書き忘れた
+//       裸の tooltip が 0 件)。これが無いと「data-i18n-title を外す/最初から付けない」だけで静かに検査対象外に
+//       できてしまう〔層 4 レビュー 2026-09-13 が変異で実証: 全削除しても「0 要素すべて一致」で緑だった〕。)
 //
 // 使い方:  node wf_i18n_check.mjs        (PASS なら exit 0・違反で exit 1)
 //   ④ で落ちたら en を再確認のうえ node wf_i18n_rehash.mjs で h を更新する。
@@ -262,6 +272,65 @@ const inlineNew = inlineMiss.filter((k) => !EXPECTED_STALE.includes(k));        
 const inlineFixed = EXPECTED_STALE.filter((k) => inlineRows.some((r) => r.key === k) && !inlineMiss.includes(k));  // 直った＝リストから外せ
 const inlineGone = EXPECTED_STALE.filter((k) => !inlineRows.some((r) => r.key === k));       // HTML から消えた＝リスト腐り
 
+// ---- ⑩ index.html の静的 title= (data-i18n-title 併記分) ≡ ja カタログ (AZ3) ----
+// 例外リストは**置かない**: AZ3 で 13 件すべて一致させたので「不一致があれば赤」で足りる。
+//   意図的に短縮したいケースが将来出たら、⑨ の EXPECTED_STALE と同じ
+//   「増えたら赤・直ったら外せと赤」を足すこと (件数を黙って増やせる形にしない)。
+// ⚠ タグ境界は **引用符を意識して** 走査する。`<[^>]*>` で切ると、属性値の中の `&lt;大会&gt;` が
+//   生の `<大会>` で書かれた瞬間にタグが途中で切れ、検査が**黙って対象を落とす**
+//   (AZ3 の実装中に実際に踏んだ: 一括置換で `<`/`>` を実体化し忘れ、2 件が「併記なし」へ転落した)。
+const TITLE_STALE_NOTE = 'i18n.js:44 が JS 有効時に el.title を上書きするため画面では見えないが、公開ソース/JS 無効時/ハイドレーション前には出る';
+const decAttr = (x) => x.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+// 引用符の外にある最初の '>' までを開始タグとみなす (見つからなければ -1)。
+const tagEndFrom = (str, lt) => {
+  let i = lt + 1, q = null;
+  while (i < str.length) {
+    const c = str[i];
+    if (q) { if (c === q) q = null; }
+    else if (c === '"' || c === "'") q = c;
+    else if (c === '>') return i + 1;
+    i++;
+  }
+  return -1;
+};
+const titleRows = [];
+{
+  const re10 = /data-i18n-title="([^"]+)"/g;
+  let m10;
+  while ((m10 = re10.exec(html)) !== null) {
+    const key = m10[1];
+    const lt = html.lastIndexOf('<', m10.index);
+    const end = lt < 0 ? -1 : tagEndFrom(html, lt);
+    if (end < 0) { titleRows.push({ key, lit: null, why: 'タグ境界を取れない' }); continue; }
+    const tag = html.slice(lt, end);
+    const tm = tag.match(/(?:\s|["'])title="([^"]*)"/);   // data-i18n-title= 自身に当てない
+    titleRows.push({ key, lit: tm ? decAttr(tm[1]) : null, raw: tm ? tm[1] : null, why: tm ? null : '静的 title= 併記なし' });
+  }
+}
+const titleBroken = titleRows.filter((r) => r.lit === null).map((r) => `${r.key} — ${r.why}`);
+const titleMiss = [];
+for (const r of titleRows) {
+  if (r.lit === null) continue;
+  const e = MESSAGES[r.key];
+  if (!e) continue;                                       // カタログ不在は ② が担当
+  if (r.lit !== e.ja) titleMiss.push(r.key);
+}
+// 生の `<` / `>` を属性値へ書かせない。decode すると値としては一致するので上の突合は素通りするが
+// (AZ3 の変異試験 4 で実測)、`<[^>]*>` でタグを切る検査器はそこで**黙って対象を落とす**。
+// 値が正しいことと、検査器が対象を掴めることは別 — 後者をここで守る。
+const titleRawLt = titleRows.filter((r) => r.raw !== null && /[<>]/.test(r.raw)).map((r) => r.key);
+// **逆方向の検査（層 4 レビュー 2026-09-13 の指摘で追加）**: 上の突合は「`data-i18n-title` を持つ要素」だけを
+//   母集団にするので、**`data-i18n-title` を書き忘れた要素は静かに検査対象外**になる。実測でこの穴を確認した —
+//   ① `data-i18n-title` を全削除すると「0 要素すべて一致」で緑 ② 1 要素だけ外して title を腐らせても緑
+//   ③ `title=` だけの新しいボタンを足しても緑（翻訳されず日本語のまま出るのに誰も見ない）。
+//   ③ は「新しいボタンに title だけ書いて data-i18n-title を忘れる」＝**この検査が防ぎたい失敗の最も自然な形**。
+//   ∴ **ページ中の静的 `title=` の総数と、照合できた要素数が一致する**ことを課す（＝カタログ外の裸の title= は 0 件）。
+//   `data-i18n-title="…"` は直前が `-` なので下の正規表現には当たらない（空白か引用符が要る）。
+const titleAttrTotal = (html.match(/(?:\s|["'])title="/g) || []).length;
+const titleUncovered = titleAttrTotal - titleRows.length;
+// 下限。**正確な件数ではなく床**（tooltip を増やすたびにゲートを編集させない）。一括削除だけを止める。
+const TITLE_MIN = 70;
+
 // ---- 報告 ----
 const line = '─'.repeat(60);
 console.log(line);
@@ -349,9 +418,23 @@ if (inlineNew.length || inlineFixed.length || inlineGone.length || inlineBroken.
   console.log(`✓ ⑨ インライン本文: ${inlineRows.length} 要素中 ${inlineRows.length - inlineMiss.length} 件が ja カタログと一致 (既知例外 ${EXPECTED_STALE.length} 件は固定・新規の取り残し 0)`);
 }
 
+const titleChecked = titleRows.filter((r) => r.lit !== null && MESSAGES[r.key]).length;
+if (titleBroken.length || titleMiss.length || titleRawLt.length || titleUncovered !== 0 || titleRows.length < TITLE_MIN) {
+  fail = true;
+  console.log(`\n✗ ⑩ 静的 title= ≡ ja カタログ (対象 ${titleRows.length} 要素 / ページ中の静的 title= ${titleAttrTotal} 個)`);
+  for (const s2 of titleBroken) console.log(`    - 併記なし/抽出不能: ${s2} — JS 無効時に tooltip が空になる`);
+  for (const k of titleMiss) console.log(`    - **不一致**: ${k} — ja カタログを直して静的 title= を直し忘れている (${TITLE_STALE_NOTE})`);
+  for (const k of titleRawLt) console.log(`    - 生の < / > : ${k} — 属性値では &lt; &gt; へ実体化すること (タグを <[^>]*> で切る検査器がこの要素を黙って落とす)`);
+  if (titleUncovered > 0) console.log(`    - **カタログ外の静的 title=**: ${titleUncovered} 個 — data-i18n-title を書き忘れた tooltip がある (翻訳されず日本語のまま出る)。付けるか、意図的なら ⑩ の母集団の定義を見直すこと`);
+  if (titleUncovered < 0) console.log(`    - 計数が合わない: 照合 ${titleRows.length} > 静的 title= ${titleAttrTotal} — 同一要素に title= が 2 個ある等、抽出の前提が崩れている`);
+  if (titleRows.length < TITLE_MIN) console.log(`    - **対象が少なすぎる**: ${titleRows.length} < 下限 ${TITLE_MIN} — data-i18n-title が一括で消えていないか (消えると検査は「0 件すべて一致」で緑になる)`);
+} else {
+  console.log(`✓ ⑩ 静的 title=: ${titleRows.length} 要素すべてに併記あり・カタログ照合 ${titleChecked} 件すべて一致・生の <> なし・カタログ外の静的 title= 0 個 (例外リストなし)`);
+}
+
 console.log(`\n${line}`);
 if (fail) {
-  console.log('結果: FAIL (①②④⑤⑥⑦⑧⑨ のいずれかに違反) — 版アップ前に修正すること');
+  console.log('結果: FAIL (①②④⑤⑥⑦⑧⑨⑩ のいずれかに違反) — 版アップ前に修正すること');
   process.exit(1);
 } else {
   console.log('結果: PASS');

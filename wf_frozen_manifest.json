@@ -20,11 +20,11 @@
   "canonicalNode": {
     "node": "22.22.1",
     "v8": "12.4.254.21-node.35",
-    "resultSha256": "e19a031421ca46c2f32258e7108162b91765ac84d2e551cc16cd8fd05b25bb62",
-    "pinnedAt": "2026-09-07",
+    "resultSha256": "5b4be03e38ebe92a53bf7ec49cd5bead690618747d2a231e6ab32eab8c8aca8f",
+    "pinnedAt": "2026-09-13",
     "eventId": "official-sample-circuit",
-    "appVersion": "v8.2.0",
-    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: AY2: v8.2.0 版バンプ (舵角限界ベンチ 7 本の公開追加＋physics_model §11/アプリ Q&A への Stage AY 結果の反映)。走行物理は無改変で verifyHash=c731ecce は不変、resultSha256 のみ appVersion 経由で変化。"
+    "appVersion": "v8.3.0",
+    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: Stage AZ 結了: 版 v8.3.0 (MINOR/AQ-4)。投稿導線の根治 (AZ1/AZ4) と配置ガードの実態判定化 (AZ2/AZ5/AZ6)。走行物理は無改変で verifyHash c731ecce 不変、resultSha256 は APP_VERSION 経由で再ピン (AQ-1)。"
   },
   "history": [
     {
