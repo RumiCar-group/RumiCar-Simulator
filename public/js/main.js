@@ -15,11 +15,13 @@ import { readAll, readRear } from './sensors.js';
 import { buildApi } from './api.js';
 import { buildController } from './runner.js';
 import {
-  makeSlot, rebuildSpawns, integrateSlot, integrateFleetV2, tickSlot, othersFor, releaseDrive, swapPhysics, fitsAllCars, capacityOf, minClearance, applyStartGate,
+  makeSlot, rebuildSpawns, integrateSlot, integrateFleetV2, tickSlot, othersFor, releaseDrive, swapPhysics, minClearance, applyStartGate,
   normTire, normGear, normSusp, normSteer, normBrake,   // AS9/AS11/AS12/AV2: 装備値の正規化 (白リスト外は既定へ) — UI/共有 URL/レース field で単一実装
-  // (driveableCapN は capacity.js から別 import)
+  // (収容オラクル fitsAllCars/capacityOf と実走側 driveableCapN は AZ6 で fitguard.js が直接呼ぶ)
 } from './fleet.js';
-import { driveableCapN } from './capacity.js';   // Stage AK7: 実態容量 (実走で「走り出せる最大台数」)
+// Stage AZ6: フィットガードの判定コア (DOM 非結合)。ライブ (ここ) と常設ゲート wf_az2_fitguard.mjs が
+// **同じ関数**を呼ぶ = 判定の写しを作らない (CI-9)。
+import { settleFitRatio } from './fitguard.js';
 import { runRace, engineFingerprint, computeRaceTimeout } from './race_engine.js';
 import { ghostProgressModel, ghostStandingsAt, ghostPasses } from './ghost_gap.js';
 import { costOf, validateEntry, formField, frozenField, FILLER_POOL } from './race_event.js';
@@ -290,9 +292,16 @@ function resetWorld() {
 function startAuto() {
   exitEdit();
   stopAuto();
+  // **【AZ6・2026-09-13 是正】`clearLog()` はフィットガードより前に置く。**
+  //   旧順序は enforceFitRatio('race') → rebuildSpawns → clearLog で、**ガードが出した告知を
+  //   その場で消していた**（実測: 走り出せないコースで ▶ を押すと警告が 1 行出てから即座に
+  //   消える）。台数を減らした `log.capReduced` も、AZ5 の実走ゼロ警告も、この経路では
+  //   ずっと利用者に届いていなかった。🏁 (runRaceNow) は clearLog を呼ばないので届いていた
+  //   ＝**同じ告知が経路によって見えたり見えなかったりしていた**。`stopAuto()` は何も書かないので
+  //   先に消しても失うものは無い（実測: stopAuto は running/paused とボタンの同期だけ）。
+  clearLog();
   enforceFitRatio('race');   // Stage AK7: 発走直前に実態容量へ確定 (carScale ドラッグで静的のままだった場合の安全網=楽め込み台数で走り出さない)
   rebuildSpawns(slots, course);
-  clearLog();
   let ok = 0;
   for (const slot of slots) {
     slot.car.reset(slot.spawn);
@@ -1326,19 +1335,25 @@ function selectCourse(name) {
 // コースのみ/車両のみ変更・組み合わせ」でも常に正すための単一フィット・ガード (真実源)。
 // 比率を動かす入力は regime・carScale・course の3つだけ (車種 CAR_TYPES は length/width を
 // 持たず物理サイズに不干渉)。本ガードを course 選択・regime 変更・carScale 変更・起動時の全
-// トリガから呼ぶ。実効車長 CAR.length (regime×carScale 反映済み) がコース最小寸法の 1/4 を超え
-// たら「過大」とみなす (Stage U/BUG-02 と同一閾値・CI-7 で事後緩めない)。
-//   ① noRace 設計の大型コース (競技サーキット/グラウンド) は領域を fullscale へ自動切替=実寸車が
-//      微小になり不可視になる「比率おかしい」の上方向を正す (旧 maybeAutoFullscale)。
-//   ② 通常コース×領域 fullscale のまま過大なら卓上へ自動復帰 (旧 maybeAutoTabletop)。Stage U は
-//      手動 fullscale 選択を「尊重 (警告のみ)」にしていたが、利用者決定 (2026-06-19=「自動で必ず
-//      合わせる」) でこれを上書き=手動の不一致選択も必ず補正する (CI-5 で U1 挙動を明示変更)。
-//   ③ 領域確定後もなお過大 (carScale を上げ過ぎ) なら、収まる最大のユーザー倍率へ carScale を
-//      自動クランプし、スライダー値/表示も補正後の値へ追従させる (車両のみ変更=carScale の補正)。
+// トリガから呼ぶ。
+//
+// **【AZ6・2026-09-13】判定 (①〜⑥) は `fitguard.js` の `settleFitRatio` へ分離した。**
+//   ここに残るのは **適用 (DOM・イベント・ログ・スロット)** だけである。理由:
+//   判定が DOM と結合していたため node から呼べず、常設ゲート `wf_az2_fitguard.mjs` は**判定順序の
+//   写し**を動かすしかなかった (＝写しが緑でも product が壊れていてよい)。分離により
+//   **ライブとゲートが同じ判定を実行する** (CI-9「再実装しない」を判定ロジックにも適用)。
+//   判定の中身・①〜⑥ の意味・発火条件は `fitguard.js` 冒頭の注記を参照。
 // 領域切替の副作用 (車リセット/物理差替/スポーン再生成/ログ) は既存 regimeSel change ハンドラを
 // change 発火で再利用。dispatch は本ガードを再入させるが _enforcingFit でガード=冪等 (再呼出しで
-// 不変)。既定 (tabletop・carScale 既定) の通常コースは過大にならず補正は一切発火しない (no-op=
-// 卓上 byte 不変)。zoom (ホイール vt.zoom/Fit view) は worldToScreen が course+car を同係数で写す
+// 不変)。
+// ⚠ **【AZ6・2026-09-13 是正】旧注記の「既定の通常コースは補正が一切発火しない (no-op)」は
+//   実態と違っていた。** 判定コアを分離して全格子で本物を回せるようになったので測り直した結果、
+//   **既定 (卓上・スライダー 0.8) でも出荷 7 コースで補正が発火する** (cs1 なら 12 コース。内訳は
+//   noRace 大型 2 本が ① で fullscale へ、狭路の峠系 5 本が ④ の N台フィット保証で carScale 縮小)。
+//   これは AG1 以来の**意図した設計**で、退行ではない。旧注記が言えていたのは、当時の監査ゲート
+//   (`wf_ratio_audit.mjs`) が ①②③ しか写していなくて ④ を見ていなかったからである。
+//   「卓上 byte 不変」が指すのはベンチ母集団 (固定コース×固定スケール) の話で、UI の既定経路ではない。
+// zoom (ホイール vt.zoom/Fit view) は worldToScreen が course+car を同係数で写す
 // view 専用で物理・比率に不干渉=本ガードの対象外。
 let _enforcingFit = false;
 function enforceFitRatio(reason) {
@@ -1347,183 +1362,55 @@ function enforceFitRatio(reason) {
   try {
     const sel = $('regimeSel');
     const b = course.bounds || { w: 0, h: 0 };
-    const minDim = Math.min(b.w, b.h);
-    if (!sel || !(minDim > 0)) return;
-    const noRace = course.noRace === true;
-    const target = 0.25 * minDim;   // 実効車長の上限 (過大判定の境界)
-
-    // ① 上方向: フルスケール設計の大型コースは領域を fullscale へ (微小車=比率おかしいを防ぐ)。
-    if (noRace && minDim >= 50 && sel.value !== 'fullscale') {
-      sel.value = 'fullscale';
-      logLine(t('log.autoFullscale', { name: course.name }));
-      sel.dispatchEvent(new Event('change', { bubbles: true }));  // 物理差替等は既存ハンドラへ委譲
-    }
-
-    // ② 下方向: 通常コースで領域 fullscale のまま過大なら卓上へ自動復帰 (手動選択も必ず補正)。
-    if (!noRace && sel.value === 'fullscale' && CAR.length > target) {
-      sel.value = 'tabletop';
-      logLine(t('log.autoTabletop', { name: course.name }));
-      sel.dispatchEvent(new Event('change', { bubbles: true }));
-    }
-
-    // ③ carScale クランプ: 領域確定後もなお過大 (carScale 過大による超過) なら、収まる最大の
-    //    ユーザー倍率へ自動で縮める。スライダー値/表示も補正後の値へ追従。
-    //    **AZ2 で関数化した**: ④' (実態収容ゼロの救済) が領域を変えた後に同じ補正をやり直す必要が
-    //    あるため。中身・判定順序・発火条件は従来と完全に同一 (呼び出し位置も同じ) = 既存挙動は不変。
-    const clampByProxy = () => {
-      if (!(CAR.length > target)) return;
-      const csEl = $('carScale');
-      const userK = csEl ? (Number(csEl.value) || 1) : 1;
-      if (userK > 0) {
-        const lenAtUserK1 = CAR.length / userK;             // = baseLen × regimeK (現領域)
-        const maxUserK = target / lenAtUserK1;              // これ以下なら必ず収まる
-        const newUserK = Math.max(0.4, Math.floor(maxUserK * 10) / 10);  // スライダー step 0.1・必ず target 以下
-        if (newUserK < userK) {
-          const k = setCarScale(newUserK);
-          if (csEl) csEl.value = String(newUserK);
-          const v = $('carScalev'); if (v) v.textContent = k.toFixed(1) + '×';
-          if (!running) rebuildSpawns(slots, course);
-          logLine(t('log.autoCarScale', { name: course.name, scale: k.toFixed(1) }));
-        }
-      }
-    };
-    // ④ N台フィット保証 (Stage AG・GitHub #26 §3/§7・CI-14): 単独車が target(=0.25×外形最小辺) に
-    //    収まっても FLEET.maxCars 台が収まるとは限らない (最狭コース×大スケールで freeSpawn の有効点が
-    //    枯渇し残りが start に団子)。代理量(外形)でなく実態(実 freeSpawn で全車交差ゼロ)で判定し、
-    //    収まるまで carScale を 0.1 刻みで floor(0.4) まで追加縮小。既定スケール・少数台が既に収まる
-    //    コースは初回判定が真=この分岐に入らない = no-op (初期配置/卓上 byte 不変)。floor でも収まらない
-    //    極小ケースは無言で団子にせず最小スケールまで縮める (実コースでは floor 未到達)。
-    //    **③ と同じ理由で AZ2 が関数化した** (判定順序・発火条件・短絡評価は不変)。
-    //    戻り値は **「この関数が何もせずに済んだか」**: `true` = 入口の判定で既に maxCars 台が収まって
-    //    いた (= 正常コース)、`null` = それ以外 (縮小した／userK が下限で評価していない)。④' がこれを
-    //    見て、`true` のときはオラクルを一切呼ばずに素通りする。
-    //    **この関数自身の fitsAllCars 呼び出し回数と短絡の順序は改修前と同一** (`if` を 2 段に割ったのは
-    //    戻り値を作るためで、評価する式と順序は変えていない)。置けない状態では freeSpawn が廊下 BFS へ
-    //    落ちるため 1 回 100〜340 ms かかるので、ここを増やさないことが効く (実測 2026-09-12: 出荷最大
-    //    「ウェットテクニカル (雨)」壁 960 × fullscale cs1 = 99.9 ms、投稿コース 壁 366 × fullscale cs1
-    //    = 343.7 ms。収まる状態は 0.2〜35 ms)。
-    const clampByFit = () => {
-      const csEl = $('carScale');
-      let userK = csEl ? (Number(csEl.value) || 1) : 1;
-      // 従来の短絡評価を保つ: userK が下限なら fitsAllCars を呼ばない。**呼んでいない以上「収まる」とは
-      // 言えない**ので null (不明) を返す。ここで true を返すと ④' が「6 台収まる」と誤信して素通りする。
-      // 【到達性の実測 2026-09-12】`index.html` の carScale スライダーは `min="0.5"` なので、DOM 経由では
-      // userK が 0.4 になることはない (Chromium は 0.4 の書込を 0.5 へ丸める)。∴ この早期 return は
-      // **現状の UI からは通らない**。それでも null を返すのは、④ が `Math.max(0.4, …)` で状態としては
-      // 0.4 まで下げうる (= スライダーの min と食い違う) からで、契約として「確かめていないことは
-      // 言わない」を守る。この食い違い自体は AZ2 以前からの性質で、是正は別ブロックへ申し送る。
-      if (!(userK > 0.4 + 1e-9)) return null;
-      if (!fitsAllCars(course, FLEET.maxCars)) {
-        let k = userK;
-        while (userK > 0.4 + 1e-9 && !fitsAllCars(course, FLEET.maxCars)) {
-          userK = Math.max(0.4, Math.round((userK - 0.1) * 10) / 10);
-          k = setCarScale(userK);
-        }
-        if (csEl) csEl.value = String(userK);
+    if (!sel || !(Math.min(b.w, b.h) > 0)) return;
+    const csEl = $('carScale');
+    // 判定コアへ渡す効果フック。**DOM・イベント・ログに触れるのはこの 4 つだけ**で、
+    // 判定側 (fitguard.js) は「どの瞬間にどの効果が要るか」だけを決める。こうすると
+    // ログとイベントの発火順序が分離前と 1 対 1 で一致する。
+    const fx = {
+      regime: (name, logKey, params) => {
+        sel.value = name;
+        logLine(t(logKey, params));
+        sel.dispatchEvent(new Event('change', { bubbles: true }));  // 物理差替等は既存ハンドラへ委譲
+      },
+      scale: (userK) => setCarScale(userK),
+      sync: (k, userK) => {
+        // **DOM・ラベル・スライダーの塗りつぶしを 3 つとも合わせる。**
+        // 【AZ6・2026-09-13 是正】`paintRange` は `input` イベントにしか繋がっていない
+        // (main.js の `for (const id of ['speed','pwm','carScale','trailLen'])`) ので、
+        // **プログラムから `value` を代入しても背景グラデーションだけ元の位置に残る**
+        // (サムは動くのに塗りが動かない＝三重ズレを直した後に残っていた 4 つ目のズレ。
+        //  層 4 レビュー 2026-09-13 の指摘を実コードで確認)。ここで明示的に塗り直す。
+        if (csEl) { csEl.value = String(userK); paintRange(csEl); }
         const v = $('carScalev'); if (v) v.textContent = k.toFixed(1) + '×';
         if (!running) rebuildSpawns(slots, course);
-        logLine(t('log.autoCarScale', { name: course.name, scale: k.toFixed(1) }));
-        return null;   // 縮小後に収まったかは不明 (従来と同じく短絡で評価しない場合がある)
-      }
-      return true;     // 実際に fitsAllCars が真だった = ④' は判定不要
+      },
+      log: (key, params) => logLine(t(key, params)),
     };
-    clampByProxy();              // ③
-    const fits6 = clampByFit();  // ④
+    const r = settleFitRatio(course, {
+      regime: sel.value,
+      userK: csEl ? (Number(csEl.value) || 1) : 1,
+      slotCount: slots.length,
+      reason,
+    }, fx);
 
-    // ④' 実態収容ゼロの救済 (Stage AZ2・利用者投稿コースで露見・CI-14「判定基準は代理量でなく実態」)。
-    //    ②③④ がそろって「収まる」と判定しても、**実際には 1 台も置けない**構成が実在する。実測 (投稿
-    //    コース 富士スピードウェイ: 外形 18.36×18.71m・壁 366 本・スタート地点の廊下幅 0.300m):
-    //      fullscale × carScale 1 → 車長 3.80m。代理量 target = 0.25×18.36 = 4.59m は「収まる」と言う
-    //      ので ② が発火せず (④ は carScale を下限 0.4 まで縮めるが 廊下 0.300m < 車幅 0.64m で無駄)、
-    //      capN=0 のまま落ち着く = **6 台全部が壁の中に湧く** (minClearance −133mm)。
-    //    より過大な cs2/cs4 は代理量が過大と判定するので ② が救う = **軽度の過大だけが壊れる**という
-    //    乖離の署名。外形が広くても廊下が狭ければ収容ゼロはありうる (出荷 66 コースには 18m 枠に
-    //    0.30m 廊下という比率が無かっただけ)。
-    //    ∴ 代理量ではなく **実態 (fitsAllCars(course,1)) が偽なら** 領域を卓上へ落とし、③④ をやり直す
-    //    (ループではなく 1 回の判定。卓上まで落とせばそれ以上下げる領域が無いため)。
-    //    既存コースは ②③④ の時点で capN≥1 に落ち着くのでこの分岐は発火しない = no-op (回帰ゼロ)。
-    //    **限界 (申し送り)**: noRace (① が意図して fullscale に固定する大型コース) と、既に卓上の場合は
-    //    対象外。∴ その 2 つで capN=0 になるコースは救済されず ⑤ の警告だけが出る。
-    //    **コスト (実測 2026-09-12・wf_az2_fitguard の E 節)**: 条件は左から順に短絡するので、
-    //    `fits6 === true`（④ が入口で「6 台収まる」と判定した状態）なら `fitsAllCars` を一度も呼ばない。
-    //    追加で払うのは「卓上以外 × ④ が収まると言い切れなかった」セルだけで、**利用者の既定領域である
-    //    卓上では常に 0 回**（`sel.value !== 'tabletop'` で先に落ちる）。出荷 66 コース × 3 領域 ×
-    //    6 carScale = 1188 セルの実測は合計 5456 → 5699 回（+243 回・1 セルあたり最大 +1 回）。
-    //    ただしこれは**卓上ゲートの写しの上での数字**で、実ブラウザではスライダーの `min="0.5"` による
-    //    丸めのぶん ④' 内の再クランプが 1 回余分に判定しうる（病的コースで実測 +2 回）。
-    if (!noRace && sel.value !== 'tabletop' && fits6 !== true && !fitsAllCars(course, 1)) {
-      sel.value = 'tabletop';
-      logLine(t('log.autoTabletopFit', { name: course.name }));
-      sel.dispatchEvent(new Event('change', { bubbles: true }));  // 物理差替等は既存ハンドラへ委譲 (② と同型)
-      clampByProxy();
-      clampByFit();
-    }
-    // ⑤ 実態の収容容量で台数を持つ (Stage AK・GitHub #26 D6/D7・CI-14): carScale を floor まで
-    //    縮めてもこのコース×領域に全 FLEET.maxCars 台が収まらないことがある (湿+狭の最狭コース)。
-    //    代理量 (0.25×外形最小辺) でなく実態 (実 fitsAllCars=実 freeSpawn/checkCollision/carEdges) で
-    //    「実際に壁交差0・重なり0で走り出せる最大台数」capN を測り、現在の台数がそれを超えるなら
-    //    無言で start に団子させず capN へ自動で減らして告知する。
-    //    既定 (通常コース) は capN=maxCars=6 で全 N 台が収まる=この分岐は no-op (初期配置/卓上 byte 不変)。
-    //    **AZ2 で是正**: 旧実装は `while (capN > 1 && …)` と書かれており「1台は start に必ず置ける」と
-    //    いう仮定が構文に埋め込まれていた。実態が capN=0 のとき **嘘の capN=1 を名乗る** (= 壁の中の
-    //    1 台を「収まっている」と報告する) ため、0 を返せる共有オラクル capacityOf へ置換した。
-    //    通常コースは初回の fitsAllCars(course,6) が真で即確定するので呼び出し回数は従来と同じ。
-    {
-      let capN = capacityOf(course, FLEET.maxCars);            // 0..maxCars (実オラクル・0 を返せる)
-      // 実態ゼロ。0 台は表示できないので 1 に留めるが **無言にしない** (AZ1「失敗と 0 件を区別する」と同型)。
-      // 告知は下の 1 箇所だけで行う: ここで先に出すと、直後の log.capReduced「最大 1 台しか走り出せません」と
-      // **同じ経路で矛盾する 2 行**になる (main.js の投稿導線が「開けなかったのに『開いた』と言わない」と
-      // 戒めているのと同じ型)。④' は noRace と卓上を対象外にするので、ここは卓上とは限らない。
-      // **【AZ5】ゼロには 2 種類あり、理由が違うので文言も分ける** (CI-14「測っていないことを言わない」):
-      //   capZeroStatic … 静的に 1 台も置けない (壁交差 0・前方余地ありの位置が無い)        → log.capZeroWarn
-      //   capZeroDrive  … 静的には置けるが **実走で 1 台も走り出せない** (⑥ の driveableCapN=0) → log.capZeroDriveWarn
-      let capZeroStatic = capN < 1;
-      let capZeroDrive = false;
-      // ⑥ 実態容量へ更に絞る (Stage AK7・GitHub #26 続報・CI-14): 静的に置けても normal_fr が単独で
-      //    コーナー壁へ舵を切り込んで楽め込むコース (最狭のナローシケイン等) があり、静的幾何では正常スポーンと
-      //    区別不可 (正準オーバルの方が静的クリアランスは悪いのに正常走行)。よって卓上は **実走で「実際に
-      //    走り出せる最大台数」** へ絞る (発走順次化ゲート込み・driveableCapN)。実走は重いので carScale
-      //    ドラッグ (input 連発) では避け静的のまま、course/regime/carAdd/startup と発走直前 (startAuto) で確定。
-      //    fullscale/midscale は専用コース×凍結グリッドで判定述語の母体外=静的のまま (卓上の楽め込みバグの領分)。
-      //    perf: 単独車 (slots.length≤1) は楽め込み (他車に押される) が原理上起きず縮小も発火しないので
-      //    実走プローブを省く (コース閲覧の体感を保つ)。多台のときだけ実態容量を測る。発走直前 startAuto でも確定。
-      //    ⚠ **【AZ5・層 4 レビューの指摘を実測で確認・AZ6 へ申し送り】上の perf 理由は AZ5 の新しい失敗モードを
-      //    説明していない。** 「閉じた部屋で 1 台が自力で動けない」は他車と無関係に起きるので、`slots.length > 1`
-      //    で落とすと **既定 (1 台) の利用者には実走ゼロが一切告知されない**（実測: 幅 4×車幅 × 奥行 1.7×車長 の
-      //    部屋で 静的 capacityOf=3・stuckAtN(1)=1 なのに無言。🏁 も `capacityOf(course,1)=1` で NO_ROOM に
-      //    ならず「0台完走 / 1台リタイア」だけが出る）。
-      //    **AZ5 では広げない**: 1 台ぶんの実走プローブの実測コストは治具 27.7ms・出荷最大「ウェットテクニカル (雨)」
-      //    壁 960 本で **90.3ms** で、コース選択のたびに払うと UI の目安 50ms を超える。発走直前 (reason==='race')
-      //    に限れば払えるが、それは**発火条件そのものの変更**で、出荷 66 コース × 3 領域 × 6 carScale の
-      //    落ち着き先の全件列挙をやり直さないと「救済側以外の変化 0」(CI-7) を担保できない。
-      //    ∴ **判定コアを DOM から分離する AZ6 で、全格子の回帰と一緒に扱う。**
-      //    **【AZ5・2026-09-12 是正】driveableCapN が 0 を返せるようになった** (capacity.js)。旧実装は
-      //    `if (cap < 1) cap = 1;` で 0 を 1 へ丸めており、ここが受け取るのは常に ≥1 だった。その結果、
-      //    静的には置けるが実走で 1 台も走り出せない構成 (実測: 卓上・閉じた部屋 幅 4×車幅 × 奥行
-      //    1.7×車長 = 静的 capN 3・実走 0 台) で `log.capReduced`「最大 1 台なら走り出せます」という
-      //    **嘘を告知していた**。0 を受け取ったら capZeroDrive を立て、capN は表示可能な 1 に留める。
-      const regNow = sel ? sel.value : 'tabletop';
-      if (!capZeroStatic && regNow === 'tabletop' && reason !== 'carScale' && capN > 1 && slots.length > 1) {
-        const drv = driveableCapN(course, regNow, capN);        // 0..capN (AZ5: 0 を返せる)
-        if (drv < 1) capZeroDrive = true; else capN = Math.min(capN, drv);
-      }
-      const capZero = capZeroStatic || capZeroDrive;
-      if (capZero) capN = 1;                                   // 0 台は表示できないので 1 に留める (告知は下で必ず出す)
-      const zeroKey = capZeroDrive ? 'log.capZeroDriveWarn' : 'log.capZeroWarn';
-      courseCapN = capN;                                       // carCap()/refreshColControls の追加上限
-      if (!running && slots.length > capN) {
-        const was = slots.length;
-        slots.splice(capN);                                    // 収容超過の末尾車 (後から追加した分) を除去
-        if (activeIdx >= slots.length) activeIdx = slots.length - 1;
-        rebuildSpawns(slots, course);
-        buildFleetColumns();
-        selectCar(activeIdx);
-        // 実態ゼロのときは「最大 n 台なら走り出せる」と言ってはいけない (capReduced はそう言う)。
-        logLine(t(capZero ? zeroKey : 'log.capReduced', { name: course.name, n: capN, was }));
-      } else if (capZero) {
-        // 減らす台数が無い (既に 1 台・または走行中で splice しない) 場合も、実態ゼロは必ず伝える。
-        logLine(t(zeroKey, { name: course.name, n: capN, was: slots.length }));
-      }
+    // ⑤⑥ の結果をスロットへ適用する。0 台は表示できないので判定側が 1 に留めており、
+    // **そのときは必ず告知する** (「最大 n 台なら走り出せる」= log.capReduced は言ってはいけない)。
+    const capN = r.capN;
+    courseCapN = capN;                                       // carCap()/refreshColControls の追加上限
+    if (!running && slots.length > capN) {
+      const was = slots.length;
+      slots.splice(capN);                                    // 収容超過の末尾車 (後から追加した分) を除去
+      if (activeIdx >= slots.length) activeIdx = slots.length - 1;
+      rebuildSpawns(slots, course);
+      buildFleetColumns();
+      selectCar(activeIdx);
+      logLine(t(r.capZero ? r.zeroKey : 'log.capReduced', { name: course.name, n: capN, was }));
+    } else if (r.capZero) {
+      // 減らす台数が無い (既に 1 台・または走行中で splice しない) 場合も、実態ゼロは必ず伝える。
+      // **文言は専用のもの (zeroKeyOnly)**: ここは台数を変えていないので「{was} 台から {n} 台にします」
+      // とは言わない (AZ6・していないことを言わない)。
+      logLine(t(r.zeroKeyOnly, { name: course.name }));
     }
     warnFragileClearance();   // Stage AI: 比率補正/N台縮小が落ち着いた配置で連続クリアランスを監視
   } finally {

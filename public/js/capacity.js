@@ -8,10 +8,11 @@
 // 設計判断: ① 判定プログラムは normal_fr (既定サンプル=容量の保守的代表・楽め込みが顕在化する母体)。
 //   ② trackNet (観測のみ=verifyHash 不変) で各車の spawn からの最大変位を読み、 < carLen かつ非クラッシュを
 //   「走り出せない」とする (wf_recover_model と同一述語=ライブとゲートが同じオラクルを使う・CI-9)。
-//   ③ 結果は (course.name, regime, carLen) でキャッシュ (スケール依存=carLen に内包・領域依存=regime)。
+//   ③ 結果は (course.name, regime, carLen, maxN, PHYSICS.mode) でキャッシュ (スケール依存=carLen に内包・
+//      領域依存=regime・**エンジン依存=PHYSICS.mode**〔AZ6 で追加。下の driveableCapN の注記〕)。
 //   ④ ライブは tabletop でのみ使う (楽め込みバグと判定述語の母体は卓上。fullscale は専用コース×凍結グリッド)。
 import { runRace } from './race_engine.js';
-import { CAR, FLEET } from './config.js';
+import { CAR, FLEET, PHYSICS } from './config.js';
 import { PROGRAM_BY_KEY } from './programs.js';
 
 const _cache = new Map();
@@ -44,7 +45,14 @@ export function stuckAtN(course, regime, n) {
 // 0 = 「この構成では 1 台も走り出せない」。**呼び出し側は 0 を無言で握りつぶさないこと**
 // (main.js は capZero を立てて log.capZeroDriveWarn を出す)。
 export function driveableCapN(course, regime, maxN = FLEET.maxCars) {
-  const key = `${course.name}|${regime || 'tabletop'}|${CAR.length.toFixed(4)}|${maxN}`;
+  // **【AZ6・2026-09-13】鍵に物理エンジン (PHYSICS.mode) を入れた。** `stuckAtN` は `runRace` に
+  // `physics` を渡さない (下の `_field` と同じ行) ので、`race_engine.js` の
+  // `if (spec.physics != null) setPhysicsMode(spec.physics);` により **現在のグローバル
+  // `PHYSICS.mode` で走る**。鍵に入っていないと classic↔dynamic↔v2 を切り替えても古い答えを返す。
+  // AZ6 以前はこの経路が多台編成限定だったが、⑥ の 1 台分岐で **既定編成の ▶/🏁 のたびに通る主経路**
+  // になったので、取り違えの実害が全利用者へ広がる前に塞ぐ (層 4 レビュー 2026-09-13 の指摘。
+  // **エンジン差で答えが変わる実例はまだ見つかっていない**＝構造上の危険を先に塞ぐ側の判断)。
+  const key = `${course.name}|${regime || 'tabletop'}|${CAR.length.toFixed(4)}|${maxN}|${PHYSICS.mode}`;
   if (_cache.has(key)) return _cache.get(key);
   let cap = maxN;
   while (cap >= 1 && stuckAtN(course, regime, cap) > 0) cap--;

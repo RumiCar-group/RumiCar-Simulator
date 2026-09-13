@@ -9,8 +9,9 @@
 import fs from 'fs';
 import { CAR_SPRITES, DEFAULT_SPRITE, spriteBBox, fitToFootprint } from './public/js/car_sprite.js';
 import { buildFromSpec } from './public/js/course.js';
-import { freeSpawn, fitsAllCars } from './public/js/fleet.js';
+import { freeSpawn } from './public/js/fleet.js';
 import { setRegimeScale, setCarScale, FLEET, REGIMES, VIEW, CAR_FOOTPRINT, CAR } from './public/js/config.js';
+import { settleScale } from './public/js/fitguard.js';
 
 const F = CAR_FOOTPRINT, N = FLEET.maxCars, EPS = 1e-9;
 const MAXSTEER = CAR.maxSteer;                 // 実舵角ロック（±maxSteer・スケール非依存）
@@ -76,19 +77,22 @@ function crosses(P, walls) { for (let i = 0; i < P.length; i++) { const p = P[i]
 
 const specs = JSON.parse(fs.readFileSync('./public/data/courses.json', 'utf8'));
 const kL = r => REGIMES[r].L / REGIMES.tabletop.L;
-const BASE = 0.19, effLen = (r, u) => BASE * kL(r) * u;
 const place = c => { const occ = []; for (let i = 0; i < N; i++) occ.push(freeSpawn(c, occ, i)); return occ; };
 function visCross(course) { let n = 0; for (const sp of place(course)) if (crosses(world(sp), course.walls)) n++; return n; }
-// AG1 後の実到達スケール（main.js enforceFitRatio と同ロジック）。視覚確認はユーザが実際に出せる状態で行う。
+// AG1 後の実到達スケール。視覚確認はユーザが実際に出せる状態で行う。
+// 【AZ6・2026-09-13】**判定の写しを置かない。** 領域と carScale の確定は product の判定コア
+// `public/js/fitguard.js` の `settleScale` を呼ぶ（ライブ main.js が呼ぶのと同じ関数）。
+// 旧実装はここに ①②③④ を書き写しており、下限 0.4 のハードコードが product（現 FIT.userKMin=0.5）
+// と食い違ったまま黙って腐る形だった。効果フックはスケールを当てるだけ（DOM も告知も無い）。
+const settleFx = {
+  regime: (name) => { setRegimeScale(kL(name)); },
+  scale: (uk) => setCarScale(uk),
+  sync: () => {},
+  log: () => {},
+};
 function applyNewGuard(course, regime0, userK0) {
-  const minDim = Math.min(course.bounds.w, course.bounds.h), target = 0.25 * minDim, noRace = course.noRace === true;
-  let regime = regime0, userK = userK0;
-  if (noRace && minDim >= 50 && regime !== 'fullscale') regime = 'fullscale';
-  if (!noRace && regime === 'fullscale' && effLen(regime, userK) > target) regime = 'tabletop';
-  if (effLen(regime, userK) > target) { const l1 = effLen(regime, userK) / userK; userK = Math.max(0.4, Math.floor((target / l1) * 10) / 10); }
-  setRegimeScale(kL(regime)); setCarScale(userK);
-  if (userK > 0.4 + 1e-9 && !fitsAllCars(course, N)) while (userK > 0.4 + 1e-9 && !fitsAllCars(course, N)) { userK = Math.max(0.4, Math.round((userK - 0.1) * 10) / 10); setCarScale(userK); }
-  return userK;
+  setRegimeScale(kL(regime0)); setCarScale(userK0);
+  return settleScale(course, { regime: regime0, userK: userK0, slotCount: N, reason: 'course' }, settleFx).userK;
 }
 
 // ② 経験的確認: ユーザが実際に出せる状態（既定 + AG1 ガード後の最大スケール）で fit 後スプライト（steered hull）の壁越え=0

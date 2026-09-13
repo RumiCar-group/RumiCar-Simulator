@@ -4,25 +4,27 @@
 // AG1 後の実ガード applyNewGuard を通して配置を本番フローに揃える。
 import fs from 'fs';
 import { buildFromSpec } from './public/js/course.js';
-import { fitsAllCars, minClearance } from './public/js/fleet.js';
+import { minClearance } from './public/js/fleet.js';
 import { setRegimeScale, setCarScale, CAR, FLEET, REGIMES } from './public/js/config.js';
+import { settleScale } from './public/js/fitguard.js';
 
 const specs = JSON.parse(fs.readFileSync('./public/data/courses.json', 'utf8'));
-const N = FLEET.maxCars, BASE = 0.19;
+const N = FLEET.maxCars;
 const FRAGILE_FRAC = 0.05;   // main.js FRAGILE_CLEARANCE_FRAC と一致 (決定ログ AI-1)
 const kL = r => REGIMES[r].L / REGIMES.tabletop.L;
-const effLen = (r, u) => BASE * kL(r) * u;
+// 【AZ6・2026-09-13】**判定の写しを置かない。** 領域と carScale の確定は product の判定コア
+// `public/js/fitguard.js` の `settleScale` を呼ぶ（ライブ main.js が呼ぶのと同じ関数）。
+// 旧実装はここに ①②③④ を書き写しており、下限 0.4 のハードコードが product（現 FIT.userKMin=0.5）
+// と食い違ったまま黙って腐る形だった。効果フックはスケールを当てるだけ（DOM も告知も無い）。
+const settleFx = {
+  regime: (name) => { setRegimeScale(kL(name)); },
+  scale: (uk) => setCarScale(uk),
+  sync: () => {},
+  log: () => {},
+};
 function applyNewGuard(course, regime0, userK0) {
-  const minDim = Math.min(course.bounds.w, course.bounds.h), target = 0.25 * minDim, noRace = course.noRace === true;
-  let regime = regime0, userK = userK0;
-  if (noRace && minDim >= 50 && regime !== 'fullscale') regime = 'fullscale';
-  if (!noRace && regime === 'fullscale' && effLen(regime, userK) > target) regime = 'tabletop';
-  if (effLen(regime, userK) > target) { const l1 = effLen(regime, userK) / userK; userK = Math.max(0.4, Math.floor((target / l1) * 10) / 10); }
-  setRegimeScale(kL(regime)); setCarScale(userK);
-  if (userK > 0.4 + 1e-9 && !fitsAllCars(course, N)) {
-    while (userK > 0.4 + 1e-9 && !fitsAllCars(course, N)) { userK = Math.max(0.4, Math.round((userK - 0.1) * 10) / 10); setCarScale(userK); }
-  }
-  return { regime, userK };
+  setRegimeScale(kL(regime0)); setCarScale(userK0);
+  return settleScale(course, { regime: regime0, userK: userK0, slotCount: N, reason: 'course' }, settleFx);
 }
 const mm = m => (m * 1000).toFixed(2);
 // 脆弱判定 = 本番 warnFragileClearance と同条件。CAR は配置時スケールに確定済み前提。

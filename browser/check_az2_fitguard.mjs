@@ -1,9 +1,12 @@
-// check_az2_fitguard.mjs — AZ2 フィットガードの実ブラウザ検証 (headed Chrome on Xvfb)
+// check_az2_fitguard.mjs — AZ2/AZ6 フィットガードの実ブラウザ検証 (headed Chrome on Xvfb)
 // ════════════════════════════════════════════════════════════════════════════
-// **これが AZ2 の新ロジックを実際に実行する唯一のゲート。** 卓上ゲート `wf_az2_fitguard.mjs` は
-// `enforceFitRatio` が DOM 結合で node から呼べないため**判定順序の写し**を動かしており、
-// product の main.js を 1 行も実行しない（層 4 レビュー 2026-09-12 の指摘）。ここでは利用者と同じ
-// UI 操作だけで本物の main.js を走らせて確かめる（CI-8）。
+// **【AZ6・2026-09-13 で射程が変わった】** AZ2 期はここが「新ロジックを実際に実行する唯一のゲート」
+// だった（卓上ゲートは判定順序の**写し**を動かしており product を 1 行も実行しなかった）。AZ6 で
+// 判定を `public/js/fitguard.js` へ分離したので、**判定そのものは卓上ゲート `wf_az2_fitguard.mjs` が
+// 全格子 1188 セルで実行する**。∴ ここが受け持つのは **DOM と適用側** — 領域セレクタ・carScale
+// スライダーの値域・表示ラベル・ログ・スロット操作、つまり node では回せない部分である。
+// （写しが無くなったので「写しが緑でも product が壊れていてよい」問題は消えたが、**DOM の値域丸め**
+//   のような穴はここでしか見えない。実際 AZ6 の三重ズレはそれだった。）
 //
 // 測ること:
 //   ① 「車が 1 台も置けない」コース × フルスケール領域 を選ぶと、**領域が卓上へ自動で戻る**
@@ -12,9 +15,16 @@
 //   ④ **既存コースの挙動を変えていない**: 通常のプリセットでは ④' の告知が出ず、従来の ② だけが働く
 //   ⑤ **対照**: noRace の大型コースはフルスケールに留まる（= `selectOption` が本当に効いている証拠。
 //      これが無いと ①③④ の「卓上だった」は "操作が効かなかっただけ" でも真になってしまう）
-//   ⑥ **救済できない病的コース**（卓上でも 1 台も置けない）で、`capZeroWarn` と `capReduced` が
-//      **同じ経路で両方出ない**こと（「1 台も置けません」と「最大 1 台なら走り出せます」の矛盾の禁止）
+//   ⑥ **救済できない病的コース**（卓上でも 1 台も置けない）で、実態ゼロを告知しつつ
+//      「最大 n 台なら走り出せます」(`capReduced`) とは**言わない**こと（矛盾する 2 行の禁止）。
+//      減らす台数が無い経路なので文言は `capZeroWarnOnly`（**していない台数変更を告げない**・AZ6）。
 //   ⑦ JS エラー 0
+//   ⑧ **【AZ6】carScale の三重ズレが無い**: `#carScale` の value・表示ラベル・`SCALE_STATE.userK` が
+//      一致し、いずれもスライダーの `min` を下回らない（旧は 0.4 へ落ちて DOM が 0.5 へ丸めていた）。
+//   ⑨ **【AZ6】④' の経路で carScale が復元される**: 卓上へ戻したあと、入口のスライダー値で
+//      収まるならその値のまま（旧は ③④ が先に下限まで削り、② 経路と 5 倍の不連続があった）。
+//   ⑩ **【AZ6】既定の 1 台編成でも、走り出せないコースは ▶ の直前に告知される**
+//      （旧は `slots.length > 1` で落ちて無言。AZ5 の申し送り）。
 //
 // 【判定に使う物差しを product の変更対象から独立させる】
 //   容量の判定に `capacityOf`/`fitsAllCars` を使うと、**検証対象を物差しにする循環**になる
@@ -170,11 +180,129 @@ const browser = await launch();
 
   ok(await spawnHitsWall(page, FIX_HOPELESS) === true,
      '⑥ 前提: このコースは卓上でも車が壁と交差する（救済不能であることの確認）');
-  const zero = /台にしますが|Setting the field from/.test(added);
+  // 既定は 1 台編成 = 減らす台数が無い経路なので、文言は capZeroWarnOnly（AZ6 で新設）。
+  const zero = /1 台も置けません|Not a single car fits/.test(added);
   const reduced = /しか壁に当たらず走り出せません|can only hold/.test(added);
+  const falseCount = /台から 1 台にします|Setting the field from/.test(added);
   ok(zero, '⑥ 実態ゼロを告知している（無言でない）');
   ok(!reduced, '⑥ 「最大 n 台なら走り出せます」とは言っていない（矛盾する 2 行を出さない）');
-  ok(!(zero && reduced), '⑥ capZeroWarn と capReduced が同時に出ていない');
+  ok(!falseCount, '⑥ 台数を変えていないのに「{was} 台から {n} 台にします」と言っていない（AZ6）');
+  ok(errors.length === 0, `⑦ JS エラー 0 件${errors.length ? ' — ' + errors.slice(0, 3).join(' / ') : ''}`);
+  await page.close();
+}
+
+// ── ⑧ 【AZ6】carScale の DOM・状態・ラベル・塗りの一致（**下限に実際に触れる状態で測る**）────
+// 旧実装は ③④ が `Math.max(0.4, …)` まで下げる一方、`index.html` のスライダーは `min="0.5"`。
+// Chromium は `csEl.value = "0.4"` を **"0.5" へ丸める**ので、状態 0.4 / DOM 0.5 / ラベル "0.4×" の
+// 三重ズレが残っていた（**node では原理的に見えない＝ここでしか測れない**）。
+// ⚠ **初版はこれを `FIX_RESCUABLE`（廊下 0.30m）で測っており、空振りだった**（層 4 レビュー 2026-09-13）。
+//   あのセルは ④' が入口倍率 0.8 を復元して終わるので **carScale が一度も下限に触らず**、
+//   「0.8 ≧ min 0.5」は下限を 0.4 に戻しても真＝何も守っていなかった。
+//   ∴ **下限まで削られる `FIX_HOPELESS`（廊下 0.02m → 卓上 cs0.5 に落ち着く）**で測り直す。
+{
+  console.log('\n【⑧】carScale が下限まで削られた状態で DOM・状態・ラベル・塗りが一致する（AZ6）');
+  const { page, errors } = await newPage(browser);
+  await seed(page, [FIX_HOPELESS]);
+  const before = (await logText(page)).length;
+  await page.selectOption('#courseSel', FIX_HOPELESS.name);
+  await page.waitForTimeout(1500);
+  const added = (await logText(page)).slice(before);
+
+  const st = await page.evaluate(async () => {
+    const cfg = await import(new URL('js/config.js', location.href).href);
+    const el = document.getElementById('carScale');
+    const m = /([0-9.]+)%/.exec(el.style.background || '');
+    return {
+      min: Number(el.min), max: Number(el.max), dom: Number(el.value),
+      label: document.getElementById('carScalev').textContent,
+      userK: cfg.SCALE_STATE.userK,
+      paintPct: m ? Number(m[1]) : null,
+    };
+  });
+  // **前提（これが無いと「たまたま下限でなかった」を見逃す）**: このセルは実際に下限まで削られている。
+  ok(/車体スケール|car scale/i.test(added) && Math.abs(st.userK - st.min) < 1e-9,
+     `⑧ 前提: carScale が下限まで削られた（状態 ${st.userK} = スライダー min ${st.min}・縮小の告知あり）`);
+  ok(Math.abs(st.dom - st.userK) < 1e-9,
+     `⑧ スライダーの値と SCALE_STATE.userK が一致（DOM ${st.dom} / 状態 ${st.userK}）`);
+  ok(st.label === st.userK.toFixed(1) + '×',
+     `⑧ 表示ラベルも一致（ラベル "${st.label}" / 状態 ${st.userK.toFixed(1)}×）`);
+  ok(st.userK >= st.min - 1e-9,
+     `⑧ 状態がスライダーの min を下回らない（${st.userK} ≧ ${st.min}）`);
+  // 4 つ目のズレ: paintRange は input イベントにしか繋がっていないので、プログラム代入では
+  // 塗りが元位置に残る。fx.sync が明示的に塗り直していることを実測する。
+  const expectPct = Math.round(((st.userK - st.min) / (st.max - st.min)) * 100);
+  ok(st.paintPct === expectPct,
+     `⑧ スライダーの塗りつぶしも追従（実測 ${st.paintPct}% / 期待 ${expectPct}%）`);
+  ok(errors.length === 0, `⑦ JS エラー 0 件${errors.length ? ' — ' + errors.slice(0, 3).join(' / ') : ''}`);
+  await page.close();
+}
+
+// ── ⑨ 【AZ6】④' の経路で carScale が入口の倍率へ復元される ──────────────────────────
+// 旧は ③④ が先に下限まで削り、④' で卓上へ戻したあとも復元しなかったため、同じコースで
+// スライダー 0.8 → 車長 0.076m ／ 2 → 0.380m と 5 倍の不連続になっていた。
+{
+  console.log("\n【⑨】④' で卓上へ戻したあと carScale が入口の倍率のまま（AZ6）");
+  const { page, errors } = await newPage(browser);
+  await seed(page, [FIX_RESCUABLE]);
+  await page.selectOption('#courseSel', FIX_RESCUABLE.name);
+  await page.waitForTimeout(600);
+  const entry = await page.evaluate(() => document.getElementById('carScale').value);
+  const added = await setRegimeAndSettle(page, 'fullscale');   // ④' を通す（→ 卓上へ戻る）
+
+  // **前提**: このブロック単独で「④' が実際に発火した」ことを固定する
+  // （②「大きすぎて入りません」で戻った場合も卓上になるので、それでは復元の検査にならない）。
+  ok(/1 台も置けません|Not a single car can be placed/.test(added),
+     "⑨ 前提: ④'（実態収容ゼロの救済）が発火した — ② の代理量復帰ではない");
+  const st = await page.evaluate(async () => {
+    const cfg = await import(new URL('js/config.js', location.href).href);
+    return { dom: Number(document.getElementById('carScale').value), userK: cfg.SCALE_STATE.userK,
+             label: document.getElementById('carScalev').textContent };
+  });
+  ok(Math.abs(st.userK - Number(entry)) < 1e-9,
+     `⑨ ④' 後も入口の倍率 ${entry}× のまま（復元された。実測 ${st.userK}×）`);
+  ok(Math.abs(st.dom - st.userK) < 1e-9 && st.label === st.userK.toFixed(1) + '×',
+     `⑨ DOM・ラベルもそろっている（DOM ${st.dom} / ラベル "${st.label}"）`);
+  ok(errors.length === 0, `⑦ JS エラー 0 件${errors.length ? ' — ' + errors.slice(0, 3).join(' / ') : ''}`);
+  await page.close();
+}
+
+// ── ⑩ 【AZ6】既定の 1 台編成でも「走り出せない」が ▶ の直前に告知される ──────────────
+// AZ5 の申し送り: ⑥ は `slots.length > 1` で落ちるので、静的には置けるが 1 台も走り出せない
+// コースを既定（1 台）で開いても**無言**だった（🏁 も `capacityOf(course,1)=1` なので NO_ROOM に
+// ならず「0台完走 / 1台リタイア」だけが出る）。AZ6 は発走直前 (reason==='race') に 1 台ぶんの
+// 実走プローブを払って告知する。**利用者の操作（▶ を押す）だけで確かめる。**
+{
+  console.log('\n【⑩】静的には置けるが 1 台も走り出せないコース → ▶ の直前に告知（AZ6）');
+  const { page, errors } = await newPage(browser);
+  // 卓上の実寸から「閉じた部屋 幅 4×車幅 × 奥行 1.7×車長」を作る（AZ5 と同じ治具の作り方）。
+  const room = await page.evaluate(async () => {
+    const cfg = await import(new URL('js/config.js', location.href).href);
+    const L = cfg.CAR.length / cfg.SCALE_STATE.userK, W = cfg.CAR.width / cfg.SCALE_STATE.userK;
+    const X = 1.7 * L, Y = 4 * W;
+    return { name: 'AZ6 動けない部屋', bounds: { w: X, h: Y }, start: { x: X / 2, y: Y / 2, theta: 0 },
+      walls: [{ x1: 0, y1: 0, x2: X, y2: 0 }, { x1: X, y1: 0, x2: X, y2: Y },
+              { x1: X, y1: Y, x2: 0, y2: Y }, { x1: 0, y1: Y, x2: 0, y2: 0 }] };
+  });
+  await seed(page, [room]);
+  await page.selectOption('#courseSel', room.name);
+  await page.waitForTimeout(800);
+
+  const nCars = await page.evaluate(() => document.querySelectorAll('#fleetCols .carcol').length);
+  ok(nCars === 1, `⑩ 前提: 既定の 1 台編成のまま（実測 ${nCars} 台）`);
+  ok(!/走り出せる車が 1 台もありません|not one of them can actually pull away/.test(await logText(page)),
+     '⑩ 前提: コース選択の時点では告知していない（コース閲覧に実走コストを払わない）');
+
+  // **差分で見ない。** `startAuto` は先頭で `clearLog()` を呼ぶのでログは短くなる（前の長さで
+  // slice すると必ず空文字になる＝検査が何も見ない。初版で実際にそうなった）。走行開始後の
+  // 全文をそのまま見る。
+  await page.click('#run');                // ▶ 自動走行（startAuto → enforceFitRatio('race')）
+  await page.waitForTimeout(2500);
+  const added = await logText(page);
+  ok(/▶|Started/.test(added), '⑩ 前提: ▶ が実際に走行を開始した（クリックが効いている）');
+  ok(/走り出せる車が 1 台もありません|not one of them can actually pull away/.test(added),
+     '⑩ ▶ の直前に「実際に走り出せる車が 1 台もありません」と告知された（既定編成でも無言でない）');
+  ok(!/台から 1 台にします|Setting the field from/.test(added),
+     '⑩ 台数を変えていないので「{was} 台から {n} 台にします」とは言わない');
   ok(errors.length === 0, `⑦ JS エラー 0 件${errors.length ? ' — ' + errors.slice(0, 3).join(' / ') : ''}`);
   await page.close();
 }

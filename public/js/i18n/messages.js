@@ -741,6 +741,14 @@ export const MESSAGES = {
   //   **静的には置けるが実走で 1 台も走り出せない** (driveableCapN=0・発走順次化ゲート込みの実走で
   //   全車が車長ぶんも動けない)。理由が違うので同じ文言にしない (CI-14: 測っていないことを断定しない)。
   'log.capZeroDriveWarn': { ja: '⚠ 「{name}」はこの大きさ・スケールでは、置くことはできても実際に走り出せる車が 1 台もありません (発走しても車体の長さぶんも動けません)。台数を {was} 台から {n} 台にしますが、この 1 台も走り出せない可能性があります — スタート地点の前方に走るための余地があるかご確認ください。', en: '⚠ In "{name}" at this size/scale the cars can be placed, but not one of them can actually pull away (none moves even its own car length after the start). Setting the field from {was} to {n}, but that car may not get going either — please check that there is room to drive ahead of the start position.' },
+  // 【AZ6・2026-09-13】**台数を減らさなかった経路の文言**（新設）。上の 2 本は「台数を {was} 台から
+  //   {n} 台にします」と必ず言うが、`enforceFitRatio` の告知には **減らす台数が無い経路**がある
+  //   （既に 1 台・走行中で splice しない）。そこへ上の文言を流すと「台数を 1 台から 1 台にします」
+  //   という無意味な文になり、走行中なら**起きていない台数変更を告げる嘘**になる。
+  //   AZ6 で ⑥ の告知を既定の 1 台編成へ広げたことで、この経路が主経路になったので分けた。
+  //   （AZ5 の「理由が違うものを同じ文言にしない」と同じ型で、**していないことを言わない**）
+  'log.capZeroWarnOnly': { ja: '⚠ 「{name}」はこの大きさ・スケールでは車を 1 台も置けません (壁に当たらず、前方に発走の余地を残せる位置が見つかりません)。いま並んでいる車はスタート地点で壁と重なっている可能性があります — コースの通路幅と、スタート地点の前方の余地をご確認ください。', en: '⚠ Not a single car fits in "{name}" at this size/scale (no position is clear of the walls with room ahead to pull away). The car(s) on the grid may be overlapping a wall at the start — please check the corridor width and the space ahead of the start position.' },
+  'log.capZeroDriveWarnOnly': { ja: '⚠ 「{name}」はこの大きさ・スケールでは、置くことはできても実際に走り出せる車が 1 台もありません (発走しても車体の長さぶんも動けません)。いま並んでいる車も走り出せない可能性があります — スタート地点の前方に走るための余地があるかご確認ください。', en: '⚠ In "{name}" at this size/scale the cars can be placed, but not one of them can actually pull away (none moves even its own car length after the start). The car(s) on the grid may not get going either — please check that there is room to drive ahead of the start position.' },
   'log.carAdded':       { ja: '車両 {name} を追加しました (計 {n} 台)', en: 'Added car {name} ({n} total)' },
   'log.fragileClearance': { ja: '⚠ 最小クリアランス {v}（脆弱）— {n} 台が接触寸前まで詰まっています。台数を減らすか、より広いコースにすると安定します。', en: '⚠ Min clearance {v} (fragile) — {n} cars are packed nearly touching. Reduce the number of cars or use a wider course for stability.' },
   'log.carRemoved':     { ja: '車両 {name} を削除しました (計 {n} 台)', en: 'Removed car {name} ({n} total)' },

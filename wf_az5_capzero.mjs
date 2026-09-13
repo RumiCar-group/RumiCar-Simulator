@@ -39,14 +39,20 @@
 //   さらに **UI 4 経路のうち、実ブラウザが実際に踏むのは 2 経路だけ**（🏁 runRaceNow と 📋 closeAndRace）。
 //   公式記録の検証再走とゴースト対戦は **D) の構造条件だけが守っている**（層 4 レビュー 2026-09-12 の指摘）。
 //
-// ⚠ **AZ5 が塞いでいない範囲（実測で確定・AZ6 へ申し送り）**:
-//   ・**既定の 1 台編成では実走ゼロが告知されない**。`main.js` ⑥ は `slots.length > 1` で落ちるので、
-//     静的には置けるが 1 台も走り出せないコースを 1 台で開いても無言（実測: 静的 capacityOf=3・stuckAtN(1)=1）。
-//     広げなかった理由はコスト（出荷最大コースで 1 台プローブ 90.3ms／コース選択ごと）と、発火条件を変えると
-//     落ち着き先の全格子回帰をやり直す必要があること。
-//   ・**`runRace` の収容判定は carScale ×1 で行われ、ライブの `enforceFitRatio` は利用者のスケールで測る**。
-//     ∴ 「UI は 6 台置けると言うのに 🏁 が NO_ROOM で止まる」構成が実在する（実測: 廊下 0.8m×0.08m）。
-//     AZ5 は**文言でこの条件（×1）を明示する**ところまでで、判定系の統一は AZ6（判定コアの DOM 分離）。
+// ── **【AZ6・2026-09-13 で状況が変わった。以下は AZ5 時点の申し送りとその顛末】** ───────────
+//   ① **「既定の 1 台編成では実走ゼロが告知されない」→ 塞がれた。** 判定は `main.js` から
+//      `public/js/fitguard.js` へ分離され（⑥ の条件は `ctx.slotCount` / `ctx.reason` で書かれている）、
+//      **発走直前（`reason==='race'`）に限り 1 台ぶんの実走プローブを払う**分岐が入った。下の D) は
+//      その分岐が消えると赤くする（AZ5 の穴が戻らないよう、AZ5 側のゲートでも見張る）。
+//      **コストの懸念は解決していない**（1 台プローブは出荷最大コースで実測 90.3ms）ので、
+//      コース選択では払わない＝ここが「発走直前だけ」である理由。
+//   ② **「`runRace` は ×1・ライブは利用者スケール」→ 統一しない、と AZ6 が決めた。**
+//      AZ5 時点の注記は「判定系の統一は AZ6」と書いていたが、AZ6 の結論は**寄せない**である
+//      （`runRace` を変えると公式記録の再現性〔AK2/D10〕が壊れ、ライブを ×1 にすると ③④ が仕事を
+//        しなくなる＝どちらも目的に対して正しい）。食い違いは出荷コースにも 60 セル実在し
+//      （`wf_az2_fitguard.mjs` の G) が件数を出す）、**食い違うセルで 🏁 が必ず NO_ROOM で止まる**
+//      ことを同 G) が本物の `runRace` で確認する。AZ5 が入れた `log.race.noRoom`（×1 を明示）が
+//      その告知の実体である。
 import fs from 'fs';
 import { buildFromSpec, normalizeCourse } from './public/js/course.js';
 import { fitsAllCars, capacityOf } from './public/js/fleet.js';
@@ -249,7 +255,7 @@ const bodyOf = (src, header) => {
 };
 
 function checkStructural(raw) {
-  const eng = strip(raw.engine), cap = strip(raw.capacity), main = strip(raw.main), ui = strip(raw.ui);
+  const eng = strip(raw.engine), cap = strip(raw.capacity), main = strip(raw.main), ui = strip(raw.ui), guard = strip(raw.guard);
   const v = [];
   // --- race_engine: fit ガードが 0 を表現し、0 では走らせない ---
   if (/while\s*\(\s*nFit\s*>\s*1\s*&&\s*!fitsAllCars/.test(eng))
@@ -301,18 +307,25 @@ function checkStructural(raw) {
     v.push('driveableCapN が 0 まで下げる走査を持っていない');
   if (!/\breturn cap;/.test(capBody))
     v.push('driveableCapN が cap をそのまま返していない');
-  // --- main.js ⑥: 実走の 0 を握りつぶさない ---
-  if (!/const drv = driveableCapN\(course, regNow, capN\);/.test(main))
-    v.push('main.js ⑥ が driveableCapN の戻り値を受けていない');
-  if (!/if \(drv < 1\) capZeroDrive = true; else capN = Math\.min\(capN, drv\);/.test(main))
-    v.push('main.js ⑥ が実走の収容ゼロを capZeroDrive として立てていない（0 を黙って丸めている）');
-  if (/capN = Math\.min\(capN, driveableCapN\(/.test(main))
-    v.push('main.js ⑥ が旧実装（戻り値を検査せず Math.min するだけ）に戻っている');
+  // --- fitguard.js ⑥: 実走の 0 を握りつぶさない（AZ6 で main.js から分離。**同じ条件を同じ厳しさで見る**）---
+  if (!/const drv = driveableCapN\(course, regNow, capN\);/.test(guard))
+    v.push('fitguard.js ⑥ が driveableCapN の戻り値を受けていない');
+  if (!/if \(drv < 1\) capZeroDrive = true; else capN = Math\.min\(capN, drv\);/.test(guard))
+    v.push('fitguard.js ⑥ が実走の収容ゼロを capZeroDrive として立てていない（0 を黙って丸めている）');
+  if (/capN = Math\.min\(capN, driveableCapN\(/.test(guard))
+    v.push('fitguard.js ⑥ が旧実装（戻り値を検査せず Math.min するだけ）に戻っている');
   // **M2（層 4 レビューが実測した穴）**: ⑥ の**囲みの条件**をどのゲートも見ていなかったため、
-  //   `slots.length > 9` や `regNow === 'midscale'` にするだけで AZ5 の中核が丸ごと死ぬのに緑だった。
+  //   `slotCount > 9` や `regNow === 'midscale'` にするだけで AZ5 の中核が丸ごと死ぬのに緑だった。
   //   条件式をリテラルで固定する（変えるなら、変えた理由とセルの全件列挙が要る）。
-  if (!/if \(!capZeroStatic && regNow === 'tabletop' && reason !== 'carScale' && capN > 1 && slots\.length > 1\) \{/.test(main))
-    v.push("main.js ⑥ の発火条件が変わった（実走ゼロの検出範囲が動く。変更するなら落ち着き先の全件列挙が要る）");
+  if (!/if \(!capZeroStatic && regNow === 'tabletop' && ctx\.reason !== 'carScale' && capN > 1 && ctx\.slotCount > 1\) \{/.test(guard))
+    v.push("fitguard.js ⑥ の多台分岐の発火条件が変わった（実走ゼロの検出範囲が動く。変更するなら落ち着き先の全件列挙が要る）");
+  // **【AZ6】AZ5 の申し送り「既定の 1 台編成では実走ゼロが告知されない」の是正**。
+  //   発走直前（reason==='race'）にだけ 1 台ぶんの実走プローブを払い、告知を既定編成にも届かせる。
+  //   ここを消すと AZ5 の穴がそのまま戻るので、AZ5 のゲートでも見張る。
+  if (!/\} else if \(!capZeroStatic && regNow === 'tabletop' && ctx\.reason === 'race' && capN >= 1\) \{/.test(guard))
+    v.push('fitguard.js ⑥ の 1 台分岐（発走直前に実走ゼロを告知）が無い／条件が変わった＝既定編成が再び無言になる');
+  if (!/if \(driveableCapN\(course, regNow, 1\) < 1\) capZeroDrive = true;/.test(guard))
+    v.push('fitguard.js ⑥ の 1 台分岐が driveableCapN を呼んでいない（告知の根拠が無い）');
   // --- main.js: レース 2 経路が NO_ROOM と fitReduced を受ける ---
   const errBody = bodyOf(main, 'function raceErrLine');
   if (!/e\.code === 'NO_ROOM'/.test(errBody) || !/log\.race\.noRoom/.test(errBody))
@@ -352,6 +365,8 @@ const RAW = {
   engine: fs.readFileSync('./public/js/race_engine.js', 'utf8'),
   capacity: fs.readFileSync('./public/js/capacity.js', 'utf8'),
   main: fs.readFileSync('./public/js/main.js', 'utf8'),
+  // AZ6: ⑤⑥ の判定は main.js から public/js/fitguard.js へ分離された（DOM 非結合の判定コア）。
+  guard: fs.readFileSync('./public/js/fitguard.js', 'utf8'),
   ui: fs.readFileSync('./public/js/race_ui.js', 'utf8'),
 };
 console.log('\nD) product 側の構造検査（コメントを剥がして照合）');
@@ -378,8 +393,8 @@ const MUTATIONS = [
   ['capacity: 戻り値を Math.max(1, cap) にする', 'capacity', (s) => s.replace('  return cap;   //', '  return Math.max(1, cap);   //')],
   ['capacity: 走査を cap>=2 で止める', 'capacity',
     (s) => s.replace('while (cap >= 1 && stuckAtN(course, regime, cap) > 0) cap--;', 'while (cap >= 2 && stuckAtN(course, regime, cap) > 0) cap--;')],
-  ['main ⑥: 実走ゼロの検査を外して旧実装へ戻す', 'main',
-    (s) => s.replace('const drv = driveableCapN(course, regNow, capN);        // 0..capN (AZ5: 0 を返せる)\n        if (drv < 1) capZeroDrive = true; else capN = Math.min(capN, drv);',
+  ['fitguard ⑥: 実走ゼロの検査を外して旧実装へ戻す', 'guard',
+    (s) => s.replace('const drv = driveableCapN(course, regNow, capN);        // 0..capN（AZ5: 0 を返せる）\n    if (drv < 1) capZeroDrive = true; else capN = Math.min(capN, drv);',
                      'capN = Math.min(capN, driveableCapN(course, regNow, capN));')],
   ['main: NO_ROOM の出し分けを削除', 'main', (s) => s.replace("e.code === 'NO_ROOM'", 'false')],
   ['main: fitReduced の告知を無効化', 'main', (s) => s.replace('if (!res || !(res.fitReduced > 0)) return;', 'return;')],
@@ -391,10 +406,17 @@ const MUTATIONS = [
   //   指摘を受けて D) に構造条件を足したので、毎回「ちゃんと赤くなる」ことを機械確認する。
   ['M1 engine: fitReduced のカウンタだけ残しスライスを削除（告知と実態が割れる）', 'engine',
     (s) => s.replace('{ fitReduced = field.length - nFit; fitField = field.slice(0, nFit); }', '{ fitReduced = field.length - nFit; }')],
-  ['M2 main ⑥: slots.length > 1 を > 9 にして実走ゼロ検出を殺す', 'main',
-    (s) => s.replace("capN > 1 && slots.length > 1) {", "capN > 1 && slots.length > 9) {")],
-  ['M2b main ⑥: 卓上判定を midscale にして実走ゼロ検出を殺す', 'main',
-    (s) => s.replace("regNow === 'tabletop' && reason !== 'carScale'", "regNow === 'midscale' && reason !== 'carScale'")],
+  ['M2 fitguard ⑥: slotCount > 1 を > 9 にして実走ゼロ検出を殺す', 'guard',
+    (s) => s.replace("capN > 1 && ctx.slotCount > 1) {", "capN > 1 && ctx.slotCount > 9) {")],
+  ['M2b fitguard ⑥: 卓上判定を midscale にして実走ゼロ検出を殺す', 'guard',
+    (s) => s.replace("regNow === 'tabletop' && ctx.reason !== 'carScale'", "regNow === 'midscale' && ctx.reason !== 'carScale'")],
+  // 【AZ6】既定 1 台編成への告知（AZ5 の申し送りの是正）を殺す変異。消えると AZ5 の穴が戻る。
+  ['M9 fitguard ⑥: 1 台分岐を殺す（既定編成が再び無言になる）', 'guard',
+    (s) => s.replace("} else if (!capZeroStatic && regNow === 'tabletop' && ctx.reason === 'race' && capN >= 1) {", "} else if (false) {")],
+  ['M11 fitguard ⑥: 1 台分岐を slotCount<=1 へ狭める（capN=1×多台編成の兄弟穴を再注入）', 'guard',
+    (s) => s.replace("ctx.reason === 'race' && capN >= 1) {", "ctx.reason === 'race' && ctx.slotCount <= 1 && capN >= 1) {")],
+  ['M10 fitguard ⑥: 1 台分岐から実走プローブを抜く（根拠の無い告知にする）', 'guard',
+    (s) => s.replace('if (driveableCapN(course, regNow, 1) < 1) capZeroDrive = true;', 'if (false) capZeroDrive = true;')],
   ['M5 engine: throw を条件付きにする（既定では投げない）', 'engine',
     (s) => s.replace('        throw err;', '        if (spec.strictRoom) throw err;')],
   ['M7 engine: grid の正規化を外す（grid:[] が 0 台レースを成立させる）', 'engine',
