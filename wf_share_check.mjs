@@ -321,7 +321,7 @@ ok(progNav === expectNav('programs/community'),
 
 // --- ⑨-1 投稿物が往復で欠けないこと (URL を通らなくなっても中身は同じ) ---
 {
-  const src = synthCourse(366, '富士スピードウェイ');
+  const src = synthCourse(366, 'レーシングコース');
   const sub = courseSubmission(src);
   ok(!('url' in sub), '⑨ 投稿物に url フィールドが無い (URL に載せる誘惑を構造的に断つ)');
   let back = null;
@@ -331,7 +331,7 @@ ok(progNav === expectNav('programs/community'),
 }
 
 // --- ⑨-2 ファイル名が安全であること (投稿者が自由に名前を付ける = 素性不明の文字列) ---
-const NAMES = ['富士スピードウェイ', 'My Course #1', '../../etc/passwd', 'a/b\\c',
+const NAMES = ['レーシングコース', 'My Course #1', '../../etc/passwd', 'a/b\\c',
                '  ', '', 'ALL CAPS', 'x'.repeat(300), 'a#b?c&d=e', '🚗💨'];
 for (const nm of NAMES) {
   for (const sub of [courseSubmission({ name: nm, walls: [] }), programSubmission('x', nm, 'c')]) {

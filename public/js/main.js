@@ -1316,7 +1316,8 @@ function rebuildCourseList(selectName) {
   for (const c of communityCourses) {
     const key = 'gh:' + c.name;
     courseSources[key] = { type: 'community', data: c.data };
-    addOpt(sel, '🌐 ' + (c.data.name || c.name), key);
+    // 表示名は選択後の表示と同じ courseDisplayName (en で name_en があれば訳す・BB1)。value は gh:<ファイル名> のまま。
+    addOpt(sel, '🌐 ' + (courseDisplayName(c.data) || c.name), key);
   }
   if (selectName && courseSources[selectName]) sel.value = selectName;
 }
