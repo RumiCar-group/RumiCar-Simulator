@@ -9,6 +9,10 @@ import {
   drawCourse, screenToWorld, worldToScreen,
   PRESETS, presetByName, normalizeCourse, loadPresets,
 } from './course.js';
+// BB2: 投稿コースの形式検査 checkCourseData は**名前空間 import** で受ける。JS は Cache-Control 無しで配信され
+// 古い course.js がブラウザに残りうるので、無い名前を名前付き import するとアプリ全体が読み込めなくなる (BA1 で実測)。
+// 古い course.js のときは検査を飛ばす (従来どおりの挙動に戻るだけで起動は止めない)。
+import * as courseParts from './course.js';
 import { carEdges } from './physics.js';
 import { applyRegime } from './physics_dyn.js';
 import { readAll, readRear } from './sensors.js';
@@ -1454,10 +1458,31 @@ async function loadCommunityCourses() {
   // 正常に 0 件 ([]) のときは従来どおり静か。失敗しても本体は止めない (プリセット/保存で動く)。
   if (list === null) { logLine(t('log.ghCoursesFail')); return; }
   // v5.2.0: 逐次 await を並列取得へ (1 件失敗はスキップ=従来同値)。メニュー順は list 一覧順を維持。
+  // BB2: 上流は投稿の中身を検査しないので、形式の正しくない投稿は一覧に載せず、理由を 1 行で知らせる。
+  //   JSON として読めない (SyntaxError) も形式の問題として数える。通信失敗・HTTP エラーは従来どおり黙ってスキップ。
+  const check = typeof courseParts.checkCourseData === 'function' ? courseParts.checkCourseData : () => null;
+  const bad = [];
   const fetched = await Promise.all(list.map(async (e) => {
-    try { return { name: e.name, data: await fetchCommunityCourse(e.download_url) }; }
-    catch (err) { return null; /* 1 件失敗はスキップ */ }
+    let data;
+    try { data = await fetchCommunityCourse(e.download_url); }
+    catch (err) {
+      if (err instanceof SyntaxError) bad.push({ e, why: 'JSON' });
+      return null; /* 1 件失敗はスキップ */
+    }
+    const why = check(data);
+    if (why) { bad.push({ e, why }); return null; }
+    return { name: e.name, data };
   }));
+  if (bad.length) {
+    // 取得は並列で終わる順が揺れるので、告知の並びは一覧 (index.json) の順に揃える。
+    bad.sort((a, b) => list.indexOf(a.e) - list.indexOf(b.e));
+    // 名前は先頭 10 件まで (ログ欄は 8,000 字で頭を切るので、除外が多いと件数や起動時の行が消える)。件数は常に全件。
+    const BAD_SHOWN = 10;
+    const items = bad.slice(0, BAD_SHOWN).map(({ e, why }) => `${e.path.split('/').pop()} (${why})`).join(', ')
+      + (bad.length > BAD_SHOWN ? `, … (+${bad.length - BAD_SHOWN})` : '');
+    // 古い messages.js がキャッシュに残っていると t() はキー名だけを返すので、そのときは言語に依らない形で出す。
+    logLine(hasKey('log.ghCoursesBad') ? t('log.ghCoursesBad', { n: bad.length, items }) : `🌐 ${bad.length}: ${items}`);
+  }
   const loaded = fetched.filter(Boolean);
   communityCourses = loaded;
   if (loaded.length) {

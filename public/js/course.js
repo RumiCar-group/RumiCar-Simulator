@@ -406,6 +406,94 @@ export function presetByName(name) {
 
 export function defaultCourse() { return buildFromSpec(FALLBACK_SPECS[0]); }
 
+// ===== 投稿コースの形式検査 (BB2・2026-09-15) =====
+// 上流の courses/community/ は投稿の中身を検査しない (index.json は一覧を作るだけ)。normalizeCourse は
+// 形が正しい前提で書かれているので、壊れた JSON を渡すと例外 (`null`・walls が配列でない・壁に null) か、
+// NaN の寸法で描画エラーを出し続ける (起票時の実測で 1.5 秒に 92 件)。ここで「normalizeCourse に渡してよい形か」
+// だけを判定する。**DOM に触れない純関数** (常設ゲート wf_bb2_course_check.mjs が同じ関数を node で呼ぶ)。
+//
+// 戻り値: 合格なら null、不合格なら**最初に見つけた問題の箇所** ('$'・'walls[3].x1'・'walls:size' 等)。
+// 形の決め方 (実装前に固定・internal 決定ログ「BB2 着手前の固定」と、層 4 レビュー後の改訂):
+//   ・省略できる項目は undefined と null を「無い」とみなす (finish の無いコースをエディタで開いて書き出すと finish: null になる)
+//   ・walls は必須の配列 (空配列は可＝エディタで壁を全消去した状態も正規の出力)。各要素は x1,y1,x2,y2 が有限数
+//   ・bounds はあれば w,h が有限の正数／start はあれば x,y,theta が有限数／finish はあれば x1..y2 が有限数、fx/fy はあれば有限数
+//   ・name / name_en はあれば文字列で、空でないなら空白以外を含む (空白だけだと一覧のラベルが空になる。
+//     空文字はエディタが名前欄を空白だけにしたときに出す正規の出力で、一覧はファイル名に落ちる)。desc / desc_en はあれば文字列
+//   ・数値は typeof 'number' かつ有限 (数字の文字列は通さない。エディタは数で書き出すので、文字列を許すと
+//     '1.5' と 'abc' の線引きを normalizeCourse の `+` 任せにすることになる)
+// 大きさの上限 (層 4 レビュー 2026-09-15 で判明・実測): 形が正しくても、壁の座標が遠い (x=1e17 の短い壁 1 本) と
+// 壁グリッドの走査が終わらず、実投稿を mm と m で取り違えた (×1000) だけでメモリが尽きた。グリッドは壁の外接矩形が
+// 覆うセルを全部埋めるので、bounds 1000 m に対角の壁 1 本でも 1,082 万セル・23 秒かかる。∴ **出荷コースで動くと
+// 実証されている範囲**に収める (数値は wf_bb2_course_check.mjs F) が出荷全コースに対して余裕を測る)。
+// **守るのは事故 (単位の取り違え・迷い込んだ遠い壁・桁違いの寸法) まで** (2026-09-15 利用者裁定)。わざと作った重い形
+// (櫛形の壁で配置探索を広げる・長い壁を大量に並べる等) は上限内でも重くなりうる。上流の投稿は PR のレビューを経て入る:
+//   ・bounds (無ければ normalizeCourse の既定 3×2) の各辺が COURSE_LIMITS.bMin〜bMax m (出荷 0.907〜748.36 m)
+//   ・壁の端点・start・finish の端点が bounds の外側 margin (長辺×5%) 以内 (出荷の最大は 0%・上流の投稿 racing-course は 0.63%)
+//   ・壁が占めるグリッドのセル数 (セル cell m・壁グリッドと同じ数え方) の合計が maxCells 以下 (出荷の最大 685,643)
+//   ・壁の本数が maxWalls 以下 (出荷の最大 960。セル数だけだと短い壁を 150 万本並べた数十 MB の投稿が通る)
+// 検査しないもの: diff・bench・beginner 等の表示用メタ (壊れていても normalizeCourse が無害に扱う)。
+const COURSE_LIMITS = { bMin: 0.5, bMax: 1000, margin: 0.05, cell: 0.1, maxCells: 1500000, maxWalls: 20000 };
+export function checkCourseData(data) {
+  const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+  const absent = (v) => v === undefined || v === null;
+  const num = (v) => typeof v === 'number' && Number.isFinite(v);
+  if (!isObj(data)) return '$';
+  if (!Array.isArray(data.walls)) return 'walls';
+  for (let i = 0; i < data.walls.length; i++) {
+    const w = data.walls[i];
+    if (!isObj(w)) return `walls[${i}]`;
+    for (const k of ['x1', 'y1', 'x2', 'y2']) if (!num(w[k])) return `walls[${i}].${k}`;
+  }
+  if (!absent(data.bounds)) {
+    if (!isObj(data.bounds)) return 'bounds';
+    for (const k of ['w', 'h']) if (!(num(data.bounds[k]) && data.bounds[k] > 0)) return `bounds.${k}`;
+  }
+  if (!absent(data.start)) {
+    if (!isObj(data.start)) return 'start';
+    for (const k of ['x', 'y', 'theta']) if (!num(data.start[k])) return `start.${k}`;
+  }
+  if (!absent(data.finish)) {
+    if (!isObj(data.finish)) return 'finish';
+    for (const k of ['x1', 'y1', 'x2', 'y2']) if (!num(data.finish[k])) return `finish.${k}`;
+    for (const k of ['fx', 'fy']) if (!absent(data.finish[k]) && !num(data.finish[k])) return `finish.${k}`;
+  }
+  for (const k of ['name', 'name_en']) {
+    if (!absent(data[k]) && !(typeof data[k] === 'string' && (data[k] === '' || data[k].trim() !== ''))) return k;
+  }
+  for (const k of ['desc', 'desc_en']) {
+    if (!absent(data[k]) && typeof data[k] !== 'string') return k;
+  }
+  // ── 大きさ (形の検査を全部通ったものだけ・normalizeCourse と同じ既定を使う) ──
+  const L = COURSE_LIMITS;
+  if (data.walls.length > L.maxWalls) return 'walls:size';
+  const bw = absent(data.bounds) ? 3.0 : data.bounds.w, bh = absent(data.bounds) ? 2.0 : data.bounds.h;
+  if (!(bw >= L.bMin && bw <= L.bMax)) return 'bounds.w';
+  if (!(bh >= L.bMin && bh <= L.bMax)) return 'bounds.h';
+  const m = L.margin * Math.max(bw, bh);
+  const outX = (v) => v < -m || v > bw + m, outY = (v) => v < -m || v > bh + m;
+  for (let i = 0; i < data.walls.length; i++) {
+    const w = data.walls[i];
+    if (outX(w.x1)) return `walls[${i}].x1`;
+    if (outY(w.y1)) return `walls[${i}].y1`;
+    if (outX(w.x2)) return `walls[${i}].x2`;
+    if (outY(w.y2)) return `walls[${i}].y2`;
+  }
+  if (!absent(data.start)) { if (outX(data.start.x)) return 'start.x'; if (outY(data.start.y)) return 'start.y'; }
+  if (!absent(data.finish)) {
+    const f = data.finish;
+    if (outX(f.x1)) return 'finish.x1'; if (outY(f.y1)) return 'finish.y1';
+    if (outX(f.x2)) return 'finish.x2'; if (outY(f.y2)) return 'finish.y2';
+  }
+  let cells = 0;
+  for (const w of data.walls) {
+    const nx = Math.floor(Math.max(w.x1, w.x2) / L.cell) - Math.floor(Math.min(w.x1, w.x2) / L.cell) + 1;
+    const ny = Math.floor(Math.max(w.y1, w.y2) / L.cell) - Math.floor(Math.min(w.y1, w.y2) / L.cell) + 1;
+    cells += nx * ny;
+    if (cells > L.maxCells) return 'walls:size';
+  }
+  return null;
+}
+
 // 任意データ (エディタ/JSON) をコースとして正規化
 export function normalizeCourse(data) {
   const c = {

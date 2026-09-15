@@ -718,6 +718,7 @@ export const MESSAGES = {
   'log.langUnknown':    { ja: '言語不明', en: 'unknown lang' },
   'log.ghProgsLoaded':  { ja: 'GitHub 投稿プログラムを {n} 件読み込みました (走行メニューの「🌐 みんなの投稿」)。', en: 'Loaded {n} community program(s) from GitHub (see "🌐 Community" in the program menu).' },
   'log.ghCoursesLoaded':{ ja: 'GitHub 投稿コースを {n} 件読み込みました (メニューの 🌐 印)。', en: 'Loaded {n} community course(s) from GitHub (marked 🌐 in the menu).' },
+  'log.ghCoursesBad':   { ja: '🌐 形式が正しくないか大きすぎる投稿コース {n} 件を一覧に載せませんでした: {items} (括弧内は問題のある箇所)。', en: '🌐 Skipped {n} community course(s) with an invalid format or excessive size: {items} (the problem is shown in parentheses).' },
   'log.ghCoursesFail':  { ja: '🌐 コミュニティコースを取得できませんでした (時間をおいて再読込してください。GitHub のレート制限/オフラインの可能性)。本体はそのまま使えます。', en: '🌐 Could not fetch community courses (please reload later; possibly a GitHub rate limit or offline). The app keeps working.' },
   'log.ghProgramsFail': { ja: '🌐 コミュニティ投稿プログラムを取得できませんでした (時間をおいて再読込してください。GitHub のレート制限/オフラインの可能性)。本体はそのまま使えます。', en: '🌐 Could not fetch community programs (please reload later; possibly a GitHub rate limit or offline). The app keeps working.' },
   'log.ghCarsLoaded':   { ja: 'GitHub 投稿車種を {n} 件読み込みました (車種メニューの 🌐 印)。', en: 'Loaded {n} community car type(s) from GitHub (marked 🌐 in the car menu).' },

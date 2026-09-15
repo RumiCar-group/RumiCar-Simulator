@@ -63,8 +63,11 @@ export async function launch({ slowMo = Number(process.env.RC_SLOWMO || 0) } = {
  * (goto の前に配線しないと起動時のエラーを取りこぼす)。
  * 返り値の errors/benign は配列参照なので、操作後に読めば累積が見える。
  */
-export async function newPage(browser, { width = 1440, height = 900, path = '' } = {}) {
+export async function newPage(browser, { width = 1440, height = 900, path = '', before = null } = {}) {
   const page = await browser.newPage({ viewport: { width, height } });
+  // before(page): goto の前に済ませたい準備 (page.route で上流の応答だけを差し替える・addInitScript 等)。
+  // 起動時に走る取得を差し替えるには goto より前に配線するしかない (BB2)。
+  if (before) await before(page);
   const errors = [];   // 異常とみなすもの
   const benign = [];   // 想定内として除外したもの（沈黙截断しないため保持）
 

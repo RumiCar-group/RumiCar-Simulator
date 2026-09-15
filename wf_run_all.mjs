@@ -94,6 +94,11 @@ const GATES = [
   //   所要は本ホスト実測 43.7s（2026-09-12・wf_run_all 内）。内訳の大半は B-1（出荷 66 コース × driveableCapN）と
   //   B-2（実態収容 0 台の 74 セル × 旧挙動の反証レース）。
   'wf_az5_capzero.mjs',
+  // BB2: 投稿コースの形式検査 course.js:checkCourseData。出荷全コース（とエディタ形の JSON 往復）を 1 件も落とさない・
+  //   形ごとの期待（除外理由の JSON パスまで）・合格した変種を normalizeCourse が安全に扱える・大きさの上限と利用側の壁グリッド・変異試験・
+  //   course.js の新しい名前を名前付き import しない（キャッシュ混在で起動しなくなる）。上流の現行投稿は
+  //   実ブラウザゲート browser/check_bb2_community_bad.mjs が本物で見る（本ゲートはネットワーク不要）。所要は本ホスト実測 約 6s。
+  'wf_bb2_course_check.mjs',
 ].map((name) => ({ name, args: [] }));
 
 // official_result は決定論2回照合→result.json 再検証→Node pin 照合の複合ゲート (AP20)。
