@@ -146,22 +146,22 @@ for (const b of BASES) for (const lv of LEVELS) {
   const course = buildFromSpec(spec), G = tougeGeom(course), corners = cornersOf(G);
   // 縮退: 全標本で room ≤ 壁余白 なら走行線の比 k(i)=0 → race/inside の線が同一（層 4 重要-1）
   let roomMax = 0; for (let i = 0; i < G.n; i++) roomMax = Math.max(roomMax, roomAt(G, i));
-  geo.push({ course: b.name, level: lv.key, spec, built: { course, G, corners }, width: 2 * spec.hw, widthCars: +(2 * spec.hw / CAR.width).toFixed(2), room2: +roomForTwo(spec).toFixed(4), nCorners: corners.length, minR: +Math.min(...corners.map((c) => c.R)).toFixed(4), roomMax: +roomMax.toFixed(4), degenerate: roomMax <= AX3.WALL_MARGIN });
+  geo.push({ course: b.name, level: lv.key, spec, built: { course, G, corners }, width: 2 * spec.hw, widthCars: 2 * spec.hw / CAR.width, room2: roomForTwo(spec), nCorners: corners.length, minR: Math.min(...corners.map((c) => c.R)), roomMax, degenerate: roomMax <= AX3.WALL_MARGIN });
 }
 {
   const byLevel = {};
   for (const g of geo) (byLevel[g.level] = byLevel[g.level] || []).push(g);
   for (const lv of LEVELS) {
     const rows = byLevel[lv.key];
-    console.log(`  水準 ${lv.key.padEnd(4)}: 道幅 ${rows.map((g) => g.width.toFixed(3)).join('/')}m  車幅比 ${rows.map((g) => g.widthCars).join('/')}  余地 ${rows.map((g) => g.room2.toFixed(3)).join('/')}m`);
+    console.log(`  水準 ${lv.key.padEnd(4)}: 道幅 ${rows.map((g) => g.width.toFixed(3)).join('/')}m  車幅比 ${rows.map((g) => +g.widthCars.toFixed(2)).join('/')}  余地 ${rows.map((g) => g.room2.toFixed(3)).join('/')}m`);
   }
   const r20 = byLevel['2'].map((g) => g.room2), r30 = byLevel['3'].map((g) => g.room2), r45 = byLevel['4.5'].map((g) => g.room2);
   ok(r20.every((v) => Math.abs(v) < 1e-6) && r30.every((v) => Math.abs(v - 0.080) < 1e-6) && r45.every((v) => Math.abs(v - 0.200) < 1e-6),
     `G-1 横に 2 台並ぶ余地: 2.0 台分 = ${r20[0].toFixed(3)}m（**0 ＝ 追い越しは幾何的に不可能**）／3.0 台分 = +${r30[0].toFixed(3)}m／4.5 台分 = +${r45[0].toFixed(3)}m ⇒ 2.0 台分の結果は戦術でなく幾何が決める`);
   // （情報）コーナー数と最小 R は水準によらず同一 — H-0c が中心線一致を確かめているので恒真（層 4 軽-5）。アサートにはしない。
-  console.log(`  コーナー数/最小 R（水準共通）: ${BASES.map((b) => `${tag(b.name)} ${geo.find((g) => g.course === b.name).nCorners}本/R${geo.find((g) => g.course === b.name).minR}`).join(' ')}`);
+  console.log(`  コーナー数/最小 R（水準共通）: ${BASES.map((b) => `${tag(b.name)} ${geo.find((g) => g.course === b.name).nCorners}本/R${+geo.find((g) => g.course === b.name).minR.toFixed(4)}`).join(' ')}`);
   const cur = byLevel.cur.map((g) => g.widthCars);
-  ok(Math.min(...cur) > 6 && Math.max(...cur) < 12, `G-2 現行の峠は車幅の ${Math.min(...cur)}〜${Math.max(...cur)} 台分（実車の峠 ≈ 2 台分より 3〜5 倍広い＝掃引の動機）`);
+  ok(Math.min(...cur) > 6 && Math.max(...cur) < 12, `G-2 現行の峠は車幅の ${+Math.min(...cur).toFixed(2)}〜${+Math.max(...cur).toFixed(2)} 台分（実車の峠 ≈ 2 台分より 3〜5 倍広い＝掃引の動機）`);
   const degen = geo.filter((g) => g.degenerate);
   ok(degen.length === BASES.length && degen.every((g) => g.level === '2'),
     `G-3 走行線が中心線に縮退する（room の最大 ≤ 壁余白 ${AX3.WALL_MARGIN}m）セルは 2.0 台分の ${degen.length}/${BASES.length} 本だけ（room 最大 ${LEVELS.map((lv) => `${lv.key}:${Math.max(...byLevel[lv.key].map((g) => g.roomMax)).toFixed(3)}`).join(' ')}）⇒ 2.0 台分では inside ≡ race（判定不能・別枠で数える）`);
@@ -215,8 +215,11 @@ for (const g of geo) {
       const r = runTougeRace({ spec: g.spec, nCars: n, tactic: tac, fRace: g.fRace, paceRatio: v.ratio, delay: v.delay, latStart: v.lat, ...g.built });
       rows.push({ course: g.course, level: g.level, n, vi, ratio: v.ratio, delay: v.delay, lat: v.lat, tactic: tac,
         rank: r.leaderRank, win: r.leaderRank === 1 && r.leaderT != null, t: r.leaderT, tF: r.bestChaserT, rule: r.chaseRule, gap: r.gapAtFinish,
-        contacts: r.contacts, lc: r.leaderContact, near: r.leaderNear, rec: r.recoverArms, nonMono: r.nonMono, nonMonoL: r.nonMonoLeader, dnf: r.finished.filter((x) => !x).length, gridHit: r.gridHit, gridShift: +r.gridShift.toFixed(3),
-        psi: +(r.psiMax * 180 / Math.PI).toFixed(1), blocks: r.blocks, betaPk: +r.betaPk.toFixed(1), driftFrac: +r.driftFrac.toFixed(3), occ: r.occ != null ? +r.occ.toFixed(3) : null, occS: r.occStraight != null ? +r.occStraight.toFixed(3) : null, ticks: r.ticks });
+        contacts: r.contacts, lc: r.leaderContact, near: r.leaderNear, rec: r.recoverArms, nonMono: r.nonMono, nonMonoL: r.nonMonoLeader, dnf: r.finished.filter((x) => !x).length, gridHit: r.gridHit, gridShift: r.gridShift,
+        // 【BA2・2026-09-15 是正】psi/betaPk/driftFrac/occ/occS/gridShift は **丸めずに** 持つ（AX4 の win/winClean と同じ処方）。
+        //   以前は toFixed で丸めた値を保持し、表示でさらに丸め、psi/betaPk は D-2/D-3 の閾値判定にも丸めた値を使っていた
+        //   （真値 29.95° が 30.0° として数えられうる）。表示のときだけ丸める。
+        psi: r.psiMax * 180 / Math.PI, blocks: r.blocks, betaPk: r.betaPk, driftFrac: r.driftFrac, occ: r.occ != null ? r.occ : null, occS: r.occStraight != null ? r.occStraight : null, ticks: r.ticks });
     }
   }
   const secs = Number(process.hrtime.bigint() - t0) / 1e9;
@@ -260,8 +263,9 @@ for (const g of geo) for (const tac of TACTICS.filter((t) => t !== 'race')) {
   const p = signTest(a, b), pClean = signTest(aClean, bClean);
   // 縮退（inside ≡ race・線が同一）: 判定不能として印を付ける。同一性は F-1 が bit 一致で確かめる。
   const degenerate = tac === 'inside' && g.degenerate;
-  conds.push({ course: g.course, level: g.level, tactic: tac, pairs, tWin, rWin, tWinClean, rWinClean, a, b, both, neither, p: +p.toFixed(4), go: p < 0.05 && a > b,
-    aClean, bClean, pClean: +pClean.toFixed(4), goClean: pClean < 0.05 && aClean > bClean, winContact, winSlow, dtMean: dt.length ? +mean(dt).toFixed(3) : null, dtN: dt.length, degenerate });
+  // p/pClean/dtMean も丸めずに持つ（BA2・上の rows と同じ処方。p の印字は [E] で丸める）。
+  conds.push({ course: g.course, level: g.level, tactic: tac, pairs, tWin, rWin, tWinClean, rWinClean, a, b, both, neither, p, go: p < 0.05 && a > b,
+    aClean, bClean, pClean, goClean: pClean < 0.05 && aClean > bClean, winContact, winSlow, dtMean: dt.length ? mean(dt) : null, dtN: dt.length, degenerate });
 }
 
 // ══════════════════════════════════════════════════════════════════════════════════════
@@ -361,7 +365,7 @@ console.log(`\n[E] 先頭が 1 位で完走する割合（条件 = 峠 × 水準
     const dts = cs.filter((c) => c.dtMean != null).map((c) => c.dtMean);
     console.log(`  ${lv.key.padEnd(5)} ${tac.padEnd(8)} | ${(100 * rW / pairs).toFixed(0).padStart(3)}%(${(100 * rWc / pairs).toFixed(0).padStart(3)}%)→${(100 * tW / pairs).toFixed(0).padStart(3)}%(${(100 * tWc / pairs).toFixed(0).padStart(3)}%) | ${String(pairs).padStart(3)}  a=${String(a).padStart(3)} b=${String(b).padStart(3)} | GO ${go}/${cs.length} 峠 | clean a=${String(ac).padStart(3)} b=${String(bc).padStart(3)} GO ${goC}/${cs.length} | ${String(cs.reduce((s, c) => s + c.winContact, 0)).padStart(3)} ${String(cs.reduce((s, c) => s + c.winSlow, 0)).padStart(3)} | ${dts.length ? (mean(dts) >= 0 ? '+' : '') + mean(dts).toFixed(2) + 's' : '--'}`);
   }
-  console.log(`  GO の条件（峠 × 水準 × 戦術）: ${conds.filter((c) => c.go).map((c) => `${tag(c.course)}@${c.level}/${c.tactic}(a${c.a}/b${c.b} p=${c.p}${c.goClean ? '・clean' : '・接触込み'})`).join(' ') || 'なし'}`);
+  console.log(`  GO の条件（峠 × 水準 × 戦術）: ${conds.filter((c) => c.go).map((c) => `${tag(c.course)}@${c.level}/${c.tactic}(a${c.a}/b${c.b} p=${+c.p.toFixed(4)}${c.goClean ? '・clean' : '・接触込み'})`).join(' ') || 'なし'}`);
   const judge = conds.filter((c) => !c.degenerate);   // 分子も分母も判定可能な条件だけで数える（2 巡目 軽-8）
   const goAny = judge.filter((c) => c.go), goClean = judge.filter((c) => c.goClean);
   const goByLevel = {}; for (const c of goClean) goByLevel[c.level] = (goByLevel[c.level] || 0) + 1;
