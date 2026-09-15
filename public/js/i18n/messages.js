@@ -93,6 +93,8 @@ export const MESSAGES = {
   'opt.grid':         { ja: 'グリッド',             en: 'Grid' },
   'opt.timestamp':    { ja: 'ログ時刻',             en: 'Log timestamps' },
   'opt.depth':        { ja: '一人称ビュー',         en: 'First-person view' },
+  'opt.carMarker':    { ja: '位置マーカー',         en: 'Position marker' },
+  'opt.carMarker.title': { ja: 'ON=車が小さく表示されているとき (画面上の車長が 20px 未満) だけ、車の位置を示す輪を画面上で一定の大きさで重ねます。拡大して車が大きく見えれば消えます (表示のみ＝走りには一切影響しません)。', en: 'ON: while cars appear small (on-screen car length under 20 px), draw a ring of fixed on-screen size around each car to show where it is. It disappears once you zoom in far enough for the car to look large (display only — it never affects driving).' },
   'opt.carScale':     { ja: '車体スケール',         en: 'Car scale' },
   'opt.carScale.title': { ja: 'コースに対する車体の大きさ (大きいほど狭く感じる)。大きいコース (フルスケール競技グラウンド等) で車体が小さすぎて見えにくいときは値を上げる', en: 'Car size relative to the course (larger feels tighter). Increase it when the car is too small to see on large courses (e.g. full-scale arenas).' },
   'opt.trail':        { ja: '軌跡',               en: 'Trail' },

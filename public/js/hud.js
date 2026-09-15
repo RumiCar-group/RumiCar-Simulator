@@ -91,7 +91,6 @@ export function drawSensors(ctx, sensors, view, opts = {}) {
   const half = SENSOR_FOV.halfRad;
   const maxM = SENSOR_RANGE.maxMm / 1000;            // レンジ上限[m] (=減衰の基準距離・領域スケール込み)
   ctx.save();
-  ctx.font = '11px monospace';
   for (const s of sensors) {
     const o = worldToScreen(s.origin, view);
     // dir=扇の中心方向 (単位・sensors.js が供給=常在)。万一欠落した古い供給元でも扇が壊れないよう、
@@ -159,29 +158,43 @@ export function drawSensors(ctx, sensors, view, opts = {}) {
       else { ctx.beginPath(); ctx.arc(h.x, h.y, 3, 0, Math.PI * 2); ctx.fill(); }
     }
     if (opts.labels) {
+      // BB3: ラベルの文字と札は画面上の大きさを一定に保つ (opts.textScale=この変換での「CSS 1px あたりの px」)。
+      // 大きいコースで内部キャンバスが縮小表示されても 11 CSS px のまま読める。
+      const ts = opts.textScale || 1;
       const txt = s.mm < 0 ? '∞' : `${s.mm}`;
+      ctx.font = (11 * ts) + 'px monospace';
       ctx.fillStyle = '#b30000';
-      ctx.fillRect(h.x + 4, h.y - 12, ctx.measureText(txt).width + 6, 14);
+      ctx.fillRect(h.x + 4 * ts, h.y - 12 * ts, ctx.measureText(txt).width + 6 * ts, 14 * ts);
       ctx.fillStyle = '#fff';
-      ctx.fillText(txt, h.x + 7, h.y - 1);
+      ctx.fillText(txt, h.x + 7 * ts, h.y - 1 * ts);
     }
   }
   ctx.restore();
 }
 
-// 複数車両のリーダーボード (右上)。slots=[{name,color,lap,car,running}], activeIdx=強調表示。
-// 周回数の多い順 → 現ラップ経過の短い順に並べる。
-export function drawFleetHud(ctx, slots, view, activeIdx) {
-  if (!slots || slots.length === 0) return;
-  const order = slots.map((s, i) => ({ s, i })).sort((a, b) => {
-    const dl = (b.s.lap?.laps || 0) - (a.s.lap?.laps || 0);
-    if (dl) return dl;
-    return (a.s.lap?.lapTime || 0) - (b.s.lap?.lapTime || 0);
-  });
-  // 2026-08-02 利用者指摘「右上の表示が小さすぎて読めない」により拡大 (行高/余白/フォント/列幅を
-  // 約 1.2 倍・box 幅を余裕をもって拡張)。表示内容・並び順・判定ロジックは無変更 (描画のみ)。
-  const rowH = 23, padT = 10, headH = 19, footH = 18; // footH=練習(非公式)注記の行高 (W2)
-  const padL = 12, wMin = 268;
+// ── 画面固定 HUD の寸法 (BB3) ─────────────────────────────────────────────────────
+// main.js の render は HUD を **CSS px の座標系**で描く (変換 = 内部キャンバス px / CSS px)。ゆえに以下の数値は
+// すべて画面上の CSS px で、コースの大きさ (内部キャンバスの縮小表示) に依らず同じ大きさに見える。
+// レイアウト判定 (layoutHud) と描画 (drawMeters/drawTireHud/drawFleetHud) が同じ値を使う。
+const METER = { x0: 12, y0: 14, labelW: 72, w: 150, h: 13, gap: 26, rows: 3 };
+const METER_W_MIN = 60;   // 狭い画面でメーターのバーを縮めるときの下限 (layoutHud)
+const TIRE = { cell: 20, gap: 4, padX: 8, padY: 6, labelH: 16 };
+const TIRE_W = TIRE.cell * 2 + TIRE.gap + TIRE.padX * 2;
+const TIRE_H = TIRE.cell * 2 + TIRE.gap + TIRE.padY * 2 + TIRE.labelH;
+const TIRE_FONT = '11px monospace';
+// タイヤ HUD の見出しと箱の幅。見出し (「タイヤ利用率」等) は 2×2 の升目より広いので、箱を見出しに合わせる
+// (BB3。旧実装は見出しが箱の右へはみ出していた＝右端に置くとキャンバスの外へ切れる)。
+const tireLabel = (T) => (T.wear ? t('hud.tire.wear') : t('hud.tire'));
+function tireBoxW(ctx, label) {
+  ctx.save(); ctx.font = TIRE_FONT;
+  const w = Math.max(TIRE_W, Math.ceil(ctx.measureText(label).width) + TIRE.padX * 2);
+  ctx.restore();
+  return w;
+}
+const LB = { rowH: 23, padT: 10, headH: 19, footH: 18, padL: 12, wMin: 268, noteMin: 10, noteLineH: 15 };
+
+// 順位表の注記 (練習ベストの断り・旧版記録・非既定装備) を組み立てる。
+function fleetNote(slots) {
   // BEST=練習(非公式)記録である旨を明示 (W2)。公式記録(将来のレース)と混同しないための注記。
   // AP2: 表示中のベストに旧エンジン版で樹立された記録があれば「(当時 vX)」を併記（版跨ぎ比較の誤解
   // を防ぐ・公式 official.result.archived と同型。現行版一致の記録には出さない＝誤検知なし）。
@@ -192,7 +205,6 @@ export function drawFleetHud(ctx, slots, view, activeIdx) {
   }
   // AS9 ③: **非既定の装備だけ**を注記へ刻む (既定 normal/direct では 1 文字も足さない=従来の注記と
   // 完全一致)。装備は v2 エンジンのみ物理へ効くので v2 の車だけを見る (旧エンジンでは選んでも無効)。
-  // 幅は下の実測ロジックがこの note に合わせて広げる (AS1) ので枠外へ切れない。
   const equip = [];
   for (const s of slots) {
     const c = s.car;
@@ -206,24 +218,98 @@ export function drawFleetHud(ctx, slots, view, activeIdx) {
     if (c.brakeSet && c.brakeSet !== 'motor') equip.push(t('hud.lb.brake.' + c.brakeSet));  // AV2
   }
   if (equip.length) note += '  [' + [...new Set(equip)].join('/') + ']';
+  return note;
+}
+
+// 順位表の寸法 (幅・高さ・注記のフォントと行分割)。wPx = HUD 座標系での画面幅。
+function fleetHudMetrics(ctx, slots, wPx) {
+  const note = fleetNote(slots);
   // AS1: 注記の実測幅にパネル幅を合わせる。固定幅 268px では注記が枠を越えて canvas の外へ
-  // 切れていた（実測: ja 282px / en 336px に対し内幅 244px。特に en は「(当時 vX)」注記なしでも
-  // 252px で既に溢れる）。パネルは右詰め (x0 = wPx - w - 12) なので、広げると左へ伸びて画面内に収まる。
-  // 行の列位置はすべて x0 基準なので配置は不変＝広がるのは右側の余白のみ。
+  // 切れていた（実測: ja 282px / en 336px に対し内幅 244px）。パネルは右詰めなので広げると左へ伸びる。
   let noteFont = 12;
   ctx.save();
   ctx.font = noteFont + 'px monospace';
   let noteW = ctx.measureText(note).width;
-  const wMax = Math.max(wMin, view.wPx - 24);   // 画面幅を越えて広げない (狭い端末での保険)
-  const w = Math.min(Math.max(wMin, noteW + padL * 2), wMax);
-  // wMax で頭打ちになる狭い画面では、注記側を縮めて収める (下限 9px)。
-  while (noteW > w - padL * 2 && noteFont > 9) {
+  const wMax = Math.max(LB.wMin, wPx - 24);   // 画面幅を越えて広げない (狭い端末での保険)
+  const w = Math.min(Math.max(LB.wMin, noteW + LB.padL * 2), wMax);
+  // wMax で頭打ちになる狭い画面では、注記側を縮めて収める。BB3: 下限は 10px (読める大きさ・旧 9px)。
+  while (noteW > w - LB.padL * 2 && noteFont > LB.noteMin) {
     ctx.font = (--noteFont) + 'px monospace';
     noteW = ctx.measureText(note).width;
   }
+  // それでも収まらなければ、縮めずに行を折り返す (BB3。旧実装は枠の外へはみ出して切れていた)。
+  // 空白の区切りで折り返し (英語の語の途中で切らない)、1 語が内幅を越えるとき (日本語は空白が無い) だけ文字単位で切る。
+  // 行頭・行末の空白は落とす。1 回の反復で必ず 1 語か 1 文字進むので終わる (内幅 ≥ wMin-2×padL = 244px)。
+  const inner = w - LB.padL * 2, fits = (x) => ctx.measureText(x).width <= inner;
+  const lines = [];
+  if (fits(note)) lines.push(note);
+  else {
+    let cur = '';
+    const flush = () => { const x = cur.trim(); if (x) lines.push(x); cur = ''; };
+    for (const tok of note.split(/(\s+)/)) {
+      if (!tok) continue;
+      if (fits(cur + tok)) { cur += tok; continue; }
+      if (/^\s+$/.test(tok)) { flush(); continue; }          // 区切りの空白で行を終える
+      if (cur.trim()) flush();
+      for (const ch of tok) {                               // 語を新しい行へ。入らなければ文字単位
+        if (cur && !fits(cur + ch)) flush();
+        cur += ch;
+      }
+    }
+    flush();
+  }
   ctx.restore();
-  const h = padT * 2 + headH + rowH * slots.length + footH;
-  const x0 = view.wPx - w - 12, y0 = 12;
+  const footH = LB.footH + (lines.length - 1) * LB.noteLineH;
+  const h = LB.padT * 2 + LB.headH + LB.rowH * slots.length + footH;
+  return { w, h, noteFont, lines };
+}
+
+// HUD の配置 (BB3)。hv = { wPx, hPx } は HUD 座標系 (CSS px) での画面の大きさ。
+// 広い画面は従来どおり「メーター=左上・タイヤ=左下・順位表=右上」。ただしタイヤ HUD はメーターより上へは上げない
+// (表示高さが低いキャンバスでメーターと重ならない)。メーターと順位表が横に並ばない狭い画面 (スマホ幅) では:
+//   ① タイヤ HUD をメーターの右上へ (入らなければメーターのバーを縮める・下限 METER_W_MIN)、順位表をその下へ
+//   ② それでも入らない (幅 約 270px 未満) ときは、メーター → タイヤ HUD → 順位表 の順に左側へ縦に積む
+// どの分岐でも 3 部品の矩形は構造的に重ならない (高さが足りなければ下がキャンバスの外へ切れる＝決定ログ)。
+// tire4 = data.tire4 (タイヤ HUD を出さないときは null)。
+export function layoutHud(ctx, slots, hv, tire4) {
+  const lb = (slots && slots.length) ? fleetHudMetrics(ctx, slots, hv.wPx) : null;
+  const mRight = METER.x0 + METER.labelW + METER.w;
+  const mBottom = METER.y0 + (METER.rows - 1) * METER.gap + METER.h;
+  let tire = { x: 12, y: Math.max(hv.hPx - TIRE_H - 12, mBottom + 8) }, lbTop = 12, meterW = METER.w;
+  const side = !lb || hv.wPx >= mRight + 12 + lb.w + 12;
+  if (!side) {
+    let top = mBottom;
+    const tw = (tire4 && tire4.util) ? tireBoxW(ctx, tireLabel(tire4)) : 0;
+    if (tw) {
+      meterW = Math.min(METER.w, hv.wPx - 12 - tw - 8 - METER.x0 - METER.labelW);
+      if (meterW >= METER_W_MIN) {                                     // ①
+        tire = { x: hv.wPx - tw - 12, y: 12 }; top = Math.max(top, 12 + TIRE_H);
+      } else {                                                        // ②
+        meterW = METER.w;
+        tire = { x: 12, y: mBottom + 8 }; top = tire.y + TIRE_H;
+      }
+    }
+    lbTop = top + 8;
+  }
+  return { side, tire, lbTop, lb, meterW };
+}
+
+// 複数車両のリーダーボード (右上。狭い画面ではメーターの下＝layoutHud)。slots=[{name,color,lap,car,running}], activeIdx=強調表示。
+// 周回数の多い順 → 現ラップ経過の短い順に並べる。view.wPx = HUD 座標系での画面幅。
+// top/metrics は layoutHud の結果 (省略時は右上・その場で寸法を測る)。
+export function drawFleetHud(ctx, slots, view, activeIdx, top = 12, metrics = null) {
+  if (!slots || slots.length === 0) return;
+  const order = slots.map((s, i) => ({ s, i })).sort((a, b) => {
+    const dl = (b.s.lap?.laps || 0) - (a.s.lap?.laps || 0);
+    if (dl) return dl;
+    return (a.s.lap?.lapTime || 0) - (b.s.lap?.lapTime || 0);
+  });
+  // 2026-08-02 利用者指摘「右上の表示が小さすぎて読めない」により拡大 (行高/余白/フォント/列幅を
+  // 約 1.2 倍・box 幅を余裕をもって拡張)。表示内容・並び順・判定ロジックは無変更 (描画のみ)。
+  const { rowH, padT, headH } = LB;
+  const m = metrics || fleetHudMetrics(ctx, slots, view.wPx);
+  const { w, h, noteFont, lines } = m;
+  const x0 = view.wPx - w - 12, y0 = top;
   ctx.save();
   ctx.fillStyle = 'rgba(10,12,16,0.86)';
   ctx.fillRect(x0, y0, w, h);
@@ -255,9 +341,27 @@ export function drawFleetHud(ctx, slots, view, activeIdx) {
       : (s.car?.crashed ? '#ff6b6b' : (s.running ? '#6fe39a' : '#8a93a3'));
     ctx.fillText(st, x0 + 222, y);
   });
-  // 注記の本文とフォントは上（パネル幅の決定）で確定済み。
+  // 注記 (1 行なら従来と同じ位置。折り返したときは下端から上へ積む)。
   ctx.font = noteFont + 'px monospace'; ctx.fillStyle = '#a3aebe';
-  ctx.fillText(note, x0 + padL, y0 + h - padT + 2);
+  lines.forEach((ln, k) => ctx.fillText(ln, x0 + LB.padL, y0 + h - padT + 2 - (lines.length - 1 - k) * LB.noteLineH));
+  ctx.restore();
+}
+
+// 車の位置マーカー (BB3)。車体 (drawCar) とは別に、画面上で一定の大きさの輪を車の中心に重ねる。
+// 大きいコースを縮小表示すると車は数 px になり場所が分からないため。車体の描画寸法は変えない (描画は主張＝
+// 車を太らせて見せない)。showBelowCss: 画面上の車長 (CSS px) がこれ未満のときだけ出す (大きく見えている車には
+// 何も足さない＝従来の絵のまま)。pts = [{x,y,color}] は HUD 座標系 (CSS px)。
+// ⚠ 20px は i18n の opt.carMarker.title (ja/en) にも文章で書いてある (check_bb3_hud.mjs M7 が一致を検査する)。
+//   index.html の静的 title= は ja と同じ文字列であることを wf_i18n_check ⑩ が検査する。
+// 描く順は HUD の後 (main.js)。順位表の下にいる車でも位置が分かるように、輪は HUD より前面に出す。
+export const MARKER = { showBelowCss: 20, r: 9, casing: 4, ring: 2 };
+export function drawCarMarkers(ctx, pts) {
+  ctx.save();
+  for (const p of pts) {
+    ctx.beginPath(); ctx.arc(p.x, p.y, MARKER.r, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = MARKER.casing; ctx.stroke();
+    ctx.strokeStyle = p.color; ctx.lineWidth = MARKER.ring; ctx.stroke();
+  }
   ctx.restore();
 }
 
@@ -366,9 +470,11 @@ export function drawCar(ctx, car, view, color) {
 }
 
 // 緑のメーター (Canvas 左上)
-export function drawMeters(ctx, data) {
+// barW: バーの幅 (layoutHud の meterW。狭い画面ではタイヤ HUD を右に置くため縮む。省略時は既定)。
+export function drawMeters(ctx, data, barW = METER.w) {
   // 2026-08-02 利用者指摘によりラベル文字/バーを拡大 (行間もあわせて拡張)。
-  const x0 = 12, y0 = 14, w = 150, h = 13, gap = 26;
+  // BB3: 数値は HUD 座標系 (CSS px) の METER (layoutHud と共有)。
+  const { x0, y0, h, gap, labelW } = METER, w = barW;
   const items = [
     ['Distance', Math.min(1, (data.center < 0 ? 2000 : data.center) / 2000)],
     ['Angle', (data.steer === CONST.LEFT ? 0.15 : data.steer === CONST.RIGHT ? 0.85 : 0.5)],
@@ -378,8 +484,8 @@ export function drawMeters(ctx, data) {
   ctx.font = '13px monospace';
   items.forEach((it, i) => {
     const y = y0 + i * gap;
-    ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(x0 + 72, y, w, h);
-    ctx.fillStyle = VIEW.meter; ctx.fillRect(x0 + 72, y, w * it[1], h);
+    ctx.fillStyle = 'rgba(0,0,0,0.25)'; ctx.fillRect(x0 + labelW, y, w, h);
+    ctx.fillStyle = VIEW.meter; ctx.fillRect(x0 + labelW, y, w * it[1], h);
     ctx.fillStyle = '#0a6b38'; ctx.fillText(it[0], x0, y + 11);
   });
   ctx.restore();
@@ -429,19 +535,21 @@ export function updatePanel(refs, data) {
 // 読むだけ = 純粋な可視化 (物理非読取ゲート wf_ao12_wear で機械確認)。data.tire4 が null (旧エンジン等) なら no-op。
 // フットプリント: 2×2 の車輪ボックス (FL FR / RL RR)。塗り高=摩擦円利用率∈[0,1] (緑→黄→赤)。wear=ON のとき
 // 枠色=温度 (冷=青/最適=緑/過熱=赤)＋下端の摩耗バー (摩耗ほど赤く伸び clamp 境界で全幅)。
-export function drawTireHud(ctx, data) {
+// at = { x, y }: 左上の位置 (HUD 座標系・layoutHud の tire)。省略時は BB3 以前と同じ ctx.canvas.height 基準の左下
+// (変換が恒等のときだけ正しい。main.js は layoutHud の位置を渡す)。
+export function drawTireHud(ctx, data, at = { x: 12, y: ctx.canvas.height - TIRE_H - 12 }) {
   const T = data.tire4;
   if (!T || !T.util) return;
-  const cell = 20, gap = 4, padX = 8, padY = 6, labelH = 16;
-  const gridW = cell * 2 + gap;
-  const boxW = gridW + padX * 2, boxH = cell * 2 + gap + padY * 2 + labelH;
-  const x0 = 12, y0 = ctx.canvas.height - boxH - 12;
+  const { cell, gap, padX, padY, labelH } = TIRE;
+  const label = tireLabel(T);
+  const boxW = tireBoxW(ctx, label), boxH = TIRE_H;
+  const x0 = at.x, y0 = at.y;
   ctx.save();
-  ctx.font = '11px monospace';
+  ctx.font = TIRE_FONT;
   ctx.fillStyle = 'rgba(0,0,0,0.35)';
   ctx.fillRect(x0, y0, boxW, boxH);
   ctx.fillStyle = '#bfe';
-  ctx.fillText(T.wear ? t('hud.tire.wear') : t('hud.tire'), x0 + padX, y0 + labelH - 2);
+  ctx.fillText(label, x0 + padX, y0 + labelH - 2);
   const gx = x0 + padX, gy = y0 + labelH + padY;
   const pos = [[0, 0], [1, 0], [0, 1], [1, 1]];   // idx 0..3 = FL FR / RL RR
   for (let k = 0; k < 4; k++) {

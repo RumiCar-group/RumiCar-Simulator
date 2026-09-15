@@ -106,7 +106,7 @@ console.log('\nT2 HUD「(当時 vX)」注記の収まり（札(f)）');
         const v = tg[k];
         if (typeof v !== 'function') return v;
         return (...a) => {
-          if (k === 'fillText') texts.push({ s: a[0], x: a[1], font: tg.font });
+          if (k === 'fillText') texts.push({ s: a[0], x: a[1], y: a[2], font: tg.font });
           if (k === 'strokeRect') rects.push(a);
           return v.apply(tg, a);
         };
@@ -120,18 +120,27 @@ console.log('\nT2 HUD「(当時 vX)」注記の収まり（札(f)）');
     };
     hud.drawFleetHud(rec, [slot, { ...slot, name: 'CAR2' }], { wPx: cw }, 0);
     const noteStr = i18n.t('hud.lb.note');
-    const drawn = texts.filter((e) => e.s.startsWith(noteStr)).pop();
+    // 注記は最後に描かれ、狭い画面では複数行に折り返す (BB3)。最後の fillText と同じ font・x の連続を注記の行とみなし、
+    // つなげた文字列 (折り返しで落ちた空白は除く) が注記で始まることを確かめる。
+    const last = texts[texts.length - 1];
+    let k = texts.length - 1;
+    while (k > 0 && texts[k - 1].font === last.font && texts[k - 1].x === last.x) k--;
+    const lines = texts.slice(k);
+    const joined = lines.map((e) => e.s).join('');
+    const drawn = last && joined.replace(/\s/g, '').startsWith(noteStr.replace(/\s/g, '')) ? { s: joined, x: last.x, font: last.font } : null;
     const panel = rects[rects.length - 1];               // strokeRect(x0,y0,w,h)
     if (!drawn || !panel) return null;
     ctx.font = drawn.font;
-    const wTxt = ctx.measureText(drawn.s).width;
+    const wTxt = Math.max(...lines.map((e) => ctx.measureText(e.s).width));   // 最も長い行
     i18n.setLang('ja');
     // 是正後のパネルが人にどう見えるかは機械化しない残り。判断材料として画像を残す。
     const crop = document.createElement('canvas');
     crop.width = Math.ceil(panel[2]) + 24; crop.height = Math.ceil(panel[3]) + 24;
     crop.getContext('2d').drawImage(cv, panel[0] - 12, panel[1] - 12, crop.width, crop.height,
                                     0, 0, crop.width, crop.height);
-    return { note: drawn.s, font: drawn.font, x: drawn.x, wTxt,
+    // 折り返した行が縦方向にもパネル内 (上端はフォントの高さぶん下・下端は枠の内側)
+    const fpx = parseFloat(drawn.font), yIn = lines.every((e) => e.y - fpx >= panel[1] && e.y <= panel[1] + panel[3]);
+    return { note: drawn.s, font: drawn.font, x: drawn.x, wTxt, nLines: lines.length, yIn,
              x0: panel[0], w: panel[2], canvasW: cw, png: crop.toDataURL('image/png') };
   }, [lang, archived, canvasW]);
 
@@ -146,9 +155,9 @@ console.log('\nT2 HUD「(当時 vX)」注記の収まり（札(f)）');
     const end = r.x + r.wTxt;                        // 注記の実描画終端
     const inPanel = end <= r.x0 + r.w - (r.x - r.x0);// 左パディングと同じ余白を右にも要求
     const inCanvas = r.x0 >= 0 && r.x0 + r.w <= r.canvasW && end <= r.canvasW;
-    ok(`T2 ${tag}: 注記がパネル内・canvas 内に収まる`, inPanel && inCanvas,
-       `パネル x0=${r.x0.toFixed(0)} w=${r.w.toFixed(0)} / 注記 ${r.wTxt.toFixed(1)}px(${r.font})` +
-       ` 終端 ${end.toFixed(1)} ≤ 枠内 ${(r.x0 + r.w - (r.x - r.x0)).toFixed(1)}` +
+    ok(`T2 ${tag}: 注記がパネル内・canvas 内に収まる`, inPanel && inCanvas && r.yIn,
+       `パネル x0=${r.x0.toFixed(0)} w=${r.w.toFixed(0)} / 注記 ${r.nLines} 行・最長 ${r.wTxt.toFixed(1)}px(${r.font})` +
+       ` 終端 ${end.toFixed(1)} ≤ 枠内 ${(r.x0 + r.w - (r.x - r.x0)).toFixed(1)}・縦も枠内 ${r.yIn}` +
        `（余裕 ${(r.x0 + r.w - (r.x - r.x0) - end).toFixed(1)}px・canvas ${r.canvasW}）`);
   }
   await p.close();

@@ -1,7 +1,7 @@
 // 統合: シミュレーションループ・UI 結線・手動操作・プログラム取込・
 //       ラップ計測 / コースエディタ / デバッグ機能 (Phase 2) +
 //       複数台同時走行 (各車に個別プログラムを割当, Phase 3)。
-import { CONST, VIEW, SIM, FLEET, TRAIL, CAR, CAR_TYPES, CAR_TYPE_BY_KEY, CAR_TYPE_DEFAULT, setCarScale, CAR_PARAM_DOC, registerCarType, unregisterCarType, APP_VERSION, displayKmh, setPhysicsMode, PHYSICS, SENSOR_NOISE, SENSOR_HOLD, SENSOR_OPTICS, A11Y, CVD, REGIMES, REGIME_STATE, GRID } from './config.js';
+import { CONST, VIEW, SIM, FLEET, TRAIL, CAR, CAR_FOOTPRINT, CAR_TYPES, CAR_TYPE_BY_KEY, CAR_TYPE_DEFAULT, setCarScale, CAR_PARAM_DOC, registerCarType, unregisterCarType, APP_VERSION, displayKmh, setPhysicsMode, PHYSICS, SENSOR_NOISE, SENSOR_HOLD, SENSOR_OPTICS, A11Y, CVD, REGIMES, REGIME_STATE, GRID } from './config.js';
 // CHANGELOG は表示専用の 124KB のデータ塊なので critical path から外し (Stage AS2)、
 // 版ポップアップを組むときにだけ動的 import する (下の loadChangelog)。
 import { PROGRAMS, PROGRAM_BY_CARTYPE, PROGRAM_BY_KEY, programKeyForCode } from './programs.js';
@@ -51,7 +51,7 @@ const carTypeName = (ct) => {
   const base = hasKey('car.' + ct.key) ? t('car.' + ct.key) : ct.name;
   return ct.community ? '🌐 ' + base : base;
 };
-import { drawTrail, drawReferenceLine, drawSensors, drawCar, drawMeters, drawFleetHud, updatePanel, drawTireHud } from './hud.js';
+import { drawTrail, drawReferenceLine, drawSensors, drawCar, drawMeters, drawFleetHud, updatePanel, drawTireHud, layoutHud, drawCarMarkers, MARKER } from './hud.js';
 import { drawDepthView } from './depth.js';
 import { drawTougeElevation } from './elev3d.js';
 import { fmtTime, loadBestRec } from './lap.js';
@@ -159,6 +159,15 @@ function setView(c) {
   resetView();   // コース変更/キャンバスリサイズ時は表示を全体 (等倍) に戻す
 }
 setView(course);
+// BB3: キャンバスの表示幅 (CSS px)。大きいコースは内部キャンバス (canvas.width) を CSS で縮小表示するので、
+// 画面固定 HUD と位置マーカーは「内部 px / CSS px」の倍率を掛けて描き、画面上の大きさを一定に保つ。
+// 毎フレーム getBoundingClientRect を呼ぶとログ更新と組んで強制レイアウトになるので、大きさの変化だけを受け取る。
+let canvasCssW = 0;
+if (typeof ResizeObserver === 'function') new ResizeObserver((es) => { canvasCssW = es[es.length - 1].contentRect.width; }).observe(canvas);
+function hudScale() {
+  const w = canvasCssW || canvas.getBoundingClientRect().width;   // 監視が無い/まだ届いていないときだけ実測
+  return (w > 0 && canvas.width > 0) ? canvas.width / w : 1;
+}
 // ウィンドウ幅変更 (リサイズ・スマホ回転) に追従して再フィット (デバウンス)。
 let _resizeT = null;
 window.addEventListener('resize', () => {
@@ -464,6 +473,7 @@ function render(edges) {
   // 既定 zoom=1 / pan=0 では恒等変換＋同色全面クリアで従来描画と画素一致 (回帰)。
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = VIEW.bg; ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const hs = hudScale();   // BB3: 内部キャンバス px / CSS px
   ctx.setTransform(vt.zoom, 0, 0, vt.zoom, vt.panX, vt.panY);
   drawCourse(ctx, c, view, { grid: editing ? true : opts.grid });
   // 初回のコース描画が出たら起動ローダー(案C)をフェードで隠す (一度だけ)。
@@ -491,7 +501,7 @@ function render(edges) {
   const heldOrFresh = (s, i) => (SENSOR_HOLD.on && s.world._sensors && s.world._sensors.length)
     ? s.world._sensors : readAll(s.car, course.walls, othersFor(edges, i, interact));
   perCarSensors = slots.map((s, i) => heldOrFresh(s, i));
-  if (opts.rays) slots.forEach((s, i) => drawSensors(ctx, perCarSensors[i], view, { show: true, labels: opts.labels && i === activeIdx, color: dispColor(i, s.color), dash: A11Y.cvdSafe, walls: course.walls, extra: othersFor(edges, i, interact) }));
+  if (opts.rays) slots.forEach((s, i) => drawSensors(ctx, perCarSensors[i], view, { show: true, labels: opts.labels && i === activeIdx, textScale: hs / vt.zoom, color: dispColor(i, s.color), dash: A11Y.cvdSafe, walls: course.walls, extra: othersFor(edges, i, interact) }));
   // 後方センサー(任意装備): 有効時のみ計測・レイ描画。AP18 保持値も同様 (world._rear)。
   perCarRear = rearOn ? slots.map((s, i) => (SENSOR_HOLD.on && s.world._rear) ? s.world._rear : readRear(s.car, course.walls, othersFor(edges, i, interact))) : [];
   if (opts.rays && rearOn) slots.forEach((s, i) => drawSensors(ctx, [perCarRear[i]], view, { show: true, labels: false, color: dispColor(i, s.color), dash: A11Y.cvdSafe, walls: course.walls, extra: othersFor(edges, i, interact) }));
@@ -501,10 +511,14 @@ function render(edges) {
   const ordered = slots.map((s, i) => i).sort((x, y) => (x === activeIdx) - (y === activeIdx));
   for (const i of ordered) drawCar(ctx, slots[i].car, view, dispColor(i, slots[i].color));
 
-  // ここから先は画面固定 HUD (メーター/リーダーボード)。zoom/pan の影響を受けないよう恒等変換へ戻す。
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // ここから先は画面固定 HUD (メーター/リーダーボード/位置マーカー)。zoom/pan の影響を受けない。
+  // BB3: 座標系は CSS px (倍率 hs)。コースを縮小表示しても HUD の文字は同じ大きさで読める。
+  ctx.setTransform(hs, 0, 0, hs, 0, 0);
+  const hv = { wPx: canvas.width / hs, hPx: canvas.height / hs };
+  const fleetHudSlots = slots.map((s, i) => ({ name: s.name, color: dispColor(i, s.color), lap: s.lap, car: s.car, running: running && s.running }));
 
   // メーター/パネルは選択車
+  let hudLay = null;
   if (a) {
     const reg = REGIMES[REGIME_STATE.active] || REGIMES.tabletop;   // 現在領域 (測距単位/上限の明示用・Y2)
     const data = {
@@ -532,12 +546,28 @@ function render(edges) {
         : null,
       crashed: a.car.crashed, running: running && a.running,
     };
-    drawMeters(ctx, data);
+    hudLay = layoutHud(ctx, fleetHudSlots, hv, data.tire4);
+    drawMeters(ctx, data, hudLay.meterW);
     updatePanel(refs, data);
-    drawTireHud(ctx, data);   // Stage AO12: 輪ごと摩擦円/タイヤ状態 HUD (表示層のみ・v2 のみ・data.tire4 が null なら no-op)
+    drawTireHud(ctx, data, hudLay.tire);   // Stage AO12: 輪ごと摩擦円/タイヤ状態 HUD (表示層のみ・v2 のみ・data.tire4 が null なら no-op)
   }
-  // リーダーボード (全車)
-  drawFleetHud(ctx, slots.map((s, i) => ({ name: s.name, color: dispColor(i, s.color), lap: s.lap, car: s.car, running: running && s.running })), view, activeIdx);
+  // リーダーボード (全車)。狭い画面ではメーターの下へ (layoutHud)。
+  if (!hudLay) hudLay = layoutHud(ctx, fleetHudSlots, hv, null);
+  drawFleetHud(ctx, fleetHudSlots, hv, activeIdx, hudLay.lbTop, hudLay.lb);
+  // 位置マーカー (BB3): HUD の後に描く (順位表の下にいる車でも位置が分かる)。画面上の車長が MARKER.showBelowCss 未満のときだけ、各車の中心 (フットプリントの中心) に輪を重ねる。
+  if (carMarkerOn()) {
+    const k = VIEW.carScale || 1, F = CAR_FOOTPRINT;
+    const lenCss = (F.front - F.back) * k * view.pxPerM * vt.zoom / hs;
+    if (lenCss < MARKER.showBelowCss) {
+      const lc = (F.front + F.back) / 2 * k;
+      drawCarMarkers(ctx, ordered.map((i) => {
+        const car = slots[i].car;
+        const p = worldToScreen({ x: car.x + lc * Math.cos(car.theta), y: car.y + lc * Math.sin(car.theta) }, view);
+        return { x: (p.x * vt.zoom + vt.panX) / hs, y: (p.y * vt.zoom + vt.panY) / hs, color: dispColor(i, slots[i].color) };
+      }));
+    }
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
 
   // Depth View (選択車の一人称・他車はリアビュー風スプライトで表示)
   if (opts.depth && a) {
@@ -621,6 +651,8 @@ function playCountdown(host, onDone) {
 function autoSpectate() { const c = $('raceWatch'); return !!(c && c.checked); }
 // AB13: お手本ライン トグル (PX-014)。ON のとき frame() が実走軌跡のなめらか基準線を重ねる。
 function refLineOn() { const c = $('refLine'); return !!(c && c.checked); }
+// BB3: 位置マーカー トグル。ON のとき render() が、車が小さく表示されている間だけ位置の輪を重ねる (表示のみ)。
+function carMarkerOn() { const c = $('optCarMarker'); return !!(c && c.checked); }
 
 // Stage AZ5: レースエンジンの「収容」に関する 2 つの事実を、**どの経路でも同じ文言で**利用者へ返す。
 //   ① runRace が NO_ROOM を投げた = このコース×領域×スケールでは 1 台も配置できない (0 台では走らせない)。
@@ -1711,6 +1743,17 @@ if (refEl) {
   refEl.addEventListener('change', (e) => {
     try { localStorage.setItem(REFLINE_KEY, e.target.checked ? '1' : '0'); } catch (err) {}
     logLine(e.target.checked ? t('log.refline.on') : t('log.refline.off'));
+  });
+}
+// BB3: 位置マーカー トグル。既定 ON・選択は localStorage に保存 (お手本ラインと同じ扱い)。
+const CARMARKER_KEY = 'rumicar.carMarker';
+const carMarkerEl = $('optCarMarker');
+if (carMarkerEl) {
+  let stored = null;
+  try { stored = localStorage.getItem(CARMARKER_KEY); } catch (e) {}
+  carMarkerEl.checked = (stored !== '0');   // 既定 ON
+  carMarkerEl.addEventListener('change', (e) => {
+    try { localStorage.setItem(CARMARKER_KEY, e.target.checked ? '1' : '0'); } catch (err) {}
   });
 }
 // AF4 (#26②): 色覚セーフ配色 トグル。既定 OFF・選択は localStorage に保存。描画層 (render/hud) は
