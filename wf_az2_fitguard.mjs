@@ -38,6 +38,8 @@
 //   E) 性能。F) D) 自身の変異試験。
 //   G) **ライブ判定（利用者スケール）と 🏁 の判定（×1・AK2/D10）の食い違い**。出荷コースにも実在する
 //      ので件数は情報として出し、**食い違うセルで 🏁 が必ず NO_ROOM で止まる**ことを本物の runRace で確認する。
+//   H) 【BA1】判定コアの `fitsAllCars` メモが**判定をまたいで答えを持ち越さない**こと（振る舞い）。
+//      メモの鍵と寿命の構文は D)、収容オラクルの出力そのものが改修前とビット単位で同じことは `wf_ba1_fitcore.mjs` が見る。
 import fs from 'fs';
 import { buildFromSpec, normalizeCourse } from './public/js/course.js';
 import { fitsAllCars, capacityOf } from './public/js/fleet.js';
@@ -65,8 +67,9 @@ const report = (label, arr, n = 10) => {
 
 // ── オラクルのキャッシュ（本物を呼んだ結果を覚えるだけ。再実装はしない）──────────────
 // **凍結した旧ロジック（settleLegacy）と、G) の ×1 判定でだけ使う。** product の判定コアは
-// キャッシュを通さず `fleet.js` の本物を直接呼ぶ（＝ゲートが product の実コストをそのまま払う）。
-// product 側にキャッシュを入れない理由は E 節を参照。
+// ゲート側のキャッシュを通さず `fleet.js` の本物を直接呼ぶ（＝ゲートが product の実コストをそのまま払う）。
+// product 側は【BA1・2026-09-15】から **判定 1 回のあいだだけ** `fitsAllCars` の答えを覚える（判定をまたいでは
+// 覚えない＝無効化の義務を作らない）。鍵と寿命の理由は `fitguard.js` の `fitsMemoFor` の注記、契約は D) が固定する。
 const memo = new Map();
 let oracleCalls = 0;                        // 凍結旧ロジックが払う「論理呼び出し」回数（E) の比較用）
 const fitsM = (c, cid, n) => {
@@ -287,6 +290,56 @@ console.log(`  ○ ④' が発火したセル: ${fxRescued} 件／うち「卓�
 if (fxRestoreReached === 0) { console.log("       ✗ 復元検査が 1 セルも評価されていない＝下の 0 件は空振り"); pass = false; }
 report("C) ④' 後に carScale が復元されなかったセル（AZ6）", fxNoRestore);
 
+// ── H) 【BA1】判定をまたいで fitsAllCars の答えを持ち越さない（振る舞い）────────────────────
+// 同じ CAR 寸法で「6 台収まるコース」を判定した直後に「収まらないコース」を判定する。メモが判定をまたいで生きていれば
+// 後者の ④ 入口が前者の「真」を拾って縮めずに素通りし、⑤ も maxCars を名乗る。持ち越しの鍵になりうるものごとに 3 場面:
+//   ①別オブジェクト・別名（素朴なモジュール直下のメモ）
+//   ②**同じオブジェクト**の壁・スタート・外形を差し替えて判定し直す（コースオブジェクトを鍵にしたメモ／WeakMap）
+//   ③**同じ名前**の別オブジェクト（course.name を鍵にしたメモ。エディタで適用しても名前は残る）
+// ※ 層 4 レビュー（2026-09-15）が、旧 H)（①だけ）と D) を ②③ の形の持ち越しが素通りすることを実証したので足した。
+// **前提（収まる側は真・収まらない側は偽）を先に本物で確かめる**（崩れていたら、この検査は何も見ていない）。
+{
+  const hFail = [];
+  const openGeom = () => ({ bounds: { w: 3, h: 3 }, start: { x: 1.5, y: 1.5, theta: 0 },
+    walls: [{ x1: 0, y1: 0, x2: 3, y2: 0 }, { x1: 3, y1: 0, x2: 3, y2: 3 }, { x1: 3, y1: 3, x2: 0, y2: 3 }, { x1: 0, y1: 3, x2: 0, y2: 0 }] });
+  // 収まらない側＝E) ⑤ と同じ「外形は広く、スタート地点だけ閉じた小部屋」（卓上 cs1 で静的に 3 台）。
+  setRegimeScale(kL('tabletop')); setCarScale(1);
+  const L = CAR.length, W = CAR.width;
+  const pocketGeom = () => {
+    const X = 1.7 * L, Y = 4 * W, W0 = 2.0, y0 = W0 / 2 - Y / 2, x0 = 0.2;
+    return { bounds: { w: W0, h: W0 }, start: { x: x0 + X * 0.35, y: W0 / 2, theta: 0 },
+      walls: [{ x1: x0, y1: y0, x2: x0 + X, y2: y0 }, { x1: x0 + X, y1: y0, x2: x0 + X, y2: y0 + Y },
+              { x1: x0 + X, y1: y0 + Y, x2: x0, y2: y0 + Y }, { x1: x0, y1: y0 + Y, x2: x0, y2: y0 }] };
+  };
+  const mk = (name, g) => normalizeCourse({ name, ...g });
+  {
+    setRegimeScale(kL('tabletop')); setCarScale(1);
+    const preOpen = fitsAllCars(mk('pre-open', openGeom()), MAXN), preTight = fitsAllCars(mk('pre-pocket', pocketGeom()), MAXN);
+    if (!preOpen || preTight) hFail.push(`前提が崩れた（収まる側=${preOpen} は true・収まらない側=${preTight} は false であること）＝この検査は空振り`);
+  }
+  const judge = (label, c) => {
+    const r = settleCore(c, 'tabletop', 1);
+    setRegimeScale(kL(r.regime)); setCarScale(r.userK);
+    const capFresh = capacityOf(c, MAXN), capShown = capFresh < 1 ? 1 : capFresh;
+    if (r.capN !== capShown) hFail.push(`${label}: capN=${r.capN}（本物の capacityOf を引き直すと ${capFresh}）＝前の判定の答えを持ち越した`);
+    if (!(r.userK < 1)) hFail.push(`${label}: ④ が縮めなかった（userK=${r.userK}。入口 cs1 では本物が偽）＝前の判定の「収まる」を拾った`);
+    return `${r.regime}/cs${r.userK}/capN${r.capN}（本物 ${capFresh}）`;
+  };
+  // ① 別オブジェクト・別名
+  settleCore(mk('BA1 H1 open', openGeom()), 'tabletop', 1);
+  const s1 = judge('①別オブジェクト・別名', mk('BA1 H1 pocket', pocketGeom()));
+  // ② 同じオブジェクトの中身を差し替える（コースオブジェクトを鍵にしたメモを捕まえる）
+  const same = mk('BA1 H2 same object', openGeom());
+  settleCore(same, 'tabletop', 1);
+  Object.assign(same, pocketGeom());
+  const s2 = judge('②同じオブジェクトの壁を差し替え', same);
+  // ③ 同じ名前の別オブジェクト（course.name を鍵にしたメモを捕まえる）
+  settleCore(mk('BA1 H3 same name', openGeom()), 'tabletop', 1);
+  const s3 = judge('③同じ名前の別コース', mk('BA1 H3 same name', pocketGeom()));
+  console.log(`\nH) 判定をまたいだ持ち越し（BA1）: ① ${s1} ／ ② ${s2} ／ ③ ${s3}`);
+  report('H) 判定をまたいで答えを持ち越した場面', hFail);
+}
+
 // ── D) 構造検査 ────────────────────────────────────────────────────────────────
 // **コメントを剥がしてから照合する。** 剥がさないと「注記に文字列が残っているだけ」で真になり、
 // 実装を消す変異（例: capZeroWarn の出し分け削除）を見逃す（層 4 レビュー 2026-09-12 の実測指摘）。
@@ -410,8 +463,8 @@ function checkStructural(mainRaw, fleetRaw, guardRaw, htmlRaw) {
     v.push('fitguard.js に下限 0.4 のハードコードが残っている（FIT.userKMin を単一真実源にすること）');
 
   // --- fitguard.js ⑤: 実態で測り、0 を握りつぶさない ---
-  if (!/let capN = capacityOf\(course, FLEET\.maxCars\);/.test(guardSrc))
-    v.push('fitguard.js ⑤ が capacityOf(course, FLEET.maxCars) を使っていない');
+  if (!/let capN = fits\.known\(FLEET\.maxCars\) === true \? FLEET\.maxCars : capacityOf\(course, FLEET\.maxCars\);/.test(guardSrc))
+    v.push('fitguard.js ⑤ が capacityOf(course, FLEET.maxCars) を使っていない／近道の条件が「④ が真と確かめた」以外に広がった（未評価で maxCars を名乗る）');
   if (/while\s*\(\s*capN\s*>\s*1\s*&&\s*!fitsAllCars/.test(guardSrc))
     v.push('fitguard.js ⑤ に旧実装 `while (capN > 1 && !fitsAllCars…)` が復活している');
   if (!/let capZeroStatic = capN < 1;/.test(guardSrc))
@@ -440,8 +493,8 @@ function checkStructural(mainRaw, fleetRaw, guardRaw, htmlRaw) {
     v.push('fitguard.js ⑥ の 1 台分岐が driveableCapN を呼んでいない（告知の根拠が無い）');
 
   // --- fitguard.js ④': 実態による救済が丸ごと残っていること＋AZ6 の carScale 復元 ---
-  const az4p = /if \(!noRace && regime !== 'tabletop' && fits6 !== true && !fitsAllCars\(course, 1\)\) \{([\s\S]{0,900}?)\n  \}/.exec(guardSrc);
-  if (!az4p) v.push("fitguard.js ④' の条件式が無い／変わった（!noRace && 卓上以外 && fits6!==true && !fitsAllCars(course,1)）");
+  const az4p = /if \(!noRace && regime !== 'tabletop' && fits6 !== true && !fits\(1\)\) \{([\s\S]{0,900}?)\n  \}/.exec(guardSrc);
+  if (!az4p) v.push("fitguard.js ④' の条件式が無い／変わった（!noRace && 卓上以外 && fits6!==true && !fits(1)）");
   else {
     const b = az4p[1];
     if (!/regime = 'tabletop';/.test(b)) v.push("④' の救済本体（領域を卓上へ戻す）が無い");
@@ -457,6 +510,57 @@ function checkStructural(mainRaw, fleetRaw, guardRaw, htmlRaw) {
   // --- 【AZ6】carScale の告知は 1 回だけ（途中経過を流さない・④' の復元と矛盾させない）---
   if (!/if \(scaleK !== null && userK !== userK0\) \{[\s\S]{0,200}?fx\.log\('log\.autoCarScale'/.test(guardSrc))
     v.push('fitguard.js の carScale 告知が「入口から実際に縮んだときに 1 回」の形になっていない');
+
+  // --- 【BA1・2026-09-15】判定 1 回ぶんの fitsAllCars メモの契約 ---
+  //   ①鍵に「答えを決める入力」が全部入っている（台数・CAR 寸法 3 値・PHYSICS.mode）
+  //   ②メモは判定 1 回の中で作る（モジュールの外側に置くと判定をまたいで古い答えを返す）
+  //   ③④ と ④' と ⑤ が同じメモを通る（通らない呼び出しが残ると重複が戻る／別の答えを持つ）
+  //   ※ 鍵の入力の網羅は B) の全格子（本物との突合）でも間接に見ているが、寸法 3 値は同じ倍率で一緒に動くので
+  //     1 つ抜けても出荷格子では答えが変わらない＝**振る舞いでは捕まらない**。ここで構文として固定する。
+  {
+    const memoFn = bodyOf(guardSrc, 'function fitsMemoFor(course)');
+    //   【層 4 レビュー 2026-09-15 の反例を受けて強化】旧版は「関数の中に new Map(); の文字列がある」「直下に
+    //   `new Map();` が無い」だけを見ており、**モジュール直下の WeakMap でコースごとにメモを返す形**や、**括弧なしの
+    //   `new Map` に course.name で持ち越す形**、**偽の答えを覚えない形（入口の二重評価が戻る）**を全部素通りした。
+    //   ∴ ①本体を行ごとに固定 ②モジュール直下に置いてよい宣言を列挙して固定する（キャッシュの置き場所をそもそも作れない）。
+    const MEMO_LINES = [
+      'function fitsMemoFor(course) {',
+      'const memo = new Map();',
+      'const keyOf = (n) => `${n}|${CAR.length}|${CAR.width}|${CAR.rearToBack}|${PHYSICS.mode}`;',
+      'const fits = (n) => {',
+      'const k = keyOf(n);',
+      'let v = memo.get(k);',
+      'if (v === undefined) { v = fitsAllCars(course, n); memo.set(k, v); }',
+      'return v;',
+      '};',
+      'fits.known = (n) => memo.get(keyOf(n));',
+      'return fits;',
+      '}',
+    ];
+    if (!memoFn) v.push('fitguard.js に fitsMemoFor（判定 1 回ぶんのメモ）が無い');
+    else {
+      const got = memoFn.split('\n').map(l => l.trim()).filter(Boolean);
+      if (got.join('\n') !== MEMO_LINES.join('\n')) {
+        const i = MEMO_LINES.findIndex((l, k) => got[k] !== l);
+        v.push(`fitsMemoFor の本体が凍結した形と違う（${i + 1} 行目: 期待「${MEMO_LINES[i]}」／実際「${got[i] ?? '(無し)'}」）＝鍵の漏れ・判定をまたぐ持ち越し・偽を覚えない重複評価のいずれかが入りうる`);
+      }
+    }
+    {
+      // モジュール直下（行頭が空白でも閉じ括弧でもない行）に置いてよいのはこれだけ。
+      const TOP = [/^import \{ [\w, ]+ \} from '\.\/(config|fleet|capacity)\.js';$/, /^export const FIT = \{$/,
+        /^const step10 = \(v\) => Math\.round\(v \* 10\) \/ 10;$/, /^function fitsMemoFor\(course\) \{$/,
+        /^export function settleScale\(course, ctx, fx, fits = fitsMemoFor\(course\)\) \{$/, /^export function settleFitRatio\(course, ctx, fx\) \{$/];
+      for (const line of guardSrc.split('\n')) {
+        if (!/^[^\s}]/.test(line)) continue;
+        if (!TOP.some(re => re.test(line.trimEnd()))) v.push(`fitguard.js のモジュール直下に想定外の宣言「${line.trim().slice(0, 80)}」（判定をまたぐキャッシュ等を置かない方針・BA1）`);
+      }
+    }
+    if (!/export function settleScale\(course, ctx, fx, fits = fitsMemoFor\(course\)\) \{/.test(guardSrc)) v.push('settleScale がメモを受け取らない／既定で新しいメモを作っていない');
+    const sfr = bodyOf(guardSrc, 'export function settleFitRatio');
+    if (!/const fits = fitsMemoFor\(course\);[\s\S]{0,200}?settleScale\(course, ctx, fx, fits\);/.test(sfr)) v.push('settleFitRatio が ④④\' と ⑤ で同じメモを共有していない');
+    if (/fitsAllCars\(/.test(bodyOf(guardSrc, 'export function settleScale'))) v.push('settleScale がメモを通さずに fitsAllCars を直接呼んでいる（重複評価が戻る）');
+    if (/fitsAllCars\(/.test(sfr)) v.push('settleFitRatio がメモを通さずに fitsAllCars を直接呼んでいる');
+  }
   return v;
 }
 
@@ -516,6 +620,19 @@ const MUTATIONS = [
   ['H7b fx.sync から塗りつぶし更新を削除（4 つ目のズレを再注入）', M({ main: m => m.replace('if (csEl) { csEl.value = String(userK); paintRange(csEl); }', 'if (csEl) { csEl.value = String(userK); }') })],
   ['H8 ② の比較を殺す（フルスケールから戻らない）', M({ guard: g => g.replace("if (!noRace && regime === 'fullscale' && CAR.length > target) {", "if (!noRace && regime === 'fullscale' && false) {") })],
   ['H9 判定不能な入力のガードを外す（minDim<=0 で黙って下限まで縮めて告知する）', M({ guard: g => g.replace('if (!(minDim > 0)) return { regime, userK };', '') })],
+  // ▼ BA1（2026-09-15）: 判定 1 回ぶんの fitsAllCars メモの契約
+  ['BA1 メモの鍵から CAR.width を外す', M({ guard: g => g.replace('|${CAR.width}', '') })],
+  ['BA1 メモの鍵から CAR.rearToBack を外す', M({ guard: g => g.replace('|${CAR.rearToBack}', '') })],
+  ['BA1 メモの鍵から PHYSICS.mode を外す', M({ guard: g => g.replace('|${PHYSICS.mode}', '') })],
+  ['BA1 メモの鍵から台数 n を外す（1 台と 6 台の答えが混ざる）', M({ guard: g => g.replace('=> `${n}|${CAR.length}', '=> `${CAR.length}') })],
+  ['BA1 メモをモジュール直下へ出す（判定をまたいで答えを持ち越す）', M({ guard: g => g.replace('function fitsMemoFor(course) {\n  const memo = new Map();', 'const memo = new Map();\nfunction fitsMemoFor(course) {') })],
+  ['BA1 ⑤ の近道を「偽でなければ」へ広げる（未評価で maxCars を名乗る）', M({ guard: g => g.replace('fits.known(FLEET.maxCars) === true ?', 'fits.known(FLEET.maxCars) !== false ?') })],
+  ['BA1 settleFitRatio が ⑤ とメモを共有しない', M({ guard: g => g.replace('settleScale(course, ctx, fx, fits);', 'settleScale(course, ctx, fx);') })],
+  ['BA1 ④ の入口だけメモを通さない（入口の二重評価を戻す）', M({ guard: g => g.replace('    if (!fits(FLEET.maxCars)) {', '    if (!fitsAllCars(course, FLEET.maxCars)) {') })],
+  // ▼ 層 4 レビュー（2026-09-15）が「D)/H) を素通りする」と実証した形
+  ['BA1 モジュール直下の WeakMap でコースごとにメモを返す（判定をまたいで持ち越す）', M({ guard: g => g.replace('function fitsMemoFor(course) {\n', 'const _memoByCourse = new WeakMap();\nfunction fitsMemoFor(course) {\n  if (_memoByCourse.has(course)) return _memoByCourse.get(course);\n') })],
+  ['BA1 括弧なしの new Map に course.name で持ち越す', M({ guard: g => g.replace('function fitsMemoFor(course) {\n  const memo = new Map();', 'const _byName = new Map;\nfunction fitsMemoFor(course) {\n  const memo = _byName.get(course.name) || new Map(); _byName.set(course.name, memo);') })],
+  ['BA1 偽の答えを覚えない（入口の二重評価が戻る）', M({ guard: g => g.replace('if (v === undefined) { v = fitsAllCars(course, n); memo.set(k, v); }', 'if (!v) { v = fitsAllCars(course, n); if (v) memo.set(k, v); }') })],
 ];
 console.log('\nF) D) 自身の変異試験（守っている行を壊して赤くなるか）');
 const mutMiss = [], mutNoop = [];
@@ -575,7 +692,7 @@ report('G) 食い違うのに 🏁 が黙って走ってしまうセル', silent
 // ── E) 性能 ────────────────────────────────────────────────────────────────────
 console.log('\nE) 性能');
 console.log(`  凍結旧ロジックの実オラクル論理呼び出し（出荷 ${cells} セル合計）: ${callsLegacy} 回`);
-console.log(`  新側は product の判定コアを**キャッシュ無し**で実行しており、A/B の壁時計は ${gridSec.toFixed(1)}s。`);
+console.log(`  新側は product の判定コアを（ゲート側のキャッシュを通さず）そのまま実行しており、A/B の壁時計は ${gridSec.toFixed(1)}s。`);
 const perfBad = [];
 let worst = null;
 for (const spec of specs) { let c; try { c = buildFromSpec(spec); } catch { continue; } if (!worst || c.walls.length > worst.walls.length) worst = c; }
@@ -609,9 +726,11 @@ const noFx = { regime: (n) => { setRegimeScale(kL(n)); }, scale: (k2) => setCarS
   const over = rows.filter(x => x.t > PERF_BUDGET_MS).length;
   console.log(`  ④ **判定コア 1 回**（${rows.length} セル・reason='course'）: 中央値 ${med.toFixed(1)} ms・最大 ${rows[0].t.toFixed(1)} ms（${rows[0].tag}）`);
   console.log(`     目安 ${PERF_BUDGET_MS} ms 超: ${over} / ${rows.length} セル（${(over / rows.length * 100).toFixed(0)}%）`);
-  console.log('     ⚠ **これは AZ6 の増分ではない**（④\' は出荷コースで 1 セルも発火しない＝A) の「AZ2-救済 0 件」がその証拠）。');
-  console.log('     最悪セルは cs4 起点で ④ が 0.1 刻みに降りる既存コストで AG1 以来のもの。**隠さず数字で残すが赤にはしない**');
-  console.log('     （赤にすると原因と無関係なブロックが止まる）。AZ6 が増やしたぶんだけを下の条件で赤くする。');
+  console.log('     ⚠ 残る目安超えは、ほぼ全部が ④ の 0.1 刻み降下で「収まらない」評価を何回も払うセル（AG1 以来の設計）。');
+  console.log('     `fitsAllCars` は carScale について単調でない（BA1 実測 2026-09-15: 出荷 198 行＝コース×領域 のうち 65 行に反例）ので、');
+  console.log('     二分探索で回数を減らすと落ち着き先が変わる（同: 入口で収まらない 5,562 通りのうち 877 通り）。');
+  console.log('     ∴ BA1 は回数を減らさず 1 回の評価を軽くした（結果はビット単位で同一＝wf_ba1_fitcore.mjs が出力ダイジェストで固定）。');
+  console.log('     **隠さず数字で残すが赤にはしない**（壁時計は環境ノイズに負ける）。AZ6 が増やしたぶんだけを下の条件で赤くする。');
 }
 // **AZ6 の増分を赤くする条件**: ⑥ の 1 台プローブ（実走 `runRace`）は**発走直前だけ**に払う設計なので、
 //   コース閲覧（reason ∈ {course, regime, carScale, startup}）では 1 回も走らないこと。ここが崩れると

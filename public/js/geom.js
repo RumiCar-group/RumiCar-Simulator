@@ -17,13 +17,16 @@ export function raySeg(ox, oy, dx, dy, ax, ay, bx, by) {
 // 線分 a→b と線分 c→d の交差判定。
 // AK5/D13: いずれかが縮退(0長)・両者が共線/平行のとき denom≈0 となり false=「交差なし」安全側へ
 // 落ちる (checkCollision は car エッジ×壁を本関数で判定するので縮退壁は遮蔽せず=零延長で正)。
+// 【BA1・2026-09-15】r=b-a・s=d-c を**オブジェクトにせず成分で持つ**ようにした（演算式・演算順は旧実装と 1 対 1 で同じ
+// ＝IEEE 倍精度の結果はビット単位で一致）。衝突判定 (physics.js checkCollision) の最内ループで壁×辺ごとに呼ばれ、
+// 呼び出しごとの 2 個の割り当てがフィット判定の重さに効いていた。名前・引数は変えていない（import する側は無変更）。
 export function segIntersect(a, b, c, d) {
-  const r = { x: b.x - a.x, y: b.y - a.y };
-  const s = { x: d.x - c.x, y: d.y - c.y };
-  const denom = r.x * s.y - r.y * s.x;
+  const rx = b.x - a.x, ry = b.y - a.y;
+  const sx = d.x - c.x, sy = d.y - c.y;
+  const denom = rx * sy - ry * sx;
   if (Math.abs(denom) < 1e-12) return false;   // 縮退/共線/平行 → 安全側 (交差なし)
-  const t = ((c.x - a.x) * s.y - (c.y - a.y) * s.x) / denom;
-  const u = ((c.x - a.x) * r.y - (c.y - a.y) * r.x) / denom;
+  const t = ((c.x - a.x) * sy - (c.y - a.y) * sx) / denom;
+  const u = ((c.x - a.x) * ry - (c.y - a.y) * rx) / denom;
   return t >= 0 && t <= 1 && u >= 0 && u <= 1;
 }
 

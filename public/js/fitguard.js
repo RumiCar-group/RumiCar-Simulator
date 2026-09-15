@@ -20,7 +20,7 @@
 //
 // 本モジュールが触ってよいグローバルは **CAR 寸法（config.js の SCALE_STATE 経由）だけ**。
 // `fx.regime()` / `fx.scale()` が実際にスケールを適用し、本モジュールは適用後の `CAR.length` を読む。
-import { CAR, FLEET } from './config.js';
+import { CAR, FLEET, PHYSICS } from './config.js';
 import { fitsAllCars, capacityOf } from './fleet.js';
 import { driveableCapN } from './capacity.js';
 
@@ -48,6 +48,33 @@ export const FIT = {
 // 0.1 刻みの丸め（③④ で共用。浮動小数の桁落ちを 1 箇所に閉じる）。
 const step10 = (v) => Math.round(v * 10) / 10;
 
+// 【BA1・2026-09-15】`fitsAllCars` の答えを**判定 1 回のあいだだけ**覚える（寿命＝`settleFitRatio`/`settleScale` の 1 呼び出し）。
+//   なぜ: 同じ入力で本物を 2 回払っていた（実測 2026-09-15・出荷 1188 セル）。
+//     ・④ は入口で `if (!fitsAllCars(…))` と `while (… && !fitsAllCars(…))` が**同じ寸法で 2 回**評価していた。
+//     ・⑤ `capacityOf` の最初の 1 回は、④ が最後に真を得た寸法と同じ（収まるセルでは ⑤ が丸ごと重複）。
+//   鍵に入れるもの（＝`fitsAllCars` の答えを決める入力の全部。fleet.js の freeSpawn/fitsAllCars/corridorCandidates と
+//   physics.js の corners/checkCollision/collisionReach を読んで確認）:
+//     ・台数 n
+//     ・CAR 寸法 length / width / rearToBack（**正確な倍精度値のまま**。領域と carScale は regimeK×userK を通して
+//       ここにだけ効くので、名前でなく寸法で持つ方が漏れも別名もない。数値→文字列は往復で同じ値に戻る）
+//     ・PHYSICS.mode（`fitsAllCars` は読まないが、fx.regime の change ハンドラが判定の途中で切り替えうるので
+//       **防御として入れる**。AZ6 が driveableCapN の鍵に足した先例と同じ向き。外れても呼び直すだけで答えは変わらない）
+//     ・コース … 鍵に入れない。メモは 1 回の判定の中でだけ生き、その間 course は引数で固定（別コースと混ざる経路が無い）。
+//   **判定をまたいでは覚えない**（AZ2 の方針「無効化の義務を新たに作らない」を維持。コースの編集・差し替えで
+//   古い答えを返す形をそもそも作らない）。
+function fitsMemoFor(course) {
+  const memo = new Map();
+  const keyOf = (n) => `${n}|${CAR.length}|${CAR.width}|${CAR.rearToBack}|${PHYSICS.mode}`;
+  const fits = (n) => {
+    const k = keyOf(n);
+    let v = memo.get(k);
+    if (v === undefined) { v = fitsAllCars(course, n); memo.set(k, v); }
+    return v;
+  };
+  fits.known = (n) => memo.get(keyOf(n));   // 評価済みなら true/false、未評価なら undefined（本物は呼ばない）
+  return fits;
+}
+
 /**
  * 領域と carScale の確定（①〜④'）。**DOM に触れない。**
  * 収容台数（⑤⑥）まで要るときは `settleFitRatio` を使う。スケールだけ要る検査はこちらを呼ぶ
@@ -61,9 +88,10 @@ const step10 = (v) => Math.round(v * 10) / 10;
  *   fx.scale(userK) -> k             carScale を適用し実効ユーザー倍率 k を返す（DOM 同期はしない）。
  *   fx.sync(k, userK)                スライダー値/表示ラベル/スポーンを補正後の値へ追従させる。
  *   fx.log(key, params)              1 行告知する。
+ * @param {Function} [fits] 判定 1 回ぶんの `fitsAllCars` メモ（`settleFitRatio` が ⑤ と共有するために渡す。省略時は新規）
  * @returns {object} { regime, userK }
  */
-export function settleScale(course, ctx, fx) {
+export function settleScale(course, ctx, fx, fits = fitsMemoFor(course)) {
   const b = course.bounds || { w: 0, h: 0 };
   const minDim = Math.min(b.w, b.h);
   const noRace = course.noRace === true;
@@ -123,8 +151,8 @@ export function settleScale(course, ctx, fx) {
   //   **確かめていないことを true と言わない**（下限では `fitsAllCars` を呼ばないので `null`＝不明）。
   const clampByFit = () => {
     if (!(userK > FIT.userKMin + 1e-9)) return null;
-    if (!fitsAllCars(course, FLEET.maxCars)) {
-      while (userK > FIT.userKMin + 1e-9 && !fitsAllCars(course, FLEET.maxCars)) {
+    if (!fits(FLEET.maxCars)) {
+      while (userK > FIT.userKMin + 1e-9 && !fits(FLEET.maxCars)) {
         applyUserK(Math.max(FIT.userKMin, step10(userK - FIT.step)));
       }
       return null;   // 縮小後に収まったかは不明（短絡で評価しない場合がある）
@@ -142,7 +170,7 @@ export function settleScale(course, ctx, fx) {
   //   **限界**: noRace（① が意図して fullscale に固定する大型コース）と、既に卓上の場合は対象外。
   //   （`noRace` 側は `normalizeCourse` が写さないので投稿/保存/編集コースは持てず、出荷 2 本は実測で
   //     capN≥1 ＝到達不能。決定ログ AZ-5）
-  if (!noRace && regime !== 'tabletop' && fits6 !== true && !fitsAllCars(course, 1)) {
+  if (!noRace && regime !== 'tabletop' && fits6 !== true && !fits(1)) {
     regime = 'tabletop';
     fx.regime('tabletop', 'log.autoTabletopFit', { name });
     // 【AZ6・2026-09-13 是正】**卓上へ戻す前に、利用者が指定した倍率へ carScale を復元する。**
@@ -176,13 +204,17 @@ export function settleScale(course, ctx, fx) {
  * @returns {object} { regime, userK, capN, capZeroStatic, capZeroDrive, capZero, zeroKey, zeroKeyOnly }
  */
 export function settleFitRatio(course, ctx, fx) {
-  const { regime, userK } = settleScale(course, ctx, fx);
+  const fits = fitsMemoFor(course);                         // ④④' と ⑤ で共有（判定 1 回ぶんの寿命）
+  const { regime, userK } = settleScale(course, ctx, fx, fits);
 
   // ⑤ 実態の収容容量で台数を持つ（Stage AK・GitHub #26 D6/D7・CI-14）。
   //   代理量でなく実態（実 fitsAllCars = 実 freeSpawn/checkCollision/carEdges）で「実際に壁交差0・
   //   重なり0で走り出せる最大台数」capN を測る。**0 を返せる共有オラクル `capacityOf` を使う**
   //   （`while (capN > 1 && …)` の形は「1 台は必ず置ける」という仮定を構文に埋め込むので書かない）。
-  let capN = capacityOf(course, FLEET.maxCars);            // 0..maxCars
+  //   【BA1】落ち着いた寸法で ④ が既に `fitsAllCars(course, maxCars)` を真と確かめていれば、`capacityOf` の答えは
+  //   定義から maxCars（`capacityOf` は n=maxN から降りて最初に真の n を返す＝最初の 1 回で真なら maxN）。
+  //   **確かめていない（未評価 / 偽）ときは従来どおり本物の `capacityOf` を呼ぶ**（0 を返せる経路はそのまま）。
+  let capN = fits.known(FLEET.maxCars) === true ? FLEET.maxCars : capacityOf(course, FLEET.maxCars);   // 0..maxCars
   let capZeroStatic = capN < 1;
   let capZeroDrive = false;
 

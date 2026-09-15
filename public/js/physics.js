@@ -263,16 +263,34 @@ export function collisionReach() {
 // グリッド)。車エッジは全てこの半径内ゆえ AABB 外の壁は交差し得ない (=bool 不変)。等価性は wf_ao1_v2 の
 // E 手法/専用ゲートで実証。壁数<32 は従来の全走査 (WALL_BP_MIN・受け入れ④)。extra (他車エッジ) は少数ゆえ
 // 従来どおり全走査。
+// 【BA1・2026-09-15】判定式は変えずに**壁ごとの割り当てだけを消した**（結果はビット単位で同一）。
+//   旧実装は壁 1 本ごとに端点 {x,y} を 2 個・辺ペアの分割代入を 4 回作っていた。フィット判定
+//   (fitguard.js ④ の 0.1 刻み降下 → fitsAllCars → freeSpawn の廊下 BFS) では 1 回の判定で本関数が数十万回
+//   呼ばれ、実測でその自己時間が最大の塊だった (出荷最悪セルで全体の 36%)。
+//   ・辺と壁の交差は**同じ geom.js の segIntersect** で見る。端点は使い回しの 2 個 (_wa/_wb) へ書いてから渡す
+//     (segIntersect は引数の値をその場で読むだけで保持しない・本関数は再入しない＝値が混ざる経路が無い)。
+//   ・「どの壁が候補か」(collisionCandidates) と「4 隅がその候補と交差するか」(cornersHitSegs) を分けて export する。
+//     同じ地点で向きだけ変えて何度も試す呼び出し側 (fleet.js の廊下 BFS) が、候補を 1 回だけ引けるようにするため。
+//     候補の集合は位置 (x,y) と CAR 寸法だけで決まり、向き theta に依らない (半径 collisionReach は向き不変)。
+//   走査順は旧実装と同じ (壁の順 × 辺の順) で、戻り値は bool なので順序は結果に効かない。
+//   ⚠ **本ファイルが import する名前は増やしていない**（geom.js からは従来どおり segIntersect だけ）。JS は
+//   Cache-Control 無しで配信されており、ブラウザが古い geom.js を持ったまま新しい本ファイルを取ると、
+//   存在しない名前の import でモジュールグラフ全体が読み込めなくなるため（fleet.js 冒頭の注記も参照）。
+const _wa = { x: 0, y: 0 }, _wb = { x: 0, y: 0 };
+export function cornersHitSegs(cs, segs) {
+  const c0 = cs[0], c1 = cs[1], c2 = cs[2], c3 = cs[3];
+  for (let i = 0; i < segs.length; i++) {
+    const w = segs[i];
+    _wa.x = w.x1; _wa.y = w.y1; _wb.x = w.x2; _wb.y = w.y2;
+    if (segIntersect(c0, c1, _wa, _wb) || segIntersect(c1, c2, _wa, _wb)
+      || segIntersect(c2, c3, _wa, _wb) || segIntersect(c3, c0, _wa, _wb)) return true;
+  }
+  return false;
+}
+export function collisionCandidates(walls, x, y) {
+  return wallsNear(walls, x, y, collisionReach(), 2 * CAR.length);
+}
 export function checkCollision(car, walls, extra = []) {
   const cs = car.corners();
-  const edges = [[cs[0], cs[1]], [cs[1], cs[2]], [cs[2], cs[3]], [cs[3], cs[0]]];
-  const test = (segs) => {
-    for (const w of segs) {
-      const wa = { x: w.x1, y: w.y1 }, wb = { x: w.x2, y: w.y2 };
-      for (const [p, q] of edges) if (segIntersect(p, q, wa, wb)) return true;
-    }
-    return false;
-  };
-  const cand = wallsNear(walls, car.x, car.y, collisionReach(), 2 * CAR.length);
-  return test(cand) || (extra.length > 0 && test(extra));
+  return cornersHitSegs(cs, collisionCandidates(walls, car.x, car.y)) || (extra.length > 0 && cornersHitSegs(cs, extra));
 }

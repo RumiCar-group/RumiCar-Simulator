@@ -11,6 +11,14 @@ export function normSusp(v) { return SUSP_SETS.includes(v) ? v : SUSP_DEFAULT; }
 export function normSteer(v) { return STEER_SETS.includes(v) ? v : STEER_DEFAULT; } // AS12 (3エンジン共通)
 export function normBrake(v) { return BRAKE_SETS.includes(v) ? v : BRAKE_DEFAULT; } // AV2 (v2 のみ)
 import { Car, checkCollision, carEdges } from './physics.js';
+// 【BA1・2026-09-15】physics.js の新しい部品 (collisionCandidates / cornersHitSegs) は**名前空間から「あれば使う」**。
+//   JS は Cache-Control 無しで配信されており (nginx 既定・エッジも付けない)、ブラウザは Last-Modified からの経過の
+//   10% をキャッシュの鮮度とみなす。physics.js は長く変わっていなかったので古い版が数日「新鮮」のまま残る一方、
+//   本ファイルは直近に変わったので早く取り直される。そこで**名前付きで新しい名前を import すると、古い physics.js と
+//   組み合わさった瞬間にモジュールグラフ全体が SyntaxError で読み込めなくなる** (アプリが起動しない)。
+//   名前空間 import は存在しない名前でも undefined になるだけなので、古い physics.js でも従来の checkCollision へ
+//   落ちて動く。**どちらの経路も答えはビット単位で同じ** (checkCollision 自体がこの 2 部品の合成)。
+import * as physicsParts from './physics.js';
 import { DynCar, DYN } from './physics_dyn.js';
 import { CarV2 } from './physics_v2.js';
 import { t } from './i18n.js';
@@ -30,23 +38,41 @@ import { wallGridFor, resolveFleetContacts, vCrashOf } from './contact_v2.js';
 // 許容誤差つき線分交差 (スポーン判定専用)。壁ポリゴンの継ぎ目頂点をちょうど通る線分は、
 // 浮動小数の丸めで両隣の壁とも t/u が僅かに [0,1] を外れ「非交差」になり得る (すり抜け)。
 // 僅かに広い区間で判定してこの縮退を防ぐ。
-function segHit(a, b, c, d) {
-  const rx = b.x - a.x, ry = b.y - a.y, sx = d.x - c.x, sy = d.y - c.y;
+// 【BA1・2026-09-15】線分 a→b は座標で、壁 w はそのまま受け取る。旧 `segHit(a, b, {x:w.x1,y:w.y1}, {x:w.x2,y:w.y2})`
+//   と**演算式・演算順が 1 対 1 で同じ** (c=w の始点・d=w の終点を成分で読むだけ) なので結果はビット単位で一致する。
+//   旧形は見通し判定 1 回ごとに壁本数 ×2 個のオブジェクトを作っており、壁 960 本のコースでは
+//   フィット判定の自己時間の大半がここだった (実測: 卓上 cs1 の判定 1 回の 70% が見通し判定)。
+function segHitWall(ax, ay, bx, by, w) {
+  const rx = bx - ax, ry = by - ay, sx = w.x2 - w.x1, sy = w.y2 - w.y1;
   const den = rx * sy - ry * sx;
   if (Math.abs(den) < 1e-12) return false;
-  const t = ((c.x - a.x) * sy - (c.y - a.y) * sx) / den;
-  const u = ((c.x - a.x) * ry - (c.y - a.y) * rx) / den;
+  const t = ((w.x1 - ax) * sy - (w.y1 - ay) * sx) / den;
+  const u = ((w.x1 - ax) * ry - (w.y1 - ay) * rx) / den;
   const e = 1e-7;
   return t >= -e && t <= 1 + e && u >= -e && u <= 1 + e;
+}
+// 線分 (ax,ay)→(bx,by) がどの壁とも交わらないか (= 旧 `!walls.some(w => segHit(…))`。走査順も同じ)。
+function segClearOfWalls(ax, ay, bx, by, walls) {
+  for (let i = 0; i < walls.length; i++) if (segHitWall(ax, ay, bx, by, walls[i])) return false;
+  return true;
 }
 
 // 廊下伝いの BFS でスタートから到達できる点を近い順に列挙する。
 // 直線グリッド候補が尽きるコース (スタートが鋭角コーナー直上等) の保険。
 // 1 歩ごとに「壁を横切らない」を確認しながら広がるので、候補は必ずコース内に収まる。
-function corridorCandidates(course, st, maxPts = 600) {
+// 【BA1・2026-09-15】**候補を 1 個ずつ順に出すジェネレータにした**（出す順序・個数・各候補の値は旧実装と同一）。
+//   呼び出し側 (freeSpawn の 2)) は「重ならず十分離れた最初の候補」で return するので、そこで BFS を打ち切れる。
+//   旧実装は最大 600 個を全部作ってから配列で返していたため、先頭付近で決まる場合も区域全体を探索していた
+//   (実測: 出荷最悪セルで BFS が判定 1 回の 59%)。候補を使い切る場合 (置けない) は旧実装と同じだけ計算する。
+//   あわせて、同じ地点で向きを最大 17 通り試すあいだ **壁の候補は 1 回だけ引き、姿勢は 1 個の Car を使い回す**
+//   (旧: 向きごとに `new Car` と `checkCollision` の候補検索をやり直していた)。判定そのものは
+//   checkCollision と同じ部品 (physics.js の collisionCandidates / cornersHitSegs) で、候補の集合は向きに依らない。
+function* corridorCandidates(course, st, maxPts = 600) {
   const step = 0.07;
   const key = (x, y) => Math.round(x / step) + ',' + Math.round(y / step);
-  const clear = (a, b) => !course.walls.some(w => segHit(a, b, { x: w.x1, y: w.y1 }, { x: w.x2, y: w.y2 }));
+  const probe = new Car({ x: st.x, y: st.y, theta: st.theta });   // corners() を使うためだけの姿勢 (x/y/theta を書き換えて使う)
+  const shared = (typeof physicsParts.collisionCandidates === 'function' && typeof physicsParts.cornersHitSegs === 'function')
+    ? { candidates: physicsParts.collisionCandidates, hit: physicsParts.cornersHitSegs } : null;   // 古い physics.js なら null
   const seen = new Set([key(st.x, st.y)]);
   const q = [{ x: st.x, y: st.y, theta: st.theta }];
   const out = [];
@@ -58,7 +84,7 @@ function corridorCandidates(course, st, maxPts = 600) {
       const kk = key(x, y);
       if (seen.has(kk)) continue;
       if (x < 0 || y < 0 || x > course.bounds.w || y > course.bounds.h) continue;
-      if (!clear(c, { x, y })) continue;
+      if (!segClearOfWalls(c.x, c.y, x, y, course.walls)) continue;
       seen.add(kk);
       // 車の向き: スタートと同じ → 進行方向 (=局所的な廊下の向き) → 全方位 22.5° 刻み の順に
       // 置ける向きを探す (大きな車は廊下方向にしか収まらず、45°刻みでは曲がり廊下で全滅するため)。
@@ -66,8 +92,18 @@ function corridorCandidates(course, st, maxPts = 600) {
       let theta = null;
       const ths = [c.theta, travel, travel + Math.PI];
       for (let j = 1; j < 8; j++) { ths.push(travel + j * Math.PI / 8, travel - j * Math.PI / 8); }
-      for (const th of ths) {
-        if (!checkCollision(new Car({ x, y, theta: th }), course.walls)) { theta = th; break; }
+      probe.x = x; probe.y = y;
+      if (shared) {
+        const cand = shared.candidates(course.walls, x, y);   // = checkCollision が向きごとに引いていた候補 (向き不変)
+        for (const th of ths) {
+          probe.theta = th;
+          if (!shared.hit(probe.corners(), cand)) { theta = th; break; }
+        }
+      } else {
+        for (const th of ths) {
+          probe.theta = th;
+          if (!checkCollision(probe, course.walls)) { theta = th; break; }
+        }
       }
       if (theta === null) {
         q.push({ x, y, theta: c.theta }); // 置けないが通路としては先へ広げる
@@ -75,9 +111,9 @@ function corridorCandidates(course, st, maxPts = 600) {
       }
       const node = { x, y, theta };
       q.push(node); out.push(node);
+      yield node;
     }
   }
-  return out;
 }
 
 // 1 台分の「空いている初期位置」を探す。occupied = 既に置いた他車の位置 (重ならないよう避ける)。
@@ -108,10 +144,7 @@ export function freeSpawn(course, occupied, idx) {
   const ch = Math.cos(st.theta), sh = Math.sin(st.theta);
   // スタート(または既に置いた車)まで壁を横切らずに見通せる = スタートと同じ走行廊下上にある。
   // 「壁に囲まれているか」だけの判定ではリング系コースの内側の島 (全方向が壁) を誤って許してしまう。
-  const losClear = (x, y, tx, ty) => {
-    const a = { x, y }, b = { x: tx, y: ty };
-    return !course.walls.some(w => segHit(a, b, { x: w.x1, y: w.y1 }, { x: w.x2, y: w.y2 }));
-  };
+  const losClear = (x, y, tx, ty) => segClearOfWalls(x, y, tx, ty, course.walls);
   const onTrack = (x, y) => losClear(x, y, st.x, st.y) || occupied.some(o => losClear(x, y, o.x, o.y));
   const minToOcc = (x, y) => occupied.length ? Math.min(...occupied.map(o => Math.hypot(x - o.x, y - o.y))) : Infinity;
   // 既配置車の車体エッジ (各車の向きで現寸法の矩形を構成)。交差チェックに使う。
