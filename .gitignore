@@ -37,7 +37,9 @@ videos/
 #   _*.mjs / _*.json  … ブロック作業中の probe/diag と、その中間データ (例 _as12_diag.mjs)
 #   official_result.json … wf_official_result / wf_run_all の既定書込先
 #   test_*.mjs        … 一時検証スクリプト (CLAUDE.md「検証スクラッチ」)
-_*.mjs
-_*.json
+# 2026-09-16 (BC1): 拡張子を絞っていたため `_bc1_style.css.orig`（product の複製）が
+# 無視対象から漏れ、`.githooks/pre-commit` の ALLOW が `^browser/` を許すので
+# `git add -A` で公開リポジトリに入りうる状態だった。接頭辞 `_` で一律に無視する。
+_*
 official_result.json
 test_*.mjs
