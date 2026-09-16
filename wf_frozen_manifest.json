@@ -20,11 +20,11 @@
   "canonicalNode": {
     "node": "22.22.1",
     "v8": "12.4.254.21-node.35",
-    "resultSha256": "5ccde38576c072f44f18e573066949e39d20f3b197c25e3a687bf5ef1fec88ce",
-    "pinnedAt": "2026-09-15",
+    "resultSha256": "849feeb7fb4a9016f7691b734639b56b379a80ded47b8065a9d209735f22b4fc",
+    "pinnedAt": "2026-09-16",
     "eventId": "official-sample-circuit",
-    "appVersion": "v8.4.0",
-    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: Stage BA 結了: 版 v8.4.0 (MINOR/AQ-4)。フィット判定コアの高速化 (BA1・落ち着き先/配置はビット単位で不変)。公式結果は verifyHash c731ecce・順位・グリッドが不変で、result.json の差は engineVer/appVersion の版文字列だけ＝resultSha256 は APP_VERSION 経由で再ピン (AQ-1)。"
+    "appVersion": "v8.5.0",
+    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: Stage BB 結了: 版 v8.5.0 (MINOR/AQ-4)。投稿コースの改名 (BB1)・投稿コース読込の形式/大きさ検査 (BB2)・HUD の画面 px 描画と位置マーカー (BB3)・追従カメラとミニマップ (BB4)。いずれも表示とデータ層のみで走行物理は無改変＝verifyHash c731ecce・順位・グリッドは不変。result.json の差は engineVer/appVersion の版文字列だけで、resultSha256 は APP_VERSION 経由で変わるため再ピン (AQ-1)。"
   },
   "history": [
     {

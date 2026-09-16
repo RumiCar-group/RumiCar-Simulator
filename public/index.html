@@ -14,7 +14,7 @@
 </head>
 <body>
   <header>
-    <h1>RumiCar Simulator <span class="ver" id="appVer" data-i18n-title="appVer.title" title="バージョン">v8.4.0</span></h1>
+    <h1>RumiCar Simulator <span class="ver" id="appVer" data-i18n-title="appVer.title" title="バージョン">v8.5.0</span></h1>
     <label class="themesel" data-i18n-title="theme.title" title="画面テーマ (保存されます)"><span data-i18n="theme.label">テーマ</span>
       <select id="themeSel">
         <option value="green" data-i18n="theme.green">ライトグリーン (標準)</option>
@@ -90,8 +90,11 @@
       <h3 data-i18n="usage.s5.h">5. 観察する</h3>
       <ul>
         <li data-i18n="usage.s5.realtime">各列に状態・周回数・測距 (左/中/右)・速度 (km/h)・シリアル出力をリアルタイム表示。</li>
-        <li data-i18n="usage.s5.opts">表示オプション: センサーレイ / 距離ラベル / グリッド / 一人称ビュー。車体スケール・軌跡長・再生速度 (0.1〜3×) も調整可能。</li>
-        <li data-i18n="usage.s5.lap">フィニッシュライン通過でラップ計測。ベストラップはコースごとにブラウザへ保存されます。</li>
+        <li data-i18n="usage.s5.opts">表示オプション: センサーレイ / 距離ラベル / グリッド / 一人称ビュー / 位置マーカー / 追従カメラ。車体スケール・軌跡長・再生速度 (0.1〜3×) も調整可能。</li>
+        <li data-i18n-html="usage.s5.hud"><b>メーター・順位表・タイヤ HUD・距離ラベル</b>は、コースの大きさや拡大率に依らず画面上で同じ大きさに表示されます (大きいコースでも潰れません)。狭い画面ではタイヤ HUD と順位表の置き場所が自動で変わります。</li>
+        <li data-i18n-html="usage.s5.marker"><b>位置マーカー</b> (既定 ON): 画面上の車長が 20px 未満のときだけ、各車の中心に一定の大きさの輪を重ねて位置を示します。拡大して車が大きく見えれば自動で消えます。</li>
+        <li data-i18n-html="usage.s5.follow"><b>追従カメラ</b> (既定 OFF): 選んだ車を画面の中央に置き、画面上の車長が 24px 以上になる倍率を自動で選びます (拡大は 32 倍まで)。画面をドラッグして動かすか「全体表示 ⤢」を押すと解除します (コース編集に入るときも解除します。＋／－では解除しません。タッチ端末では「全体表示 ⤢」で解除してください)。拡大中または追従中は、右下の<b>ミニマップ</b>に全体図と「いま見ている範囲」の枠が出ます。</li>
+        <li data-i18n-html="usage.s5.lap">フィニッシュライン通過でラップ計測。ソロ走行は「練習走行 (非公式)」で、ベストラップは<b>コース×車種別</b>の練習記録としてこのブラウザに保存されます (公式レースとは別経路)。</li>
         <li data-i18n="usage.s5.theme">右上の「テーマ」で画面配色を5種から選べます (保存されます)。</li>
       </ul>
       <h3 data-i18n="usage.s6.h">6. GitHub で共有する (作る → 走らせる → 保存 → みんなで再利用)</h3>
@@ -647,12 +650,12 @@
         <div class="cl-word">RumiCar</div>
       </div>
       <div class="viewbar">
-        <span class="hint" data-i18n="view.hint">🔍 ＋／－ ボタンで拡大縮小・拡大時はドラッグで移動</span>
+        <span class="hint" data-i18n="view.hint">🔍 ＋／－ ボタンで拡大縮小・拡大時はドラッグで移動 (追従中にドラッグすると追従を解除して移動)</span>
         <span class="spacer"></span>
         <button id="viewOut" class="viewstep" data-i18n-title="view.out.title" title="コースを縮小">－</button>
         <span class="viewzoom" id="viewZoom" data-i18n-title="view.zoom.title" title="現在の表示倍率">1.0×</span>
         <button id="viewIn" class="viewstep" data-i18n-title="view.in.title" title="コースを拡大">＋</button>
-        <button id="viewReset" data-i18n="view.reset" data-i18n-title="view.reset.title" title="表示倍率と位置を全体表示（等倍）に戻す">全体表示 ⤢</button>
+        <button id="viewReset" data-i18n="view.reset" data-i18n-title="view.reset.title" title="表示倍率と位置を全体表示（等倍）に戻す（追従カメラも解除する）">全体表示 ⤢</button>
       </div>
       <div class="controls">
         <button id="run" class="primary" data-i18n="ctl.run">自動 ▶</button>
@@ -694,7 +697,7 @@
         <label class="chk"><input type="checkbox" id="optTimestamp"> <span data-i18n="opt.timestamp">ログ時刻</span></label>
         <label class="chk"><input type="checkbox" id="optDepth" checked> <span data-i18n="opt.depth">一人称ビュー</span></label>
         <label class="chk" data-i18n-title="opt.carMarker.title" title="ON=車が小さく表示されているとき (画面上の車長が 20px 未満) だけ、車の位置を示す輪を画面上で一定の大きさで重ねます。拡大して車が大きく見えれば消えます (表示のみ＝走りには一切影響しません)。"><input type="checkbox" id="optCarMarker" checked> <span data-i18n="opt.carMarker">位置マーカー</span></label>
-        <label class="chk" data-i18n-title="opt.follow.title" title="ON=選んだ車を画面の中央に置いて追いかけ、画面上の車長が 24px 以上になる倍率を自動で選びます (拡大は 32 倍まで。とても大きいコースでは 32 倍でも 24px に届かないことがあります)。右下に全体図 (ミニマップ) と、いま見えている範囲の枠を出します。ドラッグで動かすか「全体表示 ⤢」を押すと解除します (カメラの操作だけ＝走りの計算には一切影響しません)。"><input type="checkbox" id="optFollow"> <span data-i18n="opt.follow">追従カメラ</span></label>
+        <label class="chk" data-i18n-title="opt.follow.title" title="ON=選んだ車を画面の中央に置いて追いかけ、画面上の車長が 24px 以上になる倍率を自動で選びます (拡大は 32 倍まで。とても大きいコースでは 32 倍でも 24px に届かないことがあります)。右下に全体図 (ミニマップ) と、いま見えている範囲の枠を出します。画面をドラッグして動かすか「全体表示 ⤢」を押すと解除します (タッチ端末では「全体表示 ⤢」で解除してください。コース編集に入るときも解除し、＋／－では解除しません。解除すると倍率は 8 倍以下へ戻ります)。カメラの操作だけ＝走りの計算には一切影響しません。"><input type="checkbox" id="optFollow"> <span data-i18n="opt.follow">追従カメラ</span></label>
         <label class="speedctl" data-i18n-title="opt.carScale.title" title="コースに対する車体の大きさ (大きいほど狭く感じる)。大きいコース (フルスケール競技グラウンド等) で車体が小さすぎて見えにくいときは値を上げる"><span data-i18n="opt.carScale">車体スケール</span> <input id="carScale" type="range" min="0.5" max="4" step="0.1" value="0.8"><b id="carScalev">0.8×</b></label>
         <label class="speedctl" data-i18n-title="opt.trail.title" title="走行軌跡の保持量 (点数。点間隔 約1cm)"><span data-i18n="opt.trail">軌跡</span> <input id="trailLen" type="range" min="200" max="20000" step="200" value="4000"><b id="trailLenv">~40m</b></label>
       </div>

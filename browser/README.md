@@ -1,6 +1,6 @@
 # 実ブラウザ(非ヘッドレス)検証ハーネス
 
-`[cpo]` RumiCar Simulator の動作確認を、**実際の headed Chrome** で行うための常設ハーネス。
+RumiCar Simulator の動作確認を、**実際の headed Chrome** で行うための常設ハーネス。
 
 ## なぜ要るのか
 
@@ -29,9 +29,13 @@ CSS `@container`（`fleet-cols`）に依存するため ③ を採る。
 
 ## 構成
 
+**下表は代表例のみ**（`check_*.mjs` はブロック作業ごとに増えるので、ここに全件を書くと必ず陳腐化する）。
+全一覧は `ls browser/check_*.mjs`、または `bash browser/run_all.sh` が先頭に出す本数と実行行で見る。
+
 | ファイル | 役割 |
 |---|---|
 | `run.sh` | 起動ラッパ。検証対象 URL を docker から解決し、実ディスプレイ上で node を実行する |
+| `run_all.sh` | `check_*.mjs` を一括実行する（本数は起動時に自分で数えて出す。`check_vnc.mjs` は名前を明示したときだけ走る） |
 | `vnc.sh` | **人が同じ画面を見る**ための VNC セッション管理（`start`/`status`/`stop`） |
 | `lib.mjs` | 共有部。headed 起動・計装済みページ・**配信中モジュールの評価**・言語切替・はみ出し測定 |
 | `check_hello.mjs` | 最小の生存確認（title／UA／WebGL／エラー件数）。移設直後に最初に走らせる |
@@ -76,7 +80,7 @@ const ver = await appModule(page, 'js/config.js', (m) => m.APP_VERSION);  // 本
 
 ## 既存ゲート群との関係
 
-`wf_*.mjs` の常設ゲート（`wf_run_all.mjs` の39本）は **`node_modules` 不要**であることが
+`wf_*.mjs` の常設ゲート（`wf_run_all.mjs` の66本）は **`node_modules` 不要**であることが
 フレッシュクローン検証の前提になっている。ブラウザ依存をそこへ持ち込まないよう、
 Playwright を使う検証は**本ディレクトリに隔離**する。`node_modules` は git 無視済み。
 
