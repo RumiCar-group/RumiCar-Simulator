@@ -277,9 +277,11 @@ export function layoutHud(ctx, slots, hv, tire4) {
   const mBottom = METER.y0 + (METER.rows - 1) * METER.gap + METER.h;
   let tire = { x: 12, y: Math.max(hv.hPx - TIRE_H - 12, mBottom + 8) }, lbTop = 12, meterW = METER.w;
   const side = !lb || hv.wPx >= mRight + 12 + lb.w + 12;
+  // タイヤ HUD の箱の幅 (出さないときは 0)。BB4: ミニマップが避けるべき矩形を layoutMinimap へ渡すため、
+  // 狭い画面の分岐だけでなく常に測る (測るだけ＝描画には影響しない)。
+  const tw = (tire4 && tire4.util) ? tireBoxW(ctx, tireLabel(tire4)) : 0;
   if (!side) {
     let top = mBottom;
-    const tw = (tire4 && tire4.util) ? tireBoxW(ctx, tireLabel(tire4)) : 0;
     if (tw) {
       meterW = Math.min(METER.w, hv.wPx - 12 - tw - 8 - METER.x0 - METER.labelW);
       if (meterW >= METER_W_MIN) {                                     // ①
@@ -291,7 +293,7 @@ export function layoutHud(ctx, slots, hv, tire4) {
     }
     lbTop = top + 8;
   }
-  return { side, tire, lbTop, lb, meterW };
+  return { side, tire, lbTop, lb, meterW, tireW: tw };
 }
 
 // 複数車両のリーダーボード (右上。狭い画面ではメーターの下＝layoutHud)。slots=[{name,color,lap,car,running}], activeIdx=強調表示。
@@ -362,6 +364,78 @@ export function drawCarMarkers(ctx, pts) {
     ctx.strokeStyle = 'rgba(0,0,0,0.6)'; ctx.lineWidth = MARKER.casing; ctx.stroke();
     ctx.strokeStyle = p.color; ctx.lineWidth = MARKER.ring; ctx.stroke();
   }
+  ctx.restore();
+}
+
+// ミニマップ (BB4)。拡大表示中 (zoom > 1 または追従 ON) に、コース全体の縮小図と「いま見えている範囲」の
+// 矩形を右下へ出す。等倍・追従 OFF のときは出さない (邪魔にしない)。座標系は HUD と同じ CSS px。
+// max/min: 箱の長辺の最大 [CSS px] と、これを下回るなら出さない下限。minShort: 短辺の下限 (細長いコースで
+// 潰れた帯にならないように。長辺だけ見ると 20:1 のコースで高さ 7px の図が「合格」してしまう)。
+export const MINI = { max: 150, min: 56, minShort: 28, pad: 12, gap: 8, wall: 1, car: 2.5 };
+
+// ミニマップの配置。HUD の 3 部品と**構造的に**重ならない領域だけを使う:
+//   縦 = 順位表の下端より下 (順位表は layoutHud のどの分岐でも右寄せ＝右下と衝突しうる唯一の部品)
+//   横 = メーターの右。タイヤ HUD が順位表より下にある (広い画面の左下) ときはその右も避ける。
+// その領域にコースの縦横比を保った箱を入れ、長辺が MINI.min 未満なら null = 出さない。
+// 位置ではなく**部品の寸法**から領域を出すので、配置が壊れて部品が下へずれた退行を「入る」と取り違えない。
+export function layoutMinimap(hv, lay, wM, hM) {
+  if (!(wM > 0 && hM > 0)) return null;
+  const lbBottom = lay.lb ? lay.lbTop + lay.lb.h : 0;
+  let left = METER.x0 + METER.labelW + lay.meterW + MINI.gap;
+  if (lay.tireW && lay.tire.y + TIRE_H > lbBottom) left = Math.max(left, lay.tire.x + lay.tireW + MINI.gap);
+  const availW = hv.wPx - MINI.pad - left;
+  const availH = hv.hPx - MINI.pad - (lbBottom + MINI.gap);
+  if (!(availW > 0 && availH > 0)) return null;
+  const s = Math.min(MINI.max / Math.max(wM, hM), availW / wM, availH / hM);
+  const w = wM * s, h = hM * s;
+  if (Math.max(w, h) < MINI.min || Math.min(w, h) < MINI.minShort) return null;
+  return { x: hv.wPx - MINI.pad - w, y: hv.hPx - MINI.pad - h, w, h };
+}
+
+// コースの縮小図はコース/箱の大きさが変わったときだけ焼き直す (毎フレーム全壁を描くと壁の多いコースで重い)。
+// 署名は壁の本数 + 最大 32 本の標本。編集器で壁を差し替えても本数か標本が動けば焼き直る (表示のみ＝誤差は絵の鮮度)。
+const MINI_CACHE = { sig: '', cv: null };
+function miniSig(course) {
+  const W = course.walls, step = Math.max(1, Math.floor(W.length / 32));
+  let s = W.length;
+  for (let i = 0; i < W.length; i += step) { const w = W[i]; s = (s * 31 + w.x1 * 7 + w.y1 * 13 + w.x2 * 17 + w.y2 * 23) % 1e9; }
+  return s;
+}
+// box = layoutMinimap の結果 (CSS px)・cars = [{x,y,color}] (world)・viewRect = いま見えている範囲 (CSS px・box と同じ系)。
+// ⚠ strokeRect の呼び順は「① 箱の枠 → ② 表示範囲の矩形」で固定 (check_bb4_follow.mjs N2 がこの順で読む)。
+export function drawMinimap(ctx, box, course, cars, viewRect) {
+  const b = course.bounds;
+  // 署名にテーマ色を入れる: 焼くときだけ VIEW.bg/VIEW.wall を読むので、入れないとテーマを変えても
+  // 古い地色・壁色の板が貼られ続ける (applyCanvasTheme が VIEW.bg を書き換える・BB4 層 4 で実測)。
+  const sig = `${miniSig(course)}|${b.w}x${b.h}|${box.w.toFixed(1)}x${box.h.toFixed(1)}|${VIEW.bg}|${VIEW.wall}`;
+  if (MINI_CACHE.sig !== sig) {
+    const cv = MINI_CACHE.cv || (MINI_CACHE.cv = document.createElement('canvas'));
+    const dpr = 2;   // 2 倍で焼いて縮めると、細い壁が縮小で消えない
+    cv.width = Math.max(1, Math.round(box.w * dpr)); cv.height = Math.max(1, Math.round(box.h * dpr));
+    const c2 = cv.getContext('2d');
+    c2.fillStyle = VIEW.bg; c2.fillRect(0, 0, cv.width, cv.height);
+    const s = cv.width / b.w;
+    c2.strokeStyle = VIEW.wall; c2.lineWidth = Math.max(1, MINI.wall * dpr); c2.lineCap = 'round';
+    c2.beginPath();   // 全壁を 1 本のパスにして 1 回だけ stroke する (壁ごとの stroke は壁の多いコースで重い)
+    for (const w of course.walls) { c2.moveTo(w.x1 * s, (b.h - w.y1) * s); c2.lineTo(w.x2 * s, (b.h - w.y2) * s); }
+    c2.stroke();
+    MINI_CACHE.sig = sig;
+  }
+  ctx.save();
+  ctx.drawImage(MINI_CACHE.cv, box.x, box.y, box.w, box.h);
+  ctx.strokeStyle = 'rgba(255,255,255,0.45)'; ctx.lineWidth = 1;
+  ctx.strokeRect(box.x + 0.5, box.y + 0.5, box.w - 1, box.h - 1);            // ① 箱の枠
+  // ここから先は箱で切り取る。車も表示範囲もコース外へ出うる (追従中は被覆クランプを外すため) ので、
+  // 切り取らないと点や枠が箱の外＝他の HUD の上へ漏れる。**呼び出しの座標は切り取らない実値のまま**
+  // なので、表示範囲の矩形は vt から計算した範囲とそのまま比べられる。
+  ctx.beginPath(); ctx.rect(box.x, box.y, box.w, box.h); ctx.clip();
+  for (const c of cars) {
+    ctx.beginPath();
+    ctx.arc(box.x + (c.x / b.w) * box.w, box.y + ((b.h - c.y) / b.h) * box.h, MINI.car, 0, Math.PI * 2);
+    ctx.fillStyle = c.color; ctx.fill();
+  }
+  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5;
+  ctx.strokeRect(viewRect.x, viewRect.y, viewRect.w, viewRect.h);            // ② 表示範囲
   ctx.restore();
 }
 

@@ -239,6 +239,15 @@ const CAR_BASE = { length: CAR.length, width: CAR.width, wheelBase: CAR.wheelBas
 // 衝突フットプリント（設計/k=1 単位）= physics.Car.corners() が成す矩形。描画スプライト(car_sprite.js)を
 // この中へ写像して「描画 ⊆ 衝突矩形」を保証する（Stage AH・GitHub #26）。CAR_BASE 由来で carScale に依らず不変。
 export const CAR_FOOTPRINT = { back: -CAR_BASE.rearToBack, front: CAR_BASE.length - CAR_BASE.rearToBack, hw: CAR_BASE.width / 2 };
+// 表示倍率 (ビューポート変換 vt) の下限/上限。描画と入力にのみ作用し、物理/判定/ラップは不変。
+// 追従カメラ ON の間だけ上限が FOLLOW.maxZoom へ上がる (main.js の vtMax)。
+export const VT = { min: 1, max: 8 };
+// 追従カメラ (BB4)。ON の間、選択車を画面中央に置き、画面上の車長が minCarCss 以上に見える倍率を自動で選ぶ。
+// maxZoom: 追従中だけ引き上げる表示倍率の上限 (VT.max=8 では大きいコースで minCarCss に届かない＝BB-6 の実測:
+//   390 幅の racing-course は 8 倍でも車長 13.6px)。追従 OFF に戻すと従来の VT.max=8 へクランプする。
+// 表示のみ＝物理・判定・ラップ・verifyHash には一切関与しない (描画と入力だけに作用する vt と同じ扱い)。
+// ⚠ minCarCss は i18n の opt.follow.title (ja/en) にも文章で書いてある (check_bb4_follow.mjs F7 が一致を検査する)。
+export const FOLLOW = { minCarCss: 24, maxZoom: 32 };
 const SENSOR_BASE = SENSORS.map(s => ({ dx: s.dx, dy: s.dy }));
 // 実効スケール = 領域の長さ倍率 (regimeK = regime.L/卓上L) × ユーザーの carScale スライダー (userK)。
 // Phase F1 で領域を一級化したため2軸に分離した。既定 1×1 は従来の geometry×1 と byte 完全一致。

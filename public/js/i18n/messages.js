@@ -101,6 +101,8 @@ export const MESSAGES = {
   'opt.trail.title':  { ja: '走行軌跡の保持量 (点数。点間隔 約1cm)', en: 'How much of the trail to keep (number of points, ~1 cm spacing).' },
 
   // ---- ビュー操作 (＋／－ ボタンで拡大縮小 / ドラッグ移動) ----
+  'opt.follow':       { ja: '追従カメラ',           en: 'Follow camera' },
+  'opt.follow.title': { ja: 'ON=選んだ車を画面の中央に置いて追いかけ、画面上の車長が 24px 以上になる倍率を自動で選びます (拡大は 32 倍まで。とても大きいコースでは 32 倍でも 24px に届かないことがあります)。右下に全体図 (ミニマップ) と、いま見えている範囲の枠を出します。ドラッグで動かすか「全体表示 ⤢」を押すと解除します (カメラの操作だけ＝走りの計算には一切影響しません)。', en: 'ON: keep the selected car at the centre of the view and pick a zoom level that makes it at least 24 px long on screen (zoom is capped at 32x, so on very large courses it may fall short of 24 px). A minimap in the bottom-right shows the whole course and a frame around the part you are looking at. Dragging the view, or pressing "Fit view ⤢", turns it off (camera only — it never affects the driving calculation).' },
   'view.hint':        { ja: '🔍 ＋／－ ボタンで拡大縮小・拡大時はドラッグで移動', en: '🔍 Zoom with the + / − buttons · drag to pan when zoomed' },
   'view.out.title':   { ja: 'コースを縮小', en: 'Zoom out' },
   'view.in.title':    { ja: 'コースを拡大', en: 'Zoom in' },

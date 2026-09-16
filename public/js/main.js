@@ -1,7 +1,7 @@
 // 統合: シミュレーションループ・UI 結線・手動操作・プログラム取込・
 //       ラップ計測 / コースエディタ / デバッグ機能 (Phase 2) +
 //       複数台同時走行 (各車に個別プログラムを割当, Phase 3)。
-import { CONST, VIEW, SIM, FLEET, TRAIL, CAR, CAR_FOOTPRINT, CAR_TYPES, CAR_TYPE_BY_KEY, CAR_TYPE_DEFAULT, setCarScale, CAR_PARAM_DOC, registerCarType, unregisterCarType, APP_VERSION, displayKmh, setPhysicsMode, PHYSICS, SENSOR_NOISE, SENSOR_HOLD, SENSOR_OPTICS, A11Y, CVD, REGIMES, REGIME_STATE, GRID } from './config.js';
+import { CONST, VIEW, SIM, FLEET, TRAIL, CAR, CAR_FOOTPRINT, CAR_TYPES, CAR_TYPE_BY_KEY, CAR_TYPE_DEFAULT, setCarScale, CAR_PARAM_DOC, registerCarType, unregisterCarType, APP_VERSION, displayKmh, setPhysicsMode, PHYSICS, SENSOR_NOISE, SENSOR_HOLD, SENSOR_OPTICS, A11Y, CVD, REGIMES, REGIME_STATE, GRID, FOLLOW, VT } from './config.js';
 // CHANGELOG は表示専用の 124KB のデータ塊なので critical path から外し (Stage AS2)、
 // 版ポップアップを組むときにだけ動的 import する (下の loadChangelog)。
 import { PROGRAMS, PROGRAM_BY_CARTYPE, PROGRAM_BY_KEY, programKeyForCode } from './programs.js';
@@ -51,7 +51,7 @@ const carTypeName = (ct) => {
   const base = hasKey('car.' + ct.key) ? t('car.' + ct.key) : ct.name;
   return ct.community ? '🌐 ' + base : base;
 };
-import { drawTrail, drawReferenceLine, drawSensors, drawCar, drawMeters, drawFleetHud, updatePanel, drawTireHud, layoutHud, drawCarMarkers, MARKER } from './hud.js';
+import { drawTrail, drawReferenceLine, drawSensors, drawCar, drawMeters, drawFleetHud, updatePanel, drawTireHud, layoutHud, drawCarMarkers, MARKER, layoutMinimap, drawMinimap } from './hud.js';
 import { drawDepthView } from './depth.js';
 import { drawTougeElevation } from './elev3d.js';
 import { fmtTime, loadBestRec } from './lap.js';
@@ -103,8 +103,7 @@ const view = { hM: 0, wPx: 0, hPx: 0 };
 // ---- ビューポート変換 (P2: ホイール拡大縮小 + ドラッグ移動)。描画と入力にのみ作用し、物理/判定/ラップは不変。
 //      基準スクリーン座標 (worldToScreen の fit 済み内部キャンバス px) に zoom/pan を後段で重ねる。
 //      既定 zoom=1 / pan=0 は恒等変換 = 従来描画と完全一致 (回帰)。
-const VT = { min: 1, max: 8 };               // 表示倍率の下限/上限 (1.0〜8.0倍)
-const vt = { zoom: 1, panX: 0, panY: 0 };    // panX/panY は内部キャンバス px
+const vt = { zoom: 1, panX: 0, panY: 0 };    // panX/panY は内部キャンバス px (上下限 VT は config.js)
 function clampPan() {
   // 拡大時もコースがキャンバスを覆い続けるよう pan をクランプ (空背景の隙間を作らない)。
   // zoom=1 では下限=0 となり pan は 0 に固定される (全体が収まるため移動不要)。
@@ -113,23 +112,78 @@ function clampPan() {
   vt.panX = Math.max(loX, Math.min(0, vt.panX));
   vt.panY = Math.max(loY, Math.min(0, vt.panY));
 }
+// BB4: 追従カメラ ON の間だけ倍率の上下限を差し替える。
+//   上限 … VT.max=8 では大きいコースで車長 FOLLOW.minCarCss に届かないので FOLLOW.maxZoom まで許す。
+//   下限 … 「車長 ≥ FOLLOW.minCarCss」を満たす倍率 (followMinZoom)。追従中に ／－ でそれ未満へは下げられない
+//          (下げられると追従の目的である「十分な大きさで見る」が崩れるため)。
+// 追従 OFF では従来どおり [VT.min, VT.max] = [1, 8] ＝ 既定の挙動は BB3 時点と完全に同じ。
+const FOLLOW_KEY = 'rumicar.follow';
+function followOn() { const c = $('optFollow'); return !!(c && c.checked); }
+function vtMax() { return followOn() ? FOLLOW.maxZoom : VT.max; }
+// 画面上の車長が FOLLOW.minCarCss [CSS px] になる倍率。hudScale() で内部 px → CSS px を戻す。
+function followMinZoom() {
+  const k = VIEW.carScale || 1, F = CAR_FOOTPRINT;
+  const lenCss1 = (F.front - F.back) * k * view.pxPerM / hudScale();   // zoom=1 のときの画面上の車長
+  return lenCss1 > 0 ? FOLLOW.minCarCss / lenCss1 : VT.min;
+}
+function vtMin() { return followOn() ? Math.max(VT.min, Math.min(FOLLOW.maxZoom, followMinZoom())) : VT.min; }
+// 表示は倍率だけでなく **pan にも依存する** (「全体表示 ⤢」は zoom=1 かつ pan=0 のときだけ無効)。
+// 追従中は pan が毎フレーム動くので毎フレーム呼ぶ必要があるが、DOM 書き込みは値が変わったときだけにする
+// (前回書いた値を覚えておく)。BB4: これを怠ると、倍率が変わらない追従 (等倍で足りるコース) で
+// ⤢ が「pan=0 だった頃」の無効のまま固まり、追従を解除する手段が 1 つ消える。
+const _badge = { zoom: null, reset: null, zin: null, zout: null };
 function updateViewBadge() {
-  const b = $('viewZoom'); if (b) b.textContent = vt.zoom.toFixed(1) + '×';
-  const r = $('viewReset'); if (r) r.disabled = (vt.zoom === 1 && vt.panX === 0 && vt.panY === 0);
-  const zi = $('viewIn'); if (zi) zi.disabled = (vt.zoom >= VT.max - 1e-6);
-  const zo = $('viewOut'); if (zo) zo.disabled = (vt.zoom <= VT.min + 1e-6);
+  const zs = vt.zoom.toFixed(1) + '×';
+  const b = $('viewZoom'); if (b && _badge.zoom !== zs) { b.textContent = zs; _badge.zoom = zs; }
+  const rd = (vt.zoom === 1 && vt.panX === 0 && vt.panY === 0);
+  const r = $('viewReset'); if (r && _badge.reset !== rd) { r.disabled = rd; _badge.reset = rd; }
+  const id = (vt.zoom >= vtMax() - 1e-6);
+  const zi = $('viewIn'); if (zi && _badge.zin !== id) { zi.disabled = id; _badge.zin = id; }
+  const od = (vt.zoom <= vtMin() + 1e-6);
+  const zo = $('viewOut'); if (zo && _badge.zout !== od) { zo.disabled = od; _badge.zout = od; }
 }
 // ボタンによる段階ズーム (キャンバス中心を固定して拡大/縮小)。1 クリック ≒ 1.3 倍。
 function zoomStep(dir) { zoomAt(canvas.width / 2, canvas.height / 2, vt.zoom * (dir > 0 ? 1.3 : 1 / 1.3)); }
 function resetView() { vt.zoom = 1; vt.panX = 0; vt.panY = 0; updateViewBadge(); }
 // カーソル位置 (内部キャンバス px) の world 点を固定したまま倍率を newZoom へ。
 function zoomAt(cx, cy, newZoom) {
-  newZoom = Math.max(VT.min, Math.min(VT.max, newZoom));
+  newZoom = Math.max(vtMin(), Math.min(vtMax(), newZoom));
   if (newZoom === vt.zoom) return;
   const bx = (cx - vt.panX) / vt.zoom, by = (cy - vt.panY) / vt.zoom; // 基準px (zoom/pan を剥がす)
   vt.zoom = newZoom;
   vt.panX = cx - bx * vt.zoom;
   vt.panY = cy - by * vt.zoom;
+  if (!followOn()) clampPan();   // 追従中は被覆クランプをかけない (updateFollow が pan を決め直す)
+  updateViewBadge();
+}
+// BB4: 追従カメラ。ON の間、選択車 (対象車) を画面のちょうど中央に置く。
+//   倍率 … [vtMin(), vtMax()] へ入れ直す。利用者が ／ で上げた値はそのまま尊重し (中央維持のまま拡大)、
+//          下限 (車長 FOLLOW.minCarCss) を下回っていれば引き上げる。
+//   位置 … コース被覆クランプ (clampPan) を**かけない**。コース端でも車を正確に中央へ置く方針
+//          (2026-09-16 利用者裁定)。端では外側に背景色が出る。
+// 描画のみ＝物理・判定・ラップ・verifyHash には一切関与しない。
+function updateFollow() {
+  if (!followOn()) return;
+  // 車をドラッグしている間はカメラを止める。動かすと「車をカーソルへ → カメラを車へ → 同じカーソル位置が
+  // 別の world 点を指す → 車がまた動く」の正帰還になり、指を止めていても車が走り続ける (BB4 層 4 で実測)。
+  if (dragSlot >= 0) return;
+  const a = activeSlot(); if (!a) return;
+  const z = Math.max(vtMin(), Math.min(vtMax(), vt.zoom));
+  vt.zoom = z;
+  // 追従の基準点は車の**フットプリントの中心** (位置マーカーと同じ点。後輪軸ではない)。
+  const F = CAR_FOOTPRINT, k = VIEW.carScale || 1, lc = (F.front + F.back) / 2 * k;
+  const p = worldToScreen({ x: a.car.x + lc * Math.cos(a.car.theta), y: a.car.y + lc * Math.sin(a.car.theta) }, view);
+  vt.panX = canvas.width / 2 - p.x * z;
+  vt.panY = canvas.height / 2 - p.y * z;
+  updateViewBadge();   // pan も ⤢ の有効/無効に効くので毎フレーム。DOM 書き込みは値が変わったときだけ
+}
+// 追従を切る (パン操作・全体表示 ⤢)。チェックも外し、倍率を従来の上限 VT.max 以下へ戻す。
+function setFollowOff() {
+  const el = $('optFollow');
+  if (!el || !el.checked) return;
+  el.checked = false;
+  try { localStorage.setItem(FOLLOW_KEY, '0'); } catch (e) {}
+  if (vt.zoom > VT.max) vt.zoom = VT.max;
   clampPan(); updateViewBadge();
 }
 // 2026-08-02 利用者指摘「右側に余裕があるのに窓内だけで拡大される」への対応 (RC-UX-004)。
@@ -474,6 +528,7 @@ function render(edges) {
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = VIEW.bg; ctx.fillRect(0, 0, canvas.width, canvas.height);
   const hs = hudScale();   // BB3: 内部キャンバス px / CSS px
+  if (!editing) updateFollow();   // BB4: 追従カメラ。描く直前に vt を決める (この絵と vt が必ず一致する)
   ctx.setTransform(vt.zoom, 0, 0, vt.zoom, vt.panX, vt.panY);
   drawCourse(ctx, c, view, { grid: editing ? true : opts.grid });
   // 初回のコース描画が出たら起動ローダー(案C)をフェードで隠す (一度だけ)。
@@ -565,6 +620,21 @@ function render(edges) {
         const p = worldToScreen({ x: car.x + lc * Math.cos(car.theta), y: car.y + lc * Math.sin(car.theta) }, view);
         return { x: (p.x * vt.zoom + vt.panX) / hs, y: (p.y * vt.zoom + vt.panY) / hs, color: dispColor(i, slots[i].color) };
       }));
+    }
+  }
+  // ミニマップ (BB4): 拡大表示中 (倍率 > 1 または追従 ON) だけ、右下に全体図と表示範囲の矩形を出す。
+  // 等倍・追従 OFF では 1 本も描かない＝BB3 完了時点と画素一致。
+  if (vt.zoom > 1 + 1e-6 || followOn()) {
+    const box = layoutMinimap(hv, hudLay, c.bounds.w, c.bounds.h);
+    if (box) {
+      // いま見えている範囲 = 画面 [0, canvas] を vt で逆変換した基準 px 矩形を、ミニマップの箱へ線形写像する。
+      // 割るのは view.wPx/hPx (コース全体の基準 px)。canvas.width は整数へ切り捨てられるので使わない。
+      const rect = {
+        x: box.x + ((0 - vt.panX) / vt.zoom) / view.wPx * box.w,
+        y: box.y + ((0 - vt.panY) / vt.zoom) / view.hPx * box.h,
+        w: (canvas.width / vt.zoom) / view.wPx * box.w, h: (canvas.height / vt.zoom) / view.hPx * box.h,
+      };
+      drawMinimap(ctx, box, c, slots.map((s, i) => ({ x: s.car.x, y: s.car.y, color: dispColor(i, s.color) })), rect);
     }
   }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1603,6 +1673,11 @@ function applyEditDims() {
 }
 function enterEdit() {
   stopAuto();
+  // BB4: 編集へ入るときは追従を解除する。追従中は倍率の上限が 8→FOLLOW.maxZoom へ上がり、
+  // 被覆クランプも外れている。編集中は updateFollow を呼ばない (render の editing 分岐) ので、
+  // 解除しないと「倍率 >8・パン未クランプ」のまま編集器が開いたきり戻らない。
+  // 抜けるとき (exitEdit) は setView→resetView が等倍へ戻すので、こちら側だけで足りる。
+  setFollowOff();
   editor = new CourseEditor(course);
   const m = document.querySelector('input[name=emode]:checked');
   editor.setMode(m ? m.value : 'wall');
@@ -1754,6 +1829,19 @@ if (carMarkerEl) {
   carMarkerEl.checked = (stored !== '0');   // 既定 ON
   carMarkerEl.addEventListener('change', (e) => {
     try { localStorage.setItem(CARMARKER_KEY, e.target.checked ? '1' : '0'); } catch (err) {}
+  });
+}
+// BB4: 追従カメラ トグル。既定 OFF (FOLLOW_KEY は上の vt 節で定義)。
+// OFF へ戻すときは倍率を従来の上限 VT.max 以下へ戻し、被覆クランプをかけ直す (追従中だけ外していたため)。
+const followEl = $('optFollow');
+if (followEl) {
+  let stored = null;
+  try { stored = localStorage.getItem(FOLLOW_KEY); } catch (e) {}
+  followEl.checked = (stored === '1');   // 既定 OFF
+  followEl.addEventListener('change', (e) => {
+    try { localStorage.setItem(FOLLOW_KEY, e.target.checked ? '1' : '0'); } catch (err) {}
+    if (!e.target.checked) { if (vt.zoom > VT.max) vt.zoom = VT.max; clampPan(); }
+    updateViewBadge();
   });
 }
 // AF4 (#26②): 色覚セーフ配色 トグル。既定 OFF・選択は localStorage に保存。描画層 (render/hud) は
@@ -2393,6 +2481,7 @@ let edDrawing = false;   // コースエディタの連続描画/曲線モード
 // ---- P2: ビューのパン (ドラッグ移動) 状態 ----
 let panning = false, panLastX = 0, panLastY = 0;
 function startPan(ev) {
+  setFollowOff();   // BB4: 位置を自分で動かす操作は「自分で見たい所を見る」意思表示＝追従を解除する
   panning = true;
   const p = canvasPx(ev); panLastX = p.cx; panLastY = p.cy;
   canvas.style.cursor = 'grabbing'; ev.preventDefault();
@@ -2411,7 +2500,9 @@ canvas.addEventListener('mousedown', (ev) => {
   const i = carAt(canvasPt(ev));
   if (i >= 0) { dragSlot = i; selectCar(i); canvas.style.cursor = 'grabbing'; ev.preventDefault(); return; }
   // 左ボタン・非編集・空白・拡大中 = パン (中ボタンの無いトラックパッド/マウス向け)。
-  if (ev.button === 0 && vt.zoom > 1) startPan(ev);
+  // 追従中は等倍でもパンを許す。ここを zoom>1 で塞ぐと、等倍で足りるコース (卓上コースの大半) では
+  // 左ドラッグが startPan=setFollowOff に届かず、i18n が案内する解除手段が 1 つ死ぬ (BB4 層 4 で実測)。
+  if (ev.button === 0 && (vt.zoom > 1 || followOn())) startPan(ev);
 });
 canvas.addEventListener('mousemove', (ev) => {
   if (panning) {
@@ -2429,6 +2520,11 @@ canvas.addEventListener('mousemove', (ev) => {
   }
   if (dragSlot >= 0) {
     const c = slots[dragSlot].car;
+    // BB4: コース枠内へクランプする。従来は clampPan により canvasPt の値域が必ず枠内に収まっていたので
+    // 枠外に置くことが構造的に不可能だったが、追従中は被覆クランプを外すため枠外を指せる。
+    // 追従 OFF では従来と同じ値になる (もともと枠内しか指せない) ＝ 挙動不変。
+    const bb = course.bounds;
+    p.x = Math.max(0, Math.min(bb.w, p.x)); p.y = Math.max(0, Math.min(bb.h, p.y));
     // ドラッグ中は自走を止めて (古い driveDir で暴走しないよう) カーソルへ追従、衝突状態は解除。
     c.x = p.x; c.y = p.y; c.v = 0; c.crashed = false;
     c.driveDir = CONST.FREE; c.pwm = 0; c.steer = CONST.CENTER;
@@ -2436,7 +2532,7 @@ canvas.addEventListener('mousemove', (ev) => {
     if (!running) slots[dragSlot].spawn = { x: p.x, y: p.y, theta: c.theta };
   } else {
     // 拡大中は空白でも 'grab' (パン可能) を示唆。
-    canvas.style.cursor = carAt(p) >= 0 ? 'grab' : (vt.zoom > 1 ? 'grab' : 'default');
+    canvas.style.cursor = carAt(p) >= 0 ? 'grab' : ((vt.zoom > 1 || followOn()) ? 'grab' : 'default');
   }
 });
 window.addEventListener('mouseup', () => {
@@ -2454,7 +2550,9 @@ window.addEventListener('mouseup', () => {
 const viewInBtn = $('viewIn'); if (viewInBtn) viewInBtn.addEventListener('click', () => zoomStep(+1));
 const viewOutBtn = $('viewOut'); if (viewOutBtn) viewOutBtn.addEventListener('click', () => zoomStep(-1));
 const viewResetBtn = $('viewReset');
-if (viewResetBtn) viewResetBtn.addEventListener('click', resetView);
+// BB4: 「全体表示 ⤢」は追従も解除する (等倍に戻すのに追従が続くと次のフレームで拡大へ戻ってしまう)。
+// ＋／－ (zoomStep) は倍率だけを変えて追従は続ける (中央維持のまま寄り引きできる・2026-09-16 利用者裁定)。
+if (viewResetBtn) viewResetBtn.addEventListener('click', () => { setFollowOff(); resetView(); });
 canvas.addEventListener('click', (ev) => { if (editing) editor.click(canvasPt(ev)); });
 // 折れ線(クリック配置)モードはダブルクリックで確定 (先行する click 2 発で最終点は追加済み)。
 canvas.addEventListener('dblclick', (ev) => {
