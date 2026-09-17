@@ -542,7 +542,7 @@
   <dialog id="dlgOfficial" class="docdlg">
     <div class="docdlg-head"><h2 data-i18n="official.title">🏆 公式レース (GitHub)</h2><button class="docdlg-x" data-close="dlgOfficial" data-i18n-aria="modal.close">×</button></div>
     <div class="docdlg-body">
-      <p class="event-intro" data-i18n="official.intro">GitHub の races/ で開かれている公式レースです。締切で確定したエントリー列を決定論エンジンで再実行すれば、誰でも結果を検証できます。</p>
+      <p class="event-intro" data-i18n="official.intro">GitHub の races/ で開かれている公式レースです。締切で確定したエントリー列を決定論エンジンで再実行すれば、誰でも結果を検証できます (中央サーバ不要)。プログラムは「コピーして勝つ」を防ぐため開催中は非公開、締切後に公開されます。</p>
       <div class="official-bar">
         <label><span data-i18n="official.raceLabel">大会</span> <select id="ofRace"></select></label>
         <button id="ofReload" data-i18n="official.reload">再読込</button>
@@ -567,7 +567,7 @@
   <dialog id="dlgRankings" class="docdlg">
     <div class="docdlg-head"><h2 data-i18n="rank.title">🏅 ランキング (公式記録)</h2><button class="docdlg-x" data-close="dlgRankings" data-i18n-aria="modal.close">×</button></div>
     <div class="docdlg-body">
-      <p class="event-intro" data-i18n="rank.intro">GitHub の公式レース結果から集計したリーダーボードとドライバー称号です。検証済記録のみを反映します。</p>
+      <p class="event-intro" data-i18n="rank.intro">GitHub の公式レース結果から集計したリーダーボードとドライバー称号です。再実行で誰でも検証できる検証済記録のみを反映します (尊敬が本物である根拠)。</p>
       <div class="official-bar">
         <label><span data-i18n="rank.you.label">あなたの GitHub</span> <input id="rankYou" type="text" maxlength="40" data-i18n-placeholder="rank.you.ph" placeholder="octocat"></label>
         <button id="rankYouSave" data-i18n="rank.you.save">記憶</button>
@@ -583,7 +583,7 @@
   <dialog id="dlgGhost" class="docdlg">
     <div class="docdlg-head"><h2 data-i18n="ghost.title">👻 ゴースト再生</h2><button class="docdlg-x" data-close="dlgGhost" data-i18n-aria="modal.close">×</button></div>
     <div class="docdlg-body">
-      <p class="event-intro" data-i18n="ghost.intro">記録の決定論リプレイをコース上に重ねて表示します。複数の車を同じ時間軸で走らせ差を体感できます。</p>
+      <p class="event-intro" data-i18n="ghost.intro">記録の決定論リプレイをコース上に重ねて表示します。複数の車を同じ時間軸で走らせ、差 (gap) を体感できます。ゴーストは視覚的な参照なので、環境差があっても問題ありません (公式順位は固定環境の正準エンジンで判定)。</p>
       <div id="ghostMeta" class="race-meta"></div>
       <canvas id="ghostMap" class="race-map" width="520" height="300" role="img" data-i18n-aria="aria.canvas.ghostMap"></canvas>
       <div class="ghost-bar">
@@ -607,7 +607,7 @@
   <dialog id="dlgChallenge" class="docdlg">
     <div class="docdlg-head"><h2 data-i18n="chal.title">🎯 チャレンジ (練習)</h2><button class="docdlg-x" data-close="dlgChallenge" data-i18n-aria="modal.close">×</button></div>
     <div class="docdlg-body">
-      <p class="event-intro" data-i18n="chal.intro">このブラウザの練習記録から、難度別の完走状況とバッジを集計します。ソロ走行 (▶) で一度でも完走 (周回・峠はゴール) すれば記録され、ここに反映されます。公式レースの記録とは別物です。</p>
+      <p class="event-intro" data-i18n="chal.intro">このブラウザの練習記録から、難度別の完走状況とバッジを集計します。ソロ走行 (▶) で一度でも完走 (周回、峠はゴール) すれば記録され、ここに反映されます。公式レースの記録とは別物です (練習は非公式・このブラウザの中だけ)。</p>
       <div id="chalBody" class="chal-body"></div>
     </div>
   </dialog>

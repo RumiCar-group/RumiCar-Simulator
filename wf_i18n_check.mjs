@@ -20,13 +20,16 @@
 //      (AP21。①〜⑦ は静的リテラルキー前提で、動的構築キーの「カタログ不在」を ②③ とも見逃す。
 //       ⑧ は suffix ドメインを本物のソース (PROGRAMS/CAR_PARAM_DOC/REGIMES/evaluator の throw subs)
 //       から導出し cross-product 展開を機械検査する。PROGRAMS 追加時のラベル付け忘れ等を版アップ前に検出。)
-//   ⑨ index.html の data-i18n-html **インライン本文** ≡ ja カタログ であること              … 違反で非ゼロ終了
-//      (AU3・AU2 の敵対的レビューで判明した「見せかけの緑」の根治。`i18n.js:47` が JS 有効時に
-//       innerHTML をカタログで上書きするため、インライン本文が古くても画面上は正しく見える。しかし
+//   ⑨ index.html の data-i18n / data-i18n-html **インライン本文** ≡ ja カタログ であること   … 違反で非ゼロ終了
+//      (AU3・AU2 の敵対的レビューで判明した「見せかけの緑」の根治。`i18n.js:43,47` が JS 有効時に
+//       textContent/innerHTML をカタログで上書きするため、インライン本文が古くても画面上は正しく見える。しかし
 //       **公開ソース・JS 無効時・ハイドレーション前**には古い本文が出る。②はキーの存在、④は hash(ja) 対
 //       カタログ自身しか見ないので、**カタログだけ直してインライン本文を直し忘れると全部緑のまま**だった
 //       (AU2 で変異注入により実測: インライン本文を旧文言へ戻しても exit=0)。
-//       既存の陳腐化は EXPECTED_STALE で件数と顔ぶれを固定し、**増えたら赤・直ったらリストを外せと赤**にする。)
+//       既存の陳腐化は EXPECTED_STALE で件数と顔ぶれを固定し、**増えたら赤・直ったらリストを外せと赤**にする。
+//       BC2: 当初 data-i18n-html だけが対象で plain data-i18n は母集団外だった。実測で母集団を広げても
+//       新規の不一致は 4 件 (official.intro/rank.intro/ghost.intro/chal.intro) のみと確認できたため
+//       (37 件の data-i18n-html 側 EXPECTED_STALE はそのまま)、plain data-i18n も同じ機構に統合した。)
 //   ⑩ index.html の **静的 title=** (data-i18n-title 併記分) ≡ ja カタログ であること        … 違反で非ゼロ終了
 //      (AZ3・⑨ と同型の「見せかけの緑」の根治。`i18n.js:44` が JS 有効時に `el.title` をカタログで
 //       上書きするため、**静的な title= が古くても画面上は正しく見える**。②はキーの存在しか見ず、
@@ -37,6 +40,13 @@
 //       **逆方向も課す**: ページ中の静的 `title=` の総数 ≡ 照合できた要素数 (＝`data-i18n-title` を書き忘れた
 //       裸の tooltip が 0 件)。これが無いと「data-i18n-title を外す/最初から付けない」だけで静かに検査対象外に
 //       できてしまう〔層 4 レビュー 2026-09-13 が変異で実証: 全削除しても「0 要素すべて一致」で緑だった〕。)
+//   ⑪ data-i18n / data-i18n-title / data-i18n-placeholder / data-i18n-aria で参照されるキーの
+//      カタログ ja/en が書式タグ (`<b>` 等) を含まないこと                                    … 違反で非ゼロ終了
+//      (BC2。この 4 経路は `i18n.js:43-45,49` で textContent / 属性値として流し込まれる。data-i18n-html
+//       だけが innerHTML で HTML として解釈される。textContent 経路にタグ文字列を混ぜると画面に生タグが
+//       そのまま出る — BB5 で `usage.s5.lap` が実際にこれを起こしていた (data-i18n-html へ移して解消)。
+//       ⑨ はインライン本文とカタログの一致しか見ないため、**両方が同じ書式タグ込みで揃っていれば** ⑨ は
+//       通り、この不具合は検出できない。⑪ は経路 (textContent か innerHTML か) そのものを見て別に守る。)
 //
 // 使い方:  node wf_i18n_check.mjs        (PASS なら exit 0・違反で exit 1)
 //   ④ で落ちたら en を再確認のうえ node wf_i18n_rehash.mjs で h を更新する。
@@ -219,12 +229,12 @@ for (const k of dynExpected) {
   if (e.en == null || e.en === '') dynEmpty.push(`${k} (en 空)`);
 }
 
-// ---- ⑨ index.html のインライン本文 ≡ ja カタログ (AU3) ----
-// 抽出: data-i18n-html を持つ要素の innerHTML を、**同名タグの入れ子を数えて**取り出す(DOM 非依存)。
+// ---- ⑨ index.html のインライン本文 ≡ ja カタログ (AU3・BC2 で plain data-i18n へ拡張) ----
+// 抽出: data-i18n / data-i18n-html を持つ要素の innerHTML を、**同名タグの入れ子を数えて**取り出す(DOM 非依存)。
 //   正しさの裏取り＝137 要素中 100 要素がカタログと完全一致する(抽出が壊れていれば一致はまず出ない)。
 // 正規化: 空白連を 1 個へ畳み、**タグ境界の空白は無視**する(index.html 側の改行・インデント由来の空白を
 //   実差分と誤検出しないため。実測でこの正規化により偽陽性 11 件が消えた)。
-const INLINE_STALE_NOTE = 'i18n.js:47 が JS 有効時に innerHTML を上書きするため画面では見えないが、公開ソース/JS 無効時/ハイドレーション前には出る';
+const INLINE_STALE_NOTE = 'i18n.js:43,47 が JS 有効時に textContent/innerHTML を上書きするため画面では見えないが、公開ソース/JS 無効時/ハイドレーション前には出る';
 // **既知例外(2026-09-05 AU3 で実測して固定)**: 長文ヘルプの一部でインライン本文が旧版のまま残っている。
 //   ここに載っているキーは「今は不一致でよい」。**増えたら赤**(新しい取り残しの検出)。
 //   **直ったのにここに残っていても赤**(リストが腐るのを防ぐ)＝直したらこの配列から外すこと。
@@ -243,10 +253,10 @@ const EXPECTED_STALE = [
 const normInline = (x) => x.replace(/\s+/g, ' ').replace(/\s+</g, '<').replace(/>\s+/g, '>').trim();
 const inlineRows = [];
 {
-  const re9 = /<([a-zA-Z][\w-]*)\b[^>]*\bdata-i18n-html="([^"]+)"[^>]*>/g;
+  const re9 = /<([a-zA-Z][\w-]*)\b[^>]*\bdata-i18n(-html)?="([^"]+)"[^>]*>/g;
   let m9;
   while ((m9 = re9.exec(html)) !== null) {
-    const full = m9[0], tag = m9[1], key = m9[2];
+    const full = m9[0], tag = m9[1], key = m9[3];
     if (/\/>$/.test(full)) continue;                       // 自己閉じ (本文なし) は対象外
     let i = m9.index + full.length, depth = 1, end = -1;
     const openRe = new RegExp(`<${tag}\\b`, 'g'), closeRe = new RegExp(`</${tag}\\s*>`, 'g');
@@ -331,6 +341,23 @@ const titleUncovered = titleAttrTotal - titleRows.length;
 // 下限。**正確な件数ではなく床**（tooltip を増やすたびにゲートを編集させない）。一括削除だけを止める。
 const TITLE_MIN = 70;
 
+// ---- ⑪ textContent/属性経由キーに書式タグを禁じる (BC2) ----
+// data-i18n-html だけが innerHTML で HTML として解釈される (i18n.js:47)。他の 4 経路
+// (data-i18n/-title/-placeholder/-aria) は textContent か属性値なので、値に `<b>` 等の
+// タグ文字列が入ると画面にタグ文字がそのまま出る (BB5: usage.s5.lap が実際にこれだった)。
+// タグ名を固定パターンに限定する (プレースホルダ表記 <race>・不等式 <grip<1> 等は
+// タグ名として現れないので自然に除外され、例外リストは要らない＝作ったら基準未達)。
+const FORMAT_TAG_RE = /<\/?(b|strong|i|em|code|br|ul|ol|li|p|span|div)(\s[^>]*)?>/i;
+const plainAttrKeys = new Set();
+for (const m of html.matchAll(/data-i18n(-title|-placeholder|-aria)?="([^"]*)"/g)) plainAttrKeys.add(m[2]);
+const formatTagHits = [];
+for (const k of plainAttrKeys) {
+  const e = MESSAGES[k];
+  if (!e) continue;                                       // カタログ不在は ② が担当
+  if (e.ja && FORMAT_TAG_RE.test(e.ja)) formatTagHits.push(`${k} (ja)`);
+  if (e.en && FORMAT_TAG_RE.test(e.en)) formatTagHits.push(`${k} (en)`);
+}
+
 // ---- 報告 ----
 const line = '─'.repeat(60);
 console.log(line);
@@ -412,7 +439,7 @@ if (inlineNew.length || inlineFixed.length || inlineGone.length || inlineBroken.
   console.log(`\n✗ ⑨ index.html のインライン本文 ≡ ja カタログ (対象 ${inlineRows.length} 要素・既知例外 ${EXPECTED_STALE.length} 件)`);
   for (const k of inlineNew) console.log(`    - **新しい取り残し**: ${k} — ja カタログを直してインライン本文を直し忘れている (${INLINE_STALE_NOTE})`);
   for (const k of inlineFixed) console.log(`    - 直っている: ${k} — wf_i18n_check.mjs の EXPECTED_STALE からこのキーを外すこと`);
-  for (const k of inlineGone) console.log(`    - リスト腐り: ${k} — index.html に data-i18n-html="${k}" が無い。EXPECTED_STALE から外すこと`);
+  for (const k of inlineGone) console.log(`    - リスト腐り: ${k} — index.html に data-i18n(-html)="${k}" が無い。EXPECTED_STALE から外すこと`);
   for (const k of inlineBroken) console.log(`    - 抽出不能: ${k} — 閉じタグを見つけられない (抽出器の前提を満たさない書き方)`);
 } else {
   console.log(`✓ ⑨ インライン本文: ${inlineRows.length} 要素中 ${inlineRows.length - inlineMiss.length} 件が ja カタログと一致 (既知例外 ${EXPECTED_STALE.length} 件は固定・新規の取り残し 0)`);
@@ -432,9 +459,17 @@ if (titleBroken.length || titleMiss.length || titleRawLt.length || titleUncovere
   console.log(`✓ ⑩ 静的 title=: ${titleRows.length} 要素すべてに併記あり・カタログ照合 ${titleChecked} 件すべて一致・生の <> なし・カタログ外の静的 title= 0 個 (例外リストなし)`);
 }
 
+if (formatTagHits.length) {
+  fail = true;
+  console.log(`\n✗ ⑪ textContent/属性経由キーに書式タグ (対象 ${plainAttrKeys.size} キー): ${formatTagHits.length} 件`);
+  for (const s of formatTagHits) console.log(`    - ${s} — data-i18n-html へ変えるか、タグを除いた平文にすること`);
+} else {
+  console.log(`✓ ⑪ textContent/属性経由 ${plainAttrKeys.size} キーに書式タグなし (例外リストなし)`);
+}
+
 console.log(`\n${line}`);
 if (fail) {
-  console.log('結果: FAIL (①②④⑤⑥⑦⑧⑨⑩ のいずれかに違反) — 版アップ前に修正すること');
+  console.log('結果: FAIL (①②④⑤⑥⑦⑧⑨⑩⑪ のいずれかに違反) — 版アップ前に修正すること');
   process.exit(1);
 } else {
   console.log('結果: PASS');
