@@ -302,7 +302,12 @@ export const MESSAGES = {
   'log.share.copied':  { ja: '🔗 共有リンクをコピーしました (このリンクを開くと現在の設定が再現されます)', en: '🔗 Copied share link (opening it reproduces the current settings)' },
   'log.share.copyFail': { ja: '🔗 共有リンクのコピーに失敗しました (ブラウザのクリップボード権限をご確認ください)', en: '🔗 Could not copy the share link (please check your browser clipboard permission)' },
   'log.share.restored': { ja: '🔗 共有リンクの設定を復元しました', en: '🔗 Restored settings from the shared link' },
-  'log.share.course.missing':  { ja: '🔗 共有リンクのコース「{name}」が見つかりません。ランダムなコースで開始します (自作/投稿コースは共有リンクに含まれません)', en: '🔗 Shared course "{name}" was not found; starting with a random course (custom/community courses are not included in share links)' },
+  // BC4: 出る場所が「起動直後」から「投稿コースの読込後」へ移った (投稿コースは後から一覧に載るため、
+  // 早く言い切ると嘘になる)。∴ 時制は「いま開いているコースのまま続ける」。原因も 1 つに限定しない —
+  // {name} には共有元だけが持つ保存コース名も、上流から取り下げられた投稿コースの識別子も来る。
+  'log.share.course.missing':  { ja: '🔗 共有リンクのコース「{name}」が見つかりません。いま開いているコースのまま続けます (共有元のブラウザにだけ保存されている自作コースか、投稿が取り下げられたコースかもしれません)', en: '🔗 Shared course "{name}" was not found; keeping the course that is already open (it may be a custom course saved only in the sender\'s browser, or a community course that has been withdrawn)' },
+  // BC4: 投稿コースは起動時の復元より後に読み込まれるので、復元が後追いになったことを正直に 1 行で知らせる。
+  'log.share.course.late':     { ja: '🔗 共有リンクのコース「{name}」を投稿コースの読込後に復元しました', en: '🔗 Restored shared course "{name}" after the community courses finished loading' },
   'log.share.car.missing':     { ja: '🔗 共有リンクの車種「{key}」が見つかりません。既定の車種を使います', en: '🔗 Shared car "{key}" was not found; using the default car' },
   'log.share.program.missing': { ja: '🔗 共有リンクのプログラム「{key}」が見つかりません。既定を使います (自作/投稿プログラムは共有リンクに含まれません)', en: '🔗 Shared program "{key}" was not found; using the default (custom/community programs are not included in share links)' },
   'race.hint':        { ja: '決定論レース。先回り警告はしません — コースへの適不適は「走った結果」(クラッシュ地点・周回数・μ円使用率・β) で分かります。', en: 'Deterministic race. No upfront warnings — whether a car suits the course shows in the result it ran (crash spots, laps, μ-circle usage, β).' },

@@ -274,7 +274,11 @@ let perCarRear = [];    // 各車の後方センサー値 (rearOn 時のみ)
 // ---- 編集状態 ----
 let editing = false;
 let editor = null;
-let courseSources = {};
+// **プロトタイプ鎖を持たない**素の辞書にする (BC4)。共有 URL の hash という**外から来る文字列**を
+// そのまま添字に使う場所があり (resolveCourseKey)、素の {} だと 'constructor'・'__proto__'・
+// 'toString' 等が継承プロパティとして truthy になり「在る」と誤判定する (実測で確認)。
+// 参照はすべて添字引きで、Object.keys/for-in は 1 箇所も無い (public/js 全体を確認済み)。
+let courseSources = Object.create(null);
 let _loaderHidden = false;   // 起動ローダー(案C)を初回コース描画で一度だけ隠すフラグ
 
 // ---- HUD refs ----
@@ -1435,10 +1439,32 @@ function openChallengeDlg() {
 
 // courseSel で現に適用されている option value (BC3)。rebuildCourseList と selectCourse が更新する。
 let courseSelValue = '';
+// ── 走行中のコースに対応する option value (BC4・2026-09-18) ────────────────────────
+// **courseSelValue (BC3) とは別物**: あちらは「直前に *表示* されていた option value」で、
+// 一覧を作り直すたびに DOM から読み直す表示側の控え (取り込みを断ったときの巻き戻し先)。
+// こちらは「いま **走っている** コースが一覧のどの項目か」で、一覧に無い状態 (未保存の編集結果を
+// ✔適用した直後) では '' になる。
+// **なぜ course.name ではいけないか**: option value は 3 種で書式が違う —
+//   プリセット = c.name / 保存コース = 保存名 / **投稿コース = 'gh:<ファイル名>'**。
+// 投稿コースの course.name は JSON の name であって option value ではないので、course.name で
+// 一覧を作り直すと courseSources にキーが無く、選択が先頭の出荷コースへ落ちる (言語切替で選択が飛ぶ)。
+// 共有 hash も同じ理由で投稿コースを復元できなかった。**プリセットと保存コースでは
+// course.name が option value と一致する**ので、この置き換えで挙動が変わるのは投稿コースだけである。
+let currentCourseKey = '';
+// 利用者が自分で走行中のコースを決めたか (BC4)。**一方向フラグ**。
+// ⚠ 「今の値が起動時の値と等しいか」で代用してはならない (層 4 レビュー 2026-09-18 で検出):
+//   ✔適用は名前を変えなければ同じ option value に戻るし、コースを選び直して起動コースへ戻ることもある。
+//   値の一致は「操作していない」ことを意味しないので、遅延復元が利用者の編集結果を破棄しうる。
+//   立てるのは**利用者の入口**だけ (courseSel の change・エディタの ✔適用)。共有復元が内部で
+//   呼ぶ selectCourse では立たない。
+let courseUserPicked = false;
+// 起動時の共有復元で解決できなかったコース識別子 (BC4)。投稿コースは loadCommunityCourses が
+// 終わるまで courseSources に居ないので、ここへ控えて読込後に 1 度だけ引き直す。
+let pendingShareCourse = null;
 function rebuildCourseList(selectName) {
   const sel = $('courseSel');
   sel.innerHTML = '';
-  courseSources = {};
+  courseSources = Object.create(null);   // BC4: プロトタイプ鎖を持たない (277 行の注記)
   for (const f of PRESETS) {
     const c = f();
     courseSources[c.name] = { type: 'preset' };
@@ -1492,8 +1518,52 @@ function selectCourse(name) {
   }
   applyCourse(c);
   courseSelValue = name;
+  currentCourseKey = name;     // BC4: 引数 name は option value そのもの (投稿コースなら 'gh:<ファイル名>')
   enforceFitRatio('course');   // Stage Y/Y1: コース変更でも car↔course 比率を自動で正す
   return true;
+}
+
+// ── 共有 URL のコース識別子 → courseSel の option value (BC4・2026-09-18) ──────────
+// 現行の共有 URL は option value をそのまま載せるので、第一に courseSources を直接引く。
+// **後方互換**: BC4 より前に作られた共有 URL は、投稿コースを JSON の name で書いている
+// (option value 'gh:<ファイル名>' とは別物なので直接は引けない)。直接引けなかったときだけ
+// 投稿コースを名前で引き直す — 照合は resolveRaceCourse (公式レースの courseRef 解決) と
+// **同じ 2 つの手掛かり** (JSON の name / ファイル名) にする＝同じ値の解決規則を 2 つ作らない。
+// プリセット名・保存名との衝突時は courseSources の直接一致が先に当たる (従来の解決が優先)。
+// 解決できなければ null。
+function resolveCourseKey(ref) {
+  if (ref == null) return null;
+  if (courseSources[ref]) return ref;
+  const cc = communityCourses.find((c) => (c.data && c.data.name) === ref || c.name === ref);
+  const key = cc ? 'gh:' + cc.name : null;
+  return (key && courseSources[key]) ? key : null;
+}
+
+// ── 投稿コース読込後の遅延復元 (BC4・2026-09-18) ────────────────────────────────
+// 起動時の共有復元 (loadPresets().then) は **loadCommunityCourses より先に走る**ので、投稿コースの
+// 共有 URL はその時点では必ず未解決になる。ここで 1 度だけ引き直す (pendingShareCourse を先に
+// null にするので再入は no-op)。
+// 上書きしてよいのは「利用者がまだ自分でコースを決めていない」ときだけ。判定は一方向フラグ
+// courseUserPicked で行う — **「今のコースが起動時と同じか」で代用してはならない**: ✔適用は名前を
+// 変えなければ同じ値に戻り、コースを選び直して起動コースへ戻ることもあるので、値の一致は
+// 「操作していない」を意味しない (層 4 レビュー 2026-09-18 で、この代用が ✔適用した編集結果を
+// 破棄することを実測。実ブラウザゲート check_bc4_coursekey ⑤ が同じ条件を常設で測る)。
+function finishPendingShareCourse() {
+  const want = pendingShareCourse;
+  pendingShareCourse = null;
+  if (want == null) return;
+  // **解決可否の判定と通知は、利用者が触ったかに依らず先に行う** (無言失敗にしない=AF2 の受け入れ基準)。
+  const key = resolveCourseKey(want);
+  if (!key) { logLine(t('log.share.course.missing', { name: want })); updateShareHash(); return; }
+  // 見つかったが利用者が既に自分でコースを決めているなら、**黙って何もしない** (上書きしない)。
+  // ここで「見つかりません」と言わないのは、実際には見つかっており異常ではないから。
+  if (courseUserPicked) { updateShareHash(); return; }
+  $('courseSel').value = key;
+  // 取り込みを断られたら復元は成立していない (理由は selectCourse が 1 行出し、courseSel も戻す)。
+  if (!selectCourse(key)) { updateShareHash(); return; }
+  logLine(hasKey('log.share.course.late') ? t('log.share.course.late', { name: courseDisplayName(course) })
+                                          : t('log.share.restored'));
+  updateShareHash();   // 実際に適用された識別子 (option value) へ hash を正規化する
 }
 
 // Stage Y / Y1 (利用者要望 2026-06-19): コースと車両の比率を「初期値だけでなく拡大縮小・
@@ -1776,6 +1846,11 @@ function applyEdit() {
   const c = editor.result();   // r.course と同値。エディタの出口は result() 1 つに保つ
   exitEdit();
   loadCourse(c);
+  // BC4: ✔適用も「利用者が走行中のコースを決めた」操作である (後から来る遅延復元に上書きさせない)。
+  courseUserPicked = true;
+  // 一覧に無い結果 (保存していない編集結果) は '' = 「一覧のどれでもない」。共有 hash はこのとき
+  // currentShareState が course.name へ落ちるので、**URL に載る識別子は置き換え前と同じ**。
+  currentCourseKey = courseSources[c.name] ? c.name : '';
   rebuildCourseList();
   syncButtons();
   logLine(t('log.courseApplied', { name: c.name }));
@@ -2312,7 +2387,9 @@ fleetCols.addEventListener('change', (e) => {
     // 車種フォーム (名前ラベル/ドリフトラベル/ツールチップ) も言語に追従 (入力値は保持)。
     if ($('carForm') && $('carForm').children.length) renderCarForm(readCarForm());
     // コース選択肢の表示名と現在コースの説明文を現在言語で作り直す (AB4・識別子は不変)。
-    rebuildCourseList(course.name);
+    // BC4: 復元キーは option value (currentCourseKey)。course.name では投稿コース ('gh:<ファイル名>')
+    // が courseSources に当たらず、言語を切り替えるたびに選択が先頭の出荷コースへ飛んでいた。
+    rebuildCourseList(currentCourseKey);
     const dEl = $('courseDesc'); if (dEl) dEl.textContent = courseDisplayDesc(course);
     renderCourseBadge(course);   // 難易度/推奨領域バッジも現在言語へ (AB5)
     // 変更履歴ポップアップ (見出し/各 note) も現在言語で作り直す (O5)。
@@ -2441,7 +2518,9 @@ for (const [id, key] of [['optRays', 'rays'], ['optLabels', 'labels'], ['optGrid
 }
 $('optDepth').addEventListener('change', (e) => { $('depthWrap').classList.toggle('hidden', !e.target.checked); });
 
-$('courseSel').addEventListener('change', (e) => selectCourse(e.target.value));
+// BC4: **利用者が自分でコースを決めた**唯一の入口。ここでフラグを立てる (共有復元が内部で呼ぶ
+// selectCourse では立たない=「利用者の操作」と「復元」を取り違えない)。
+$('courseSel').addEventListener('change', (e) => { courseUserPicked = true; selectCourse(e.target.value); });
 $('editToggle').addEventListener('click', () => { editing ? exitEdit() : enterEdit(); });
 
 for (const r of document.querySelectorAll('input[name=emode]')) {
@@ -2852,7 +2931,14 @@ async function renderChangelogPopup() {
 function currentShareState() {
   const s = activeSlot();
   return {
-    course:  course ? course.name : null,
+    // BC4: 共有するのは **option value** (受信側が courseSel から解決できる識別子)。プリセット/保存
+    // コースでは course.name と同値、投稿コースだけが 'gh:<ファイル名>' になる。
+    // 一覧に無いコース (保存していない編集結果・空文字名の保存コース等) では従来どおり **course.name**
+    // へ落とす。**null にして hash から落としてはならない**: AF1/AF2 の受け入れ基準は「自作物は
+    // 名前参照 + フォールバック + 通知 (無言失敗にしない)」であり (share.js 冒頭・下の復元経路)、
+    // 落とすと受信側が理由を知らせられなくなる (層 4 レビュー 2026-09-18 で検出)。
+    // ∴ **この置き換えで URL に載る値が変わるのは投稿コースだけ**である。
+    course:  currentCourseKey || (course ? course.name : null),
     car:     s ? s.carType : null,
     program: s ? programKeyForCode(s.src) : null,   // 自作/投稿は null (=共有対象外)
     regime:  $('regimeSel') ? $('regimeSel').value : null,
@@ -3079,14 +3165,18 @@ loadPresets().then(() => {
   // 解決不能 (他者の自作コース等) は名前参照のフォールバック=ランダム既定+通知 (無言失敗にしない)。
   let restoredCourse = false;
   if (shareState && shareState.course != null) {
-    if (courseSources[shareState.course]) {
-      $('courseSel').value = shareState.course;
+    const key = resolveCourseKey(shareState.course);
+    if (key) {
+      $('courseSel').value = key;
       // BC3: 取り込みを断られたら復元は**成立していない**。true にすると、下のランダム既定も走らず
       // 「hash のコースを指す courseSel＋起動時の既定コース」というずれた状態で止まる。
       // 断った理由は selectCourse が 1 行出しており、courseSel も実体へ戻している。
-      restoredCourse = selectCourse(shareState.course);
+      restoredCourse = selectCourse(key);
     } else {
-      logLine(t('log.share.course.missing', { name: shareState.course }));
+      // BC4: ここで「見つかりません」と言い切らない。**投稿コースは loadCommunityCourses が終わるまで
+      // courseSel に載らない**ので、この時点で無いのは当たり前である (これが無いと投稿コースの共有 URL は
+      // 必ずランダム既定に落ちた)。控えておいて、投稿コースの読込後に 1 度だけ引き直す。
+      pendingShareCourse = shareState.course;
     }
   }
   // プリセット読込後、ランダムなコースを選択して開始する (hash 復元しなかった場合のみ)。
@@ -3099,6 +3189,7 @@ loadPresets().then(() => {
     const c = src[Math.floor(Math.random() * src.length)];
     applyCourse(c);
     enforceFitRatio('startup');   // Stage Y/Y1: 初期 (ランダム) コースでも比率を正す
+    currentCourseKey = c.name;   // BC4: プリセットは c.name = option value
     rebuildCourseList(c.name);
   }
   logLine(t('log.coursesLoaded', { n: PRESETS.length }));
@@ -3110,10 +3201,15 @@ loadPresets().then(() => {
     // hash を「実際に適用された状態」へ正規化する (フォールバックした未解決コース/車種/
     // プログラムや、比率補正後の領域をアドレスバーに正しく反映=以降の共有を一貫させる)。
     // hash が無かった通常訪問では呼ばない=URL はクリーンなまま (初回変更で初めて書かれる)。
-    updateShareHash();
+    // **BC4: コースの解決が保留中のときは打たない。** ここで正規化すると、まだ復元していない
+    // 共有元の識別子が起動ランダムのコース名で上書きされ、復元が間に合わなかった場合に
+    // アドレスバーから元の識別子が失われる。正規化は finishPendingShareCourse が決着時に行う。
+    if (pendingShareCourse == null) updateShareHash();
   }
   syncButtons();
-  loadCommunityCourses(); // GitHub 投稿コースを非同期で追加読み込み
+  // BC4: 投稿コースが一覧に載るのは**ここ**なので、読込が終わってから共有 URL のコースを引き直す
+  // (取得失敗・0 件でも then は走るので、そのときは「見つかりません」を 1 行出して終わる)。
+  loadCommunityCourses().then(finishPendingShareCourse); // GitHub 投稿コースを非同期で追加読み込み
   loadCommunityPrograms(); // GitHub 投稿プログラムを非同期で追加読み込み
   loadCommunityCars();     // GitHub 投稿車種を非同期で追加読み込み (V4)
   // GitHub 公式レース: 一覧 → 全詳細を集計 (W5/W6) → 起動時の打破通知 (自分の記録 vs 世界ベスト)。

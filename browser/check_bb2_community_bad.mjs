@@ -49,7 +49,14 @@ const route = (lang) => async (page) => {
     await r.fulfill({ status: 200, contentType: 'application/json',
       body: JSON.stringify({ generated: 'check_bb2', entries: [...before, ...names, ...after] }) });
   });
-  await page.route('**/courses/community/bad-*', (r) => {
+  // ⚠ 差し替える URL は **コーパスのファイル名から導出する**。以前は 'bad-*' の接頭辞で書いていたが、
+  //   BC3 でコーパスに `big-frame-*.json` (std 合格・own 拒否の逆転帯) が入ったとき、その 3 形だけ
+  //   パターンに当たらず上流の実在しないファイルを取りに行って 404 になり、「採用する形が一覧にある」が
+  //   永久に赤になっていた (2026-09-18 に BC4 の実ブラウザ全数実行で発覚・改修前の HEAD でも同じ赤)。
+  //   コーパスへ形を足すたびに接頭辞を思い出す必要がある設計にしない＝ここは必ず SHAPES から作る。
+  const CORPUS_RE = new RegExp('/courses/community/(?:'
+    + shapes.map(([f]) => f.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|') + ')(?:[?#]|$)');
+  await page.route(CORPUS_RE, (r) => {
     const name = decodeURIComponent(new URL(r.request().url()).pathname.split('/').pop());
     return r.fulfill({ status: 200, contentType: 'text/plain', body: BODY[name] ?? '' });
   });

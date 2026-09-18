@@ -229,8 +229,17 @@ const INTAKE = [
   { id: '⑧ エディタの ✔適用 (applyEdit)', from: 'function applyEdit() {', to: '\n}\n',
     must: [[/const r = acceptCourse\(editor\.toJSON\(\), true\);/, '② と同じ own 基準を通していない (✔適用と選び直しで答えが割れる)'],
            [/if \(!r\.ok\) \{ logLine\(courseBadLine\([^\n]*\); return; \}/, '不合格のとき適用せずに戻っていない (return; まで見る)']] },
-  { id: '起動時の共有復元', from: "if (courseSources[shareState.course]) {", to: '\n    } else {',
-    must: [[/restoredCourse = selectCourse\(shareState\.course\);/, '拒否されたのに「復元した」ことにしている (courseSel と実体がずれる)']] },
+  // BC4 (2026-09-18) で目印が変わった: 共有 URL のコース識別子は courseSources 直引きではなく
+  // resolveCourseKey (option value 優先・旧形式は投稿コース名でフォールバック) で解決する。
+  // **守っている不変条件は BC3 のときと同じ**＝「取り込みを断られたのに復元したことにしない」。
+  { id: '起動時の共有復元', from: 'const key = resolveCourseKey(shareState.course);', to: '\n    } else {',
+    must: [[/restoredCourse = selectCourse\(key\);/, '拒否されたのに「復元した」ことにしている (courseSel と実体がずれる)']] },
+  // BC4: 投稿コースは起動時の復元より後に一覧へ載るので、復元経路が 2 本になった。後追いの側も
+  // 同じ不変条件を持つ (断られたら復元は不成立) ほか、**利用者の操作を上書きしない**ことが要る。
+  { id: '投稿コース読込後の遅延復元 (finishPendingShareCourse)', from: 'function finishPendingShareCourse() {', to: '\n}\n',
+    must: [[/if \(!key\) \{ logLine\(t\('log\.share\.course\.missing'[^\n]*\n/, '解決できない共有コースの理由を知らせていない (無言失敗)'],
+           [/if \(courseUserPicked\) \{[^\n]*return; \}/, '利用者が自分でコースを決めていても上書きしてしまう (✔適用の結果を破棄しうる)'],
+           [/if \(!selectCourse\(key\)\) \{[^\n]*return; \}/, '取り込みを断られたのに後続へ進んでいる']] },
   { id: '一覧の再構築 (rebuildCourseList)', from: 'function rebuildCourseList(selectName) {', to: '\n}\n',
     must: [[/courseSelValue = sel\.value;/, '現に選ばれている option value を控えていない (② が戻す先が無い)']] },
 ];
@@ -323,7 +332,9 @@ const MUTATIONS = [
   ['⑥の告知を消す', (m, r, b) => [m.replace(/hasKey\('log\.ghCarsBad'\)/, 'false'), r, b]],
   ['⑧を素通しに戻す (✔適用だけ検査しない)', (m, r, b) => [m.replace('const r = acceptCourse(editor.toJSON(), true);', 'const r = { ok: true };'), r, b]],
   ['⑧が ② と違う基準を使う (割れが戻る)', (m, r, b) => [m.replace('acceptCourse(editor.toJSON(), true)', 'acceptCourse(editor.toJSON(), false)'), r, b]],
-  ['起動時の共有復元が拒否を無視する', (m, r, b) => [m.replace('restoredCourse = selectCourse(shareState.course);', 'selectCourse(shareState.course);\n      restoredCourse = true;'), r, b]],
+  ['起動時の共有復元が拒否を無視する', (m, r, b) => [m.replace('restoredCourse = selectCourse(key);', 'selectCourse(key);\n      restoredCourse = true;'), r, b]],
+  ['遅延復元が利用者の操作を上書きする (BC4)', (m, r, b) => [m.replace(/if \(courseUserPicked\) \{[^\n]*return; \}\n/, ''), r, b]],
+  ['遅延復元が解決できない共有コースを黙って捨てる (BC4)', (m, r, b) => [m.replace(/if \(!key\) \{ logLine\(t\('log\.share\.course\.missing'[^\n]*\n/, '  if (!key) { updateShareHash(); return; }\n'), r, b]],
   ['rebuildCourseList が現在の選択を控えない', (m, r, b) => [m.replace('  courseSelValue = sel.value;\n', ''), r, b]],
   ['名前空間 import をやめて名前付きにする', (m, r, b) => [
     m.replace('  PRESETS, presetByName, normalizeCourse, loadPresets,', '  PRESETS, presetByName, normalizeCourse, loadPresets, acceptCourseData,')
