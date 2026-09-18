@@ -13,6 +13,26 @@ import {
 // 古い course.js がブラウザに残りうるので、無い名前を名前付き import するとアプリ全体が読み込めなくなる (BA1 で実測)。
 // 古い course.js のときは検査を飛ばす (従来どおりの挙動に戻るだけで起動は止めない)。
 import * as courseParts from './course.js';
+// BC3 (2026-09-18): コースの取り込み経路を 1 つの入口へ通す。course.js の acceptCourseData は
+// 「検査 → 正規化」をまとめた純関数で、例外を投げず { ok, why, course } を返す。
+//
+// **own = そのデータが「利用者自身のもの」か** (経路表は internal の BC3 に固定):
+//   own=false (第三者) … ① エディタの JSON 取込 / ④⑤ 公式レースのコース解決 / ⑦ 投稿しようとする形。
+//                        拒否しても利用者の手元にはファイルが残るので、投稿と同じ基準 (枠との包含まで) で見る。
+//   own=true  (自分)   … ② 保存コースの選択 / ⑧ エディタの ✔適用。**拒否は「自分が作ったものを失う」**
+//                        なので、事故 (構造不正・桁違いの大きさ・遠い壁) だけを止める。枠を縮めた自作コースは通す。
+// 古い course.js がキャッシュに残るブラウザ (BA1) では関数が無いので**従来どおり無検査で正規化**し、
+// 起動も取り込みも止めない (BB2 の checkCourseData と同じフォールバック契約)。
+function acceptCourse(data, own) {
+  const f = courseParts.acceptCourseData;
+  if (typeof f !== 'function') return { ok: true, why: null, course: normalizeCourse(data) };
+  return f(data, { own: !!own });
+}
+// 取り込みを断ったことを 1 行で知らせる文。古い messages.js がキャッシュに残ると t() はキー名だけを
+// 返すので、そのときは言語に依らない形で出す (名前と理由を消さない・loadCommunityCourses と同じ型)。
+function courseBadLine(name, why) {
+  return hasKey('log.courseBad') ? t('log.courseBad', { name, why }) : `⚠ ${name} (${why})`;
+}
 import { carEdges } from './physics.js';
 import { applyRegime } from './physics_dyn.js';
 import { readAll, readRear } from './sensors.js';
@@ -982,12 +1002,22 @@ const { renderRaceResult, loadOfficialRaces, loadAllOfficialData, checkBeaten, o
 // イベントの course (名前 or 同梱 courseDef) → 走行可能なコースに解決。組込名→プリセット、
 // community 名→投稿コース、object→正規化。見つからなければ null (再実行不可)。
 function resolveRaceCourse(courseRef) {
-  if (courseRef && typeof courseRef === 'object') return normalizeCourse(courseRef);   // 同梱 def
+  // BC3 (④): 同梱 def も投稿コースも**他人が書いたもの**なので acceptCourse (own=false) を通す。
+  // 壊れていれば null を返し、既存の「コース解決不可」経路 (race_ui の official.verify.noCourse) へ合流する。
+  // そのままだと利用者には「解決できない」しか届かないので、理由 (検査が返した箇所) を 1 行添える。
+  // **合格した入力に対しては従来と同じ normalizeCourse の出力**なので、公式レースの決定論
+  // (verifyHash・順位・グリッド) は不変 (wf_bc3_intake A) が出荷全コースで byte 一致を機械確認)。
+  const accept = (data, name) => {
+    const r = acceptCourse(data, false);
+    if (!r.ok) { logLine(courseBadLine(name, r.why)); return null; }
+    return r.course;
+  };
+  if (courseRef && typeof courseRef === 'object') return accept(courseRef, courseRef.name || '(courseDef)');  // 同梱 def
   if (!courseRef) return null;
   const p = presetByName(courseRef);                                                    // 組込コース名
   if (p) return p;
   const cc = communityCourses.find((c) => (c.data && c.data.name) === courseRef || c.name === courseRef);
-  return cc ? normalizeCourse(cc.data) : null;
+  return cc ? accept(cc.data, courseRef) : null;
 }
 
 // ---- 車両カラム UI (色・測距・プログラム・シリアルを縦に、列を横並びで同時表示) ----
@@ -1403,6 +1433,8 @@ function openChallengeDlg() {
   const dlg = $('dlgChallenge'); applyI18n(dlg); dlg.showModal();
 }
 
+// courseSel で現に適用されている option value (BC3)。rebuildCourseList と selectCourse が更新する。
+let courseSelValue = '';
 function rebuildCourseList(selectName) {
   const sel = $('courseSel');
   sel.innerHTML = '';
@@ -1426,16 +1458,42 @@ function rebuildCourseList(selectName) {
     addOpt(sel, '🌐 ' + (courseDisplayName(c.data) || c.name), key);
   }
   if (selectName && courseSources[selectName]) sel.value = selectName;
+  // BC3: **今この瞬間に選ばれている option value** を控える。② が取り込みを断ったときに、ここへ戻す
+  // (＝利用者の選択操作を取り消す)。DOM から読み返す (自分が入れた値でなく、引数が無いときブラウザが
+  // 決める既定も含めた実際の選択) のが要点。
+  // ⚠ これは「走行中のコース」ではなく「**直前に表示されていた option**」である。rebuildCourseList を
+  //   引数無しで呼ぶ経路 (applyEdit・#edDelete) では、走行中のコース (適用しただけで保存していない編集結果)
+  //   が一覧に無く、sel.value は先頭の出荷コースになる。そこへ戻すのが正しい — 拒否で変えてよいのは
+  //   「利用者がいま行った選択」だけで、それ以前からあった表示は BC3 の関与するところではない。
+  courseSelValue = sel.value;
 }
 function addOpt(sel, label, value) {
   const o = document.createElement('option');
   o.textContent = label; o.value = value; sel.appendChild(o);
 }
+// コースを選ぶ。取り込みを断ったときは **false** を返し、走行中のコースも courseSel の表示も動かさない。
 function selectCourse(name) {
   const src = courseSources[name];
-  if (!src) return;
-  applyCourse(src.type === 'preset' ? presetByName(name) : normalizeCourse(src.data));
+  if (!src) return false;
+  // BC3 (②): preset は出荷コース (wf_bb2_course_check A) が全 66 本の合格を常設で保証) なので素通し。
+  // saved は**利用者自身のデータ**なので own 基準 (事故だけ止める)、community は他人のデータなので通常基準。
+  // 断るときはコースを差し替えずに理由を 1 行知らせる (今のコースのまま走り続けられる)。
+  let c;
+  if (src.type === 'preset') c = presetByName(name);
+  else {
+    const r = acceptCourse(src.data, src.type === 'saved');
+    if (!r.ok) {
+      logLine(courseBadLine(name, r.why));
+      // 選択操作を取り消す: courseSel を直前に表示されていた option へ戻す (拒否したコースを指したままにしない)。
+      if (courseSelValue && courseSources[courseSelValue]) $('courseSel').value = courseSelValue;
+      return false;
+    }
+    c = r.course;
+  }
+  applyCourse(c);
+  courseSelValue = name;
   enforceFitRatio('course');   // Stage Y/Y1: コース変更でも car↔course 比率を自動で正す
+  return true;
 }
 
 // Stage Y / Y1 (利用者要望 2026-06-19): コースと車両の比率を「初期値だけでなく拡大縮小・
@@ -1615,18 +1673,31 @@ async function loadCommunityCars() {
     catch (err) { return null; /* 1 件失敗はスキップ */ }
   }));
   const loaded = [];
-  for (const def of defs) {
+  // BC3 (⑥): 除外を黙って捨てない。コース側 (log.ghCoursesBad) と対称に、理由つきで 1 行知らせる。
+  // 取得失敗 (def == null) は従来どおり数えない (通信の話で、投稿の中身の問題ではない)。
+  // 組込 key / ローカル優先の 2 つは**意図した保護**なので「不正」ではなく、そのまま理由として出す。
+  const badCars = [];
+  for (let di = 0; di < defs.length; di++) {
+    const def = defs[di];
+    const label = (list[di] && list[di].name) || (def && def.key) || '?';
     if (def == null) continue;                       // 1 件失敗はスキップ
-    if (!def || !def.key || !def.name) continue;     // 不正 JSON はスキップ
-    if (isBuiltinKey(def.key)) continue;             // 組込 key は保護 (上書きしない)
-    if (localKeys.has(def.key)) continue;            // ローカル独自車種を優先
+    if (!def || !def.key || !def.name) { badCars.push({ label, why: 'key/name' }); continue; }   // 不正 JSON はスキップ
+    if (isBuiltinKey(def.key)) { badCars.push({ label, why: 'builtin' }); continue; }            // 組込 key は保護 (上書きしない)
+    if (localKeys.has(def.key)) { badCars.push({ label, why: 'local' }); continue; }             // ローカル独自車種を優先
     let ct;
-    try { ct = registerCarType(def); } catch (err) { continue; }
-    if (!ct) continue;
+    try { ct = registerCarType(def); } catch (err) { badCars.push({ label, why: 'register' }); continue; }
+    if (!ct) { badCars.push({ label, why: 'register' }); continue; }
     ct.community = true;                             // 「🌐」識別 + 車種表バッジ抑止 (custom 扱いしない)
     loaded.push(def);
   }
   communityCars = loaded;
+  if (badCars.length) {
+    // 名前は先頭 10 件まで (ログ欄は 8,000 字で頭を切る)。件数は常に全件 — コース側と同じ扱い。
+    const BAD_SHOWN = 10;
+    const items = badCars.slice(0, BAD_SHOWN).map(({ label, why }) => `${label} (${why})`).join(', ')
+      + (badCars.length > BAD_SHOWN ? `, … (+${badCars.length - BAD_SHOWN})` : '');
+    logLine(hasKey('log.ghCarsBad') ? t('log.ghCarsBad', { n: badCars.length, items }) : `🌐 ${badCars.length}: ${items}`);
+  }
   if (loaded.length) {
     buildFleetColumns();        // fleet carType セレクタに「🌐 名前」を反映
     renderCarParamTable();      // 車種表にも反映
@@ -1697,7 +1768,12 @@ function exitEdit() {
   setView(course);
 }
 function applyEdit() {
-  const c = editor.result();
+  // BC3 (⑧): ✔適用も ② (保存コースの選択) と**同じ own 基準**で見る。片方だけ素通しにすると
+  // 「✔適用では通るのに、一覧から選び直すと拒否される」という割れができる (1 回目の BC3 で実際に起きた)。
+  // 断るときは編集内容を人質にしない — エディタは開いたまま、直して押し直せる。
+  const r = acceptCourse(editor.toJSON(), true);
+  if (!r.ok) { logLine(courseBadLine(editor.course.name || t('ed.name.default'), r.why)); return; }
+  const c = editor.result();   // r.course と同値。エディタの出口は result() 1 つに保つ
   exitEdit();
   loadCourse(c);
   rebuildCourseList();
@@ -2397,7 +2473,17 @@ $('edImport').addEventListener('change', async (ev) => {
   const f = ev.target.files[0]; if (!f) return;
   try {
     const data = JSON.parse(await f.text());
-    editor.load(normalizeCourse(data));
+    // BC3 (①・2026-09-18 利用者裁定の改訂): **own 基準**で通す。当初は「手元にファイルが残るから
+    // 投稿と同じ基準で拒否してよい」としていたが、層 4 レビューで**残っても開けない**ことが分かった:
+    // #edExport (2470-) と #edSave (2462-) は無検査なので、枠を縮めて書き出したファイルは
+    // 投稿基準では必ず落ちる (出荷 66/66 本で実測)。∴ 同じバイト列が「localStorage なら開けて
+    // ファイルなら開けない」という非対称になっていた。
+    // own でも失うものはほぼ無い: 投稿基準が own に追加して拒否するのは「壁が枠の外」だけで、
+    // 遠い壁・mm と m の取り違え・桁違いの寸法・構造不正は own でも拒否する。
+    // 「投稿しても誰の一覧にも載らない形」は ⑦ (#edShare) が投稿基準で別に知らせる。
+    const r = acceptCourse(data, true);
+    if (!r.ok) { logLine(courseBadLine(f.name, r.why)); return; }
+    editor.load(r.course);
     setView(editor.course);
     $('edName').value = editor.course.name;
     updateEdDims();
@@ -2409,6 +2495,13 @@ $('edShare').addEventListener('click', () => {
   if (!editor) return;
   const json = editor.toJSON();
   json.name = ($('edName').value || json.name || t('ed.name.default')).trim();
+  // BC3 (⑦): 投稿しても、各利用者のアプリは loadCommunityCourses の検査 (BB2・通常基準) で落とすので
+  // 一覧に載らない。それを**投稿する前に**知らせる。書き出し自体は止めない (手元のファイルは利用者のもの
+  // なので人質にしない)。ここは own ではなく通常基準で見る — 配る先は他人の一覧だから。
+  // 名前は chk — このすぐ下に submitToGithub の結果を受ける `let r` があり、同名にすると
+  // 波括弧を外した瞬間に TDZ (Cannot access 'r' before initialization) で「押しても何も起きない」になる。
+  const chk = acceptCourse(json, false);
+  if (!chk.ok) logLine(hasKey('log.courseSubmitBad') ? t('log.courseSubmitBad', { why: chk.why }) : `⚠ (${chk.why})`);
   // ①コース JSON を書き出し ②GitHub のアップロード画面を開く (AZ1)。
   // 投稿物の組み立て (JSON.stringify) 自体が投げても「押しても何も起きない」にしない。
   let r;
@@ -2988,8 +3081,10 @@ loadPresets().then(() => {
   if (shareState && shareState.course != null) {
     if (courseSources[shareState.course]) {
       $('courseSel').value = shareState.course;
-      selectCourse(shareState.course);
-      restoredCourse = true;
+      // BC3: 取り込みを断られたら復元は**成立していない**。true にすると、下のランダム既定も走らず
+      // 「hash のコースを指す courseSel＋起動時の既定コース」というずれた状態で止まる。
+      // 断った理由は selectCourse が 1 行出しており、courseSel も実体へ戻している。
+      restoredCourse = selectCourse(shareState.course);
     } else {
       logLine(t('log.share.course.missing', { name: shareState.course }));
     }

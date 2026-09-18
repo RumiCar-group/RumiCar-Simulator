@@ -433,7 +433,31 @@ export function defaultCourse() { return buildFromSpec(FALLBACK_SPECS[0]); }
 //   ・壁の本数が maxWalls 以下 (出荷の最大 960。セル数だけだと短い壁を 150 万本並べた数十 MB の投稿が通る)
 // 検査しないもの: diff・bench・beginner 等の表示用メタ (壊れていても normalizeCourse が無害に扱う)。
 const COURSE_LIMITS = { bMin: 0.5, bMax: 1000, margin: 0.05, cell: 0.1, maxCells: 1500000, maxWalls: 20000 };
-export function checkCourseData(data) {
+// ── 取り込み元でわける 2 つの基準 (BC3・2026-09-18) ──────────────────────────────
+// 上の基準は「上流の投稿＝第三者のデータ」向けで、**拒否しても利用者は何も失わない**ことが前提だった。
+// BC3 で同じ検査を全経路へ広げたとき、これをそのまま**利用者自身の保存コース**へ当てると、正規の操作で
+// 作ったコースが二度と開けなくなる (実測 2026-09-18・出荷 66/66 本で再現・why=walls[0].x1 等。復旧は 🗑 削除のみ):
+//   コースエディタは枠 bounds を ED_DIM_MIN=1 m まで縮められ (main.js の applyEditDims)、縮めても壁は
+//   動かさず、保存 (#edSave) は無検査。∴「枠の外に壁がある保存コース」は事故ではなく**正規の中間状態**。
+// ∴ 基準を 2 つに分ける。違うのは **座標が収まるべき窓の広さだけ**で、他の検査はすべて共通:
+//   ・checkCourseData    … 他人へ配るものの基準 (投稿コース・大会の同梱 courseDef・これから投稿する形)。
+//                          窓 = 枠 bounds ± margin。BB2 から**挙動不変**。誰の一覧にも載せない判断をここでする。
+//   ・checkOwnCourseData … 利用者が自分で開くものの基準 (保存コースの選択・エディタの ✔適用・
+//                          エディタへの JSON 取込)。窓 = 「枠 ± margin」と「絶対値 ≤ bMax」の**和集合**
+//                          ＝ std の窓を必ず含む。
+// **JSON 取込 (#edImport) が own なのは 2026-09-18 の改訂**: 当初は「手元にファイルが残るから投稿基準で
+//   拒否してよい」としていたが、#edExport / #edSave が無検査なので、枠を縮めて書き出したファイルは投稿基準
+//   では必ず落ちる (出荷 66/66 本で実測)。**残っても開けないファイルは失ったのと同じ**なので own へ改めた。
+// own でも絶対上限を外せない理由 (実測 2026-09-18・本物の contact_v2.js:buildWallGrid): 壁グリッドは
+//   `for (let ix = ix0; ix <= ix1; ix++)` で壁の外接矩形が覆うセルを埋めるが、|ix| が 2^53 を超えると
+//   **ix++ が値を変えなくなり、この for が終わらない**。bounds 3×2 に x=1e17 の短い壁を 1 本混ぜた実測で
+//   55 秒走り続けたあと RangeError で落ちた (セル数の上限では捕まらない。短い壁のセル数は 1 だから)。
+//   ∴ 遠い壁は「自分のデータ」でも受け取れない。上限 1000 m (=bMax) は正規データを 1 本も落とさない
+//   (出荷 66 本の座標の絶対値は最大 748.18 m=競技サーキット (フルスケール)・実測 2026-09-18)。
+// 構造の検査・壁の本数・bounds の 0.5〜1000 m・セル数の上限は**両者で同一**。
+export function checkCourseData(data) { return checkCourse(data, false); }
+export function checkOwnCourseData(data) { return checkCourse(data, true); }
+function checkCourse(data, own) {
   const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
   const absent = (v) => v === undefined || v === null;
   const num = (v) => typeof v === 'number' && Number.isFinite(v);
@@ -469,8 +493,18 @@ export function checkCourseData(data) {
   const bw = absent(data.bounds) ? 3.0 : data.bounds.w, bh = absent(data.bounds) ? 2.0 : data.bounds.h;
   if (!(bw >= L.bMin && bw <= L.bMax)) return 'bounds.w';
   if (!(bh >= L.bMin && bh <= L.bMax)) return 'bounds.h';
+  // **2 つの基準が分かれるのはここだけ**: 第三者のデータは枠との包含まで見る / 自分のデータは
+  // 「枠との包含 **または** 枠に依らない絶対上限 bMax」の**どちらかに収まれば通す**。
+  // ⚠ own を「絶対上限だけ」にしてはならない (2026-09-18 の層 4 レビューで実測): 枠が bMax/1.05 = 952.38 m
+  //   を超えると、枠＋margin の窓 (bw×1.05) が絶対上限 1000 m を追い越すため、**own のほうが std より
+  //   厳しくなる**帯ができる (実測: bounds 960 m に x=1005 m の壁 → std 合格・own 拒否)。そこへ落ちた
+  //   保存コースは二度と開けない＝BC3 が直したはずの事故が上端で再現する。和集合にすれば
+  //   **own ⊇ std が構成上の性質**になり、母集団の中身に依らず成り立つ (wf_bc3_intake B1)。
   const m = L.margin * Math.max(bw, bh);
-  const outX = (v) => v < -m || v > bw + m, outY = (v) => v < -m || v > bh + m;
+  const loX = own ? Math.min(-m, -L.bMax) : -m, hiX = own ? Math.max(bw + m, L.bMax) : bw + m;
+  const loY = own ? Math.min(-m, -L.bMax) : -m, hiY = own ? Math.max(bh + m, L.bMax) : bh + m;
+  const outX = (v) => v < loX || v > hiX;
+  const outY = (v) => v < loY || v > hiY;
   for (let i = 0; i < data.walls.length; i++) {
     const w = data.walls[i];
     if (outX(w.x1)) return `walls[${i}].x1`;
@@ -492,6 +526,28 @@ export function checkCourseData(data) {
     if (cells > L.maxCells) return 'walls:size';
   }
   return null;
+}
+
+// ===== 取り込み経路の単一入口 (BC3・2026-09-18) =====
+// BB2 までは checkCourseData を呼ぶのは投稿コースの一覧作り (main.js の loadCommunityCourses) **1 箇所だけ**で、
+// 自分のファイルを取り込む経路 (エディタの JSON 取込・保存コースの選択・✔適用・公式レースの同梱 courseDef) は
+// 素通りだった。BB2 が上限を足した理由 (遠い壁 1 本で壁グリッドの走査が終わらない・mm/m の取り違えでメモリが
+// 尽きる) は取り込み元に依らないので、**検査 → 正規化を 1 つの関数にまとめて**全経路をここに通す。
+//
+// opts.own = true で「利用者自身のデータ」の基準 (checkOwnCourseData) を使う。経路ごとの割り当ては
+// main.js の acceptCourse の注記と internal の経路表を正とする。
+// 戻り値: { ok, why, course }。合格なら ok=true・course=normalizeCourse(data)（**従来の出力と同値**＝
+// 公式レースの決定論を変えない）、不合格なら ok=false・why=検査が返した箇所 ('walls[3].x1' 等)・course=null。
+// **例外を投げない** (呼び出し側は「理由を 1 行知らせて、それまでの状態を保つ」だけでよい＝アプリが止まらない)。
+// DOM に触れない純関数 (常設ゲート wf_bc3_intake.mjs が同じ関数を node で呼ぶ＝写しを作らない・CI-9)。
+//
+// ⚠ **呼び出し側は名前空間 import (`import * as courseParts`) で受けること。** 名前付き import にすると、
+// 古い course.js をキャッシュに持つブラウザでモジュールグラフ全体が落ちる (BA1 で実測・wf_bb2_course_check E)。
+// BC1 で JS に Cache-Control: no-cache を付けたが、それ以前に入ったキャッシュが抜けるまでは名前付きにしない。
+export function acceptCourseData(data, opts) {
+  const why = checkCourse(data, !!(opts && opts.own));
+  if (why) return { ok: false, why, course: null };
+  return { ok: true, why: null, course: normalizeCourse(data) };
 }
 
 // 任意データ (エディタ/JSON) をコースとして正規化

@@ -99,6 +99,13 @@ const GATES = [
   //   course.js の新しい名前を名前付き import しない（キャッシュ混在で起動しなくなる）。上流の現行投稿は
   //   実ブラウザゲート browser/check_bb2_community_bad.mjs が本物で見る（本ゲートはネットワーク不要）。所要は本ホスト実測 約 6s。
   'wf_bb2_course_check.mjs',
+  // BC3: コースの取り込み経路が「1 つの入口」(course.js:acceptCourseData = 検査 → 正規化) を通ることの固定。
+  //   入口の契約 (例外を投げない・合格時は normalizeCourse と byte 同値＝決定論を変えない)・**取り込み元で
+  //   分けた 2 つの基準の関係** (own は std より緩い／枠を縮めた自作コースは開ける／own が受け取った入力では
+  //   本物の壁グリッドが終わる)・main.js の経路ごとの配線と裸の normalizeCourse( が残っていないこと・
+  //   名前空間 import の互換 (BA1)・配線の変異試験。不正入力コーパスは wf_course_corpus.mjs (実ブラウザ
+  //   ゲートと共有＝写しを作らない)。所要は本ホスト実測 約 2s。
+  'wf_bc3_intake.mjs',
 ].map((name) => ({ name, args: [] }));
 
 // official_result は決定論2回照合→result.json 再検証→Node pin 照合の複合ゲート (AP20)。
