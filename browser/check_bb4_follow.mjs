@@ -493,11 +493,19 @@ try {
   const MINI = await appModule(page, 'js/hud.js', (m) => m.MINI);
   const room = (s) => {
     const P = s.partBox, lbB = s.lbBottom ?? 0;
-    let left = P.drawMeters ? P.drawMeters.x1 : 0;
-    if (P.drawTireHud && P.drawTireHud.y1 > lbB) left = Math.max(left, P.drawTireHud.x1);
+    // BC6: 狭い画面では HUD がコースの下の帯へ出る＝コース面に避けるべき部品が 1 つも無い。
+    // そのときは四辺の余白だけが空き領域の境界になる (部品が無いのに「左端は 0」と置くと、
+    // 空きを実際より広く見積もり、product が出さない標本を「入るのに出ない」と誤判定する)。
+    const detached = !(P.drawMeters || P.drawTireHud || P.drawFleetHud);
+    let left = MINI.pad, top = MINI.pad;
+    if (!detached) {
+      left = (P.drawMeters ? P.drawMeters.x1 : 0) + MINI.gap;
+      if (P.drawTireHud && P.drawTireHud.y1 > lbB) left = Math.max(left, P.drawTireHud.x1 + MINI.gap);
+      top = lbB + MINI.gap;
+    }
     const long = Math.max(s.boundsW, s.boundsH);
     return {
-      availW: s.cssW - MINI.pad - (left + MINI.gap), availH: s.cssH - MINI.pad - (lbB + MINI.gap),
+      availW: s.cssW - MINI.pad - left, availH: s.cssH - MINI.pad - top,
       needW: MINI.min * s.boundsW / long, needH: MINI.min * s.boundsH / long,
     };
   };

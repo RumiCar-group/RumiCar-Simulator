@@ -191,7 +191,10 @@ function tireBoxW(ctx, label) {
   ctx.restore();
   return w;
 }
-const LB = { rowH: 23, padT: 10, headH: 19, footH: 18, padL: 12, wMin: 268, noteMin: 10, noteLineH: 15 };
+// 順位表 (リーダーボード) の寸法。wMin = 行の中身 (順位・色ドット・名前・LAP・BEST・状態) が収まる最小の枠幅。
+// export しているのは常設ゲートが**独立した上界**としてこの値を引くため (check_bc6_hudband.mjs B3d)。
+// 枠幅を観測値どうしで比べると式の両辺に現れて相殺し、枠が太る退行を捕まえられない。
+export const LB = { rowH: 23, padT: 10, headH: 19, footH: 18, padL: 12, wMin: 268, noteMin: 10, noteLineH: 15 };
 
 // 順位表の注記 (練習ベストの断り・旧版記録・非既定装備) を組み立てる。
 function fleetNote(slots) {
@@ -296,6 +299,21 @@ export function layoutHud(ctx, slots, hv, tire4) {
   return { side, tire, lbTop, lb, meterW, tireW: tw };
 }
 
+// HUD の 3 部品を「最小限に詰めて」置くのに要る高さ [CSS px] (BC6)。lay = layoutHud の結果。
+// これがコース表示域の高さを超える狭い画面では、HUD をコースの上に描いても下が切れて読めないので、
+// main.js が HUD をコースの下の帯 (#hudBand) へ出す。**この関数が「収まるか」の単一真実源**
+// (product も常設ゲートもここを呼ぶ＝判定を二重実装しない)。
+//   広い画面 (side): 部品は横に並ぶ。タイヤ HUD は layoutHud が下端へ貼り付けるが、高さの必要量としては
+//     「メーターの下へ詰めたとき」の下端で数える (貼り付け位置で数えると必要高さ = 表示高さ になり常に境界上)。
+//   狭い画面 (!side): 順位表がいちばん下。lbTop が既にタイヤ/メーターの下を指している。
+// 末尾の 12 は下の余白 (layoutHud が上下に取る余白と同じ)。
+export function hudNeedH(lay) {
+  const mBottom = METER.y0 + (METER.rows - 1) * METER.gap + METER.h;
+  const tireBottom = lay.tireW ? (lay.side ? mBottom + 8 + TIRE_H : lay.tire.y + TIRE_H) : 0;
+  const lbBottom = lay.lb ? lay.lbTop + lay.lb.h : 0;
+  return Math.max(mBottom, tireBottom, lbBottom) + 12;
+}
+
 // 複数車両のリーダーボード (右上。狭い画面ではメーターの下＝layoutHud)。slots=[{name,color,lap,car,running}], activeIdx=強調表示。
 // 周回数の多い順 → 現ラップ経過の短い順に並べる。view.wPx = HUD 座標系での画面幅。
 // top/metrics は layoutHud の結果 (省略時は右上・その場で寸法を測る)。
@@ -378,13 +396,17 @@ export const MINI = { max: 150, min: 56, minShort: 28, pad: 12, gap: 8, wall: 1,
 //   横 = メーターの右。タイヤ HUD が順位表より下にある (広い画面の左下) ときはその右も避ける。
 // その領域にコースの縦横比を保った箱を入れ、長辺が MINI.min 未満なら null = 出さない。
 // 位置ではなく**部品の寸法**から領域を出すので、配置が壊れて部品が下へずれた退行を「入る」と取り違えない。
+// BC6: lay = null は「HUD をコース面の外 (HUD 帯) へ出した」ことを表す。避けるべき部品がコース面に
+// 1 つも無いので、四辺の余白だけを空けて全面を使う (狭い画面でミニマップが出せるようになる)。
 export function layoutMinimap(hv, lay, wM, hM) {
   if (!(wM > 0 && hM > 0)) return null;
-  const lbBottom = lay.lb ? lay.lbTop + lay.lb.h : 0;
-  let left = METER.x0 + METER.labelW + lay.meterW + MINI.gap;
-  if (lay.tireW && lay.tire.y + TIRE_H > lbBottom) left = Math.max(left, lay.tire.x + lay.tireW + MINI.gap);
+  const lbBottom = (lay && lay.lb) ? lay.lbTop + lay.lb.h : 0;
+  let left = lay ? METER.x0 + METER.labelW + lay.meterW + MINI.gap : MINI.pad;
+  if (lay && lay.tireW && lay.tire.y + TIRE_H > lbBottom) left = Math.max(left, lay.tire.x + lay.tireW + MINI.gap);
+  // 上端: 順位表の下 (＋すき間)。コース面に HUD が無い (lay=null) ときは左右と同じ余白だけを空ける。
+  const top = lay ? lbBottom + MINI.gap : MINI.pad;
   const availW = hv.wPx - MINI.pad - left;
-  const availH = hv.hPx - MINI.pad - (lbBottom + MINI.gap);
+  const availH = hv.hPx - MINI.pad - top;
   if (!(availW > 0 && availH > 0)) return null;
   const s = Math.min(MINI.max / Math.max(wM, hM), availW / wM, availH / hM);
   const w = wM * s, h = hM * s;

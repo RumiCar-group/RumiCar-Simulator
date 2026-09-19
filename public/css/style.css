@@ -224,6 +224,18 @@ main {
   max-width: 100%; max-height: min(68vh, 1400px); cursor: crosshair;
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .25);
 }
+/* 計器パネルの帯 (BC6)。「読める大きさの HUD がコース表示域に収まらない」ときだけ main.js が hidden を
+   外し、メーター/タイヤ/順位表をコースの上ではなくここへ描く。表示寸法は main.js が style.width/height
+   (CSS px) で明示し、canvas 属性は devicePixelRatio 倍で持つ。ゆえにここでは幅・高さを指定しない。
+   max-width も置かない: canvas は置換要素なので max-width が効くと height が縦横比で連動して縮み、
+   main.js が決めた高さとずれる。帯の幅はコースキャンバスの表示幅 (≤ 親の内幅) なので溢れない。
+   [hidden] を後に置くのは、display:block が hidden 属性の既定 (display:none) を上書きするため。 */
+#hudBand {
+  display: block; margin-top: 6px;
+  background: var(--canvas-bg, #d9d9d9); border-radius: var(--radius-sm);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .25);
+}
+#hudBand[hidden] { display: none; }
 /* コース表示のズーム/パン操作バー (P2) */
 .viewbar {
   display: flex; align-items: center; gap: 8px; margin-top: 6px;

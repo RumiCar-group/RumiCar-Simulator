@@ -633,6 +633,10 @@
   <main>
     <section class="stage loading">
       <canvas id="course" role="img" data-i18n-aria="aria.canvas.course"></canvas>
+      <!-- BC6: 計器パネルの帯。「読める大きさの HUD がコースの表示域に収まらない」ときだけ JS が出し、
+           メーター/タイヤ/順位表をここへ描く (コースの上に重ねない)。判定はウィンドウ幅ではなくコース
+           キャンバスの表示寸法なので、広い画面でも順位表が横に並ばなければ出る。既定の表示では出ない。 -->
+      <canvas id="hudBand" role="img" data-i18n-aria="aria.canvas.hud" hidden></canvas>
       <!-- 走行状態 (周回/速度/状態) のスクリーンリーダー向け polite live region (AF3)。視覚的には非表示。 -->
       <div id="driveStatus" class="sr-only" aria-live="polite" aria-atomic="true"></div>
       <!-- 起動ローダー (案C: コースが描かれ車が1周)。静的HTML/CSS＝FCPで即表示。初回コース描画で JS が .hidden を付与してフェード退場。 -->

@@ -1,12 +1,20 @@
 // check_bb3_hud.mjs — HUD の文字とマーカーの「画面上の大きさ」を、実ブラウザで product の描画呼び出しから測る (BB3)。
 // ════════════════════════════════════════════════════════════════════════════
 // 測るもの (見た目で判定しない・CI-14):
-//   H) コース表示キャンバス (#course) に描かれる**全ての文字**の表示高さ [CSS px]
-//        = ctx.font の px × その時点の変換行列の倍率 × キャンバスの表示縮尺 (getBoundingClientRect の幅 / canvas.width)
+//   H) コース表示キャンバス (#course) と計器パネルの帯 (#hudBand・BC6) に描かれる**全ての文字**の表示高さ [CSS px]
+//        = ctx.font の px × その時点の変換行列の倍率 × **そのキャンバスの**表示縮尺 (getBoundingClientRect の幅 / canvas.width)
+//        BC6 以降、HUD は「コース表示域に収まらなければ帯へ」出るので、両方を観測しないと
+//        「HUD が描かれなかった」と誤読する (置き場所は H3b が判定する)。
 //      fillText を観測するだけ (描画は product のまま)。メーター・順位表・タイヤ HUD・距離ラベルを全部含める。
 //      基準: 全セルの最小 ≥ 10 CSS px。どの HUD も一度も描かれなかったセルは測れていないので ✗。
-//      H3: 画面固定 HUD の文字の箱がキャンバス内 (広い画面はゲート・390 幅は件数を情報表示＝表示高さ 81px 級には入らない)
-//      H4: メーター・タイヤ HUD・順位表の 3 部品 (各部品の文字の箱と塗り/枠の矩形の外接矩形) が互いに重ならない (全画面でゲート)
+//      H3: 画面固定 HUD の文字の箱が**描かれたキャンバス**の上・右・下から出ない (BC6 以降は全画面でゲート。
+//          改修前は表示高さ 81px 級のキャンバスに読める大きさの HUD が入らず、390/320 幅は情報表示に留めていた)
+//      H3c: 左へ出るのは「順位表の最小枠 (hud.js LB.wMin=268) が表示幅を超える」ときの順位表だけ。
+//          320px 幅級の画面では表示幅が 256 CSS px しかなく構造的に 12px 切れる (BC6 以前からの性質・
+//          BC6 が直した「下端の切れ」とは別の軸)。枠が入る表示幅では 0 をゲートする。
+//      H3b: HUD 3 部品が 1 枚のキャンバスに揃い、置き場所が広い画面＝コース・狭い画面＝帯 (#hudBand)
+//      H4: メーター・タイヤ HUD・順位表の 3 部品 (各部品の文字の箱と塗り/枠の矩形の外接矩形) が互いに重ならない
+//          (全画面でゲート。別のキャンバスに描かれた部品どうしは重なりようがないので比べない)
 //   M) 車の位置マーカー: 静止させた (▶→⏸) 場面で、マーカー ON と OFF の 2 枚の画素差の外接矩形 [CSS px]
 //        基準: 表示される条件 (車の表示長さ < 閾値) のセルで外接径の最小 ≥ 12 CSS px・最大/最小 ≤ 1.25 (縮尺に依らず一定)
 //              表示されない条件のセルでは画素差 0 (大きく見えている車には何も足さない＝ON と OFF で同じ絵)
@@ -19,7 +27,6 @@
 //   V) 変種: 英語 UI・台数を上限まで追加・タイヤ摩耗 ON (見出しが長い)・連続舵 (注記に装備が付く)・＋ボタン 2 回でズーム
 //      × {racing-course, オーバル, 390 幅で表示高さが最も低いコース} × 4 画面 (3 画面＋320×568) で H1・H3・H4・H5・M6 を測り、
 //      変種が本当に効いたか (英語の見出し・摩耗の見出し・装備の注記・＋ボタンが上限で無効) も確かめる。
-//   H3b: 狭い画面でも、表示高さが HUD の必要高さ (部品の高さの和・位置は使わない) 以上のセルでは、はみ出し 0 をゲート。
 //
 // 使い方: bash run.sh check_bb3_hud.mjs          (RC_BB3_OUT=<path> で全セルの測定値を JSON で書き出す)
 //         RC_BB3_ONLY=<数> で先頭 N コースだけ・RC_BB3_MATCH=<正規表現> で名前が合うコースだけ (試走用。全件でないと母集団の行が ✗)
@@ -35,16 +42,10 @@ let pass = 0, fail = 0;
 const fails = [];
 const ok = (c, m) => { if (c) { pass++; console.log('  ✓ ' + m); } else { fail++; fails.push(m); console.log('  ✗ ' + m); } };
 
-// 狭い画面で HUD が縦に収まるのに要る表示高さ [CSS px]。部品の**高さ**だけから求める (位置は使わない＝配置が壊れて
-// 下へずれた退行を「必要高さが増えた」と取り違えない)。タイヤ HUD がメーターの右にあれば ①、無ければ/左なら ② の縦積み。
-function hudNeedH(c) {
-  const P = c.partBox, h = (b) => (b ? b.y1 - b.y0 : 0);
-  const mB = P.drawMeters ? P.drawMeters.y1 : 0;   // メーターは常に左上固定 (y0=14 から)
-  const lbH = h(P.drawFleetHud), tH = h(P.drawTireHud);
-  const tireRight = P.drawTireHud && P.drawMeters && P.drawTireHud.x0 >= P.drawMeters.x1;
-  const top = tireRight ? Math.max(mB, 12 + tH) : (tH ? mB + 8 + tH : mB);
-  return top + 8 + lbH + 12;
-}
+// BC6 以降、HUD は「コースの上に収まらないなら、コースの下の帯 (#hudBand) に描く」ので、**どの画面幅でも**
+// HUD はそれを描いたキャンバスに収まる。ゆえに旧 H3b (「表示高さが必要高さ以上のセルだけ、はみ出し 0 を求める」
+// という部分適用) は不要になり、H3 を全幅のゲートへ昇格した。必要高さの述語は product の hud.js `hudNeedH` が
+// 単一真実源として持つ (ゲートは置き場所そのものを測るので、その式を写さない)。
 
 const browser = await launch();
 const cells = [];
@@ -63,7 +64,9 @@ try {
           const q = pts.map(([u, v]) => [T.a * u + T.c * v + T.e, T.b * u + T.d * v + T.f]);
           return { x0: Math.min(...q.map((z) => z[0])), y0: Math.min(...q.map((z) => z[1])), x1: Math.max(...q.map((z) => z[0])), y1: Math.max(...q.map((z) => z[1])) };
         };
-        const on = (c) => window.__bb3 && c.canvas && c.canvas.id === 'course';
+        // BC6: HUD はコースの上か、狭い画面ではコースの下の帯 (#hudBand) に描かれる。**両方**を観測する
+        // (片方だけ見ると、HUD が移ったときに「描かれなかった」と読み、はみ出しも見落とす)。
+        const on = (c) => window.__bb3 && c.canvas && (c.canvas.id === 'course' || c.canvas.id === 'hudBand');
         const wrap = (name, fn) => {
           const orig = P[name];
           P[name] = function (...a) {
@@ -73,11 +76,11 @@ try {
         };
         wrap('fillText', function (T, who, txt, x, y) {
           const m = /(\d+(?:\.\d+)?)px/.exec(this.font), px = m ? +m[1] : NaN, w = this.measureText(txt).width;
-          window.__bb3.push({ kind: 'text', who, px, sx: Math.hypot(T.a, T.b), sy: Math.hypot(T.c, T.d), text: String(txt).slice(0, 120),
+          window.__bb3.push({ kind: 'text', cv: this.canvas.id, who, px, sx: Math.hypot(T.a, T.b), sy: Math.hypot(T.c, T.d), text: String(txt).slice(0, 120),
             ...box(T, [[x, y - px], [x + w, y - px], [x, y], [x + w, y]]) });
         });
         for (const name of ['fillRect', 'strokeRect']) wrap(name, function (T, who, x, y, w, h) {
-          window.__bb3.push({ kind: 'rect', who, ...box(T, [[x, y], [x + w, y], [x, y + h], [x + w, y + h]]) });
+          window.__bb3.push({ kind: 'rect', cv: this.canvas.id, who, ...box(T, [[x, y], [x + w, y], [x, y + h], [x + w, y + h]]) });
         });
         wrap('arc', function (T, who, x, y, r) {
           if (who !== 'drawCarMarkers') return;
@@ -119,25 +122,41 @@ try {
     window.__bb3 = [];
     await raf();
     const all = window.__bb3; window.__bb3 = null;
+    const bd = document.getElementById('hudBand');
+    const bandOn = !!(bd && !bd.hidden);
     const rect = cv.getBoundingClientRect();
-    const kx = rect.width / cv.width, ky = rect.height / cv.height;
+    const rectB = bandOn ? bd.getBoundingClientRect() : null;
+    // BC6: 文字も矩形も「描かれたキャンバス」の縮尺で CSS px へ直す (course は縮小表示されうる・帯は 1:1)。
+    const SC = {
+      course: { kx: rect.width / cv.width, ky: rect.height / cv.height, w: cv.width, h: cv.height },
+      hudBand: bandOn ? { kx: rectB.width / bd.width, ky: rectB.height / bd.height, w: bd.width, h: bd.height } : null,
+    };
+    const sc = (r) => SC[r.cv] || SC.course;
+    const kx = SC.course.kx, ky = SC.course.ky;   // 車体・マーカー・距離ラベルは course にしか描かれない
     const rec = all.filter((r) => r.kind === 'text');
-    const hs = rec.map((r) => ({ h: Math.min(r.px * r.sx * kx, r.px * r.sy * ky), text: r.text }));
-    // 画面固定 HUD の文字で、箱がキャンバスの外へ出ているもの (切れて読めない)。距離ラベルは壁際で外へ出うるので別に数える。
-    const outside = (r) => r.x0 < -0.5 || r.y0 < -0.5 || r.x1 > cv.width + 0.5 || r.y1 > cv.height + 0.5;
+    const hs = rec.map((r) => ({ h: Math.min(r.px * r.sx * sc(r).kx, r.px * r.sy * sc(r).ky), text: r.text }));
+    // 画面固定 HUD の文字で、箱が**そのキャンバス**の外へ出ているもの (切れて読めない)。距離ラベルは壁際で外へ出うるので別に数える。
+    const outside = (r) => { const S2 = sc(r); return r.x0 < -0.5 || r.y0 < -0.5 || r.x1 > S2.w + 0.5 || r.y1 > S2.h + 0.5; };
     const hudRec = rec.filter((r) => r.who !== 'drawSensors');
     const hudOut = hudRec.filter(outside).map((r) => r.text);
+    // BC6: 辺ごとの最大はみ出し量 [CSS px] と、はみ出した描き手。左だけは「順位表の最小枠 (LB.wMin) が
+    // 表示幅を超える」ときに構造的に出る (320 幅・BC6 以前からの性質) ので、他の 3 辺と分けて判定する。
+    const ovr = (r) => { const S2 = sc(r); return { l: Math.max(0, -(r.x0 * S2.kx)), r: Math.max(0, r.x1 * S2.kx - S2.w), t: Math.max(0, -(r.y0 * S2.ky)), b: Math.max(0, r.y1 * S2.ky - S2.h) }; };
+    const outSide = { l: 0, r: 0, t: 0, b: 0 }; const outWho = new Set();
+    for (const r of hudRec) { const o = ovr(r); for (const k of ['l', 'r', 't', 'b']) outSide[k] = Math.max(outSide[k], o[k]); if (outside(r)) outWho.add(r.who); }
     let min = null; for (const x of hs) if (!min || x.h < min.h) min = x;
     // H4: 部品ごとの外接矩形 (CSS px) と、部品どうしの重なり
     const parts = {};
     for (const r of all) {
       if (!['drawMeters', 'drawTireHud', 'drawFleetHud'].includes(r.who) || !(r.kind === 'text' || r.kind === 'rect')) continue;
-      const b = parts[r.who] ||= { x0: 1e9, y0: 1e9, x1: -1e9, y1: -1e9 };
-      b.x0 = Math.min(b.x0, r.x0 * kx); b.y0 = Math.min(b.y0, r.y0 * ky); b.x1 = Math.max(b.x1, r.x1 * kx); b.y1 = Math.max(b.y1, r.y1 * ky);
+      const S2 = sc(r);
+      const b = parts[r.who] ||= { x0: 1e9, y0: 1e9, x1: -1e9, y1: -1e9, cv: r.cv };
+      b.x0 = Math.min(b.x0, r.x0 * S2.kx); b.y0 = Math.min(b.y0, r.y0 * S2.ky); b.x1 = Math.max(b.x1, r.x1 * S2.kx); b.y1 = Math.max(b.y1, r.y1 * S2.ky);
     }
     const names = Object.keys(parts), overlaps = [];
     for (let i = 0; i < names.length; i++) for (let j = i + 1; j < names.length; j++) {
       const A = parts[names[i]], B = parts[names[j]];
+      if (A.cv !== B.cv) continue;   // BC6: 別のキャンバスに描かれた部品どうしは重なりようがない
       const ox = Math.min(A.x1, B.x1) - Math.max(A.x0, B.x0), oy = Math.min(A.y1, B.y1) - Math.max(A.y0, B.y0);
       if (ox > 0.5 && oy > 0.5) overlaps.push(`${names[i]}×${names[j]}:${ox.toFixed(0)}×${oy.toFixed(0)}`);
     }
@@ -161,6 +180,8 @@ try {
       spyErr: all.filter((r) => r.kind === 'spyErr').length,
       noteLines: rec.filter((r) => r.who === 'drawFleetHud' && r.px <= 12).length,
       parts: Object.keys(parts), overlaps, partBox: parts,
+      bandOn, hudCv: [...new Set(Object.values(parts).map((b) => b.cv))].sort(),
+      outSide, outWho: [...outWho].sort(), lbW: parts.drawFleetHud ? parts.drawFleetHud.x1 - parts.drawFleetHud.x0 : null,
       markerN: markers.length, bodyN: bodies.length, markerWorstDist: worstDist, markerR: markers.length ? markers[0].r : null,
       texts: [...new Set(rec.map((r) => r.text))].slice(0, 80),
       carLenCss: lenCss, carWidCss: 2 * F.hw * k * pxPerM * kx,
@@ -231,16 +252,20 @@ try {
   ok(unk.length === 0, `H0b 全セルで距離ラベルが描かれ、全ての文字の描き手が分かる (欠け/不明 ${unk.length})`);
   for (const [W, H] of SCREENS) {
     const cs = cells.filter((c) => c.W === W);
-    const bad = cs.filter((c) => c.hudOutN > 0);
     const tot = cs.reduce((a, c) => a + c.hudN, 0), out = cs.reduce((a, c) => a + c.hudOutN, 0);
-    const line = `H3 ${W}×${H}: 画面固定 HUD の文字がキャンバス内に収まる (はみ出す文字 ${out}/${tot}・${bad.length}/${cs.length} セル: ${JSON.stringify(bad.slice(0, 3).map((c) => [c.opt, Math.round(c.cssW), Math.round(c.cssH), c.hudOut]))})`;
-    if (W >= 1000) ok(bad.length === 0, line);
-    else {
-      console.log('  ℹ ' + line + ' ← 全セルは情報 (表示高さ 81px 級のキャンバスには読める大きさの HUD が物理的に入らない・決定ログ参照)');
-      const fit = cs.filter((c) => c.cssH >= hudNeedH(c));
-      const fitBad = fit.filter((c) => c.hudOutN > 0);
-      ok(fit.length > 0 && fitBad.length === 0, `H3b ${W}×${H}: 表示高さが HUD の必要高さ以上のセル (${fit.length}/${cs.length}) では HUD の文字のはみ出し 0 (${fitBad.length}: ${JSON.stringify(fitBad.slice(0, 3).map((c) => [c.opt, Math.round(c.cssH), Math.round(hudNeedH(c))]))})`);
-    }
+    // BC6: 全幅でゲート。狭い画面では HUD が帯へ出るので、**下が切れる**理由が無くなった。
+    //   左だけは別 (下の H3c)。順位表の最小枠 LB.wMin が表示幅を超える画面 (320 幅級) では右詰めの枠が
+    //   左へ出る — これは BC6 以前からの性質で、BC6 が直した「下端の切れ」とは別の軸。
+    const bad = cs.filter((c) => c.outSide.t > 0.5 || c.outSide.r > 0.5 || c.outSide.b > 0.5);
+    ok(bad.length === 0, `H3 ${W}×${H}: 画面固定 HUD の文字が**描かれたキャンバス**の上・右・下から出ない (はみ出す文字 ${out}/${tot}・違反 ${bad.length}/${cs.length} セル・最大 上 ${Math.max(...cs.map((c) => c.outSide.t)).toFixed(1)}/右 ${Math.max(...cs.map((c) => c.outSide.r)).toFixed(1)}/下 ${Math.max(...cs.map((c) => c.outSide.b)).toFixed(1)} px: ${JSON.stringify(bad.slice(0, 3).map((c) => [c.opt, Math.round(c.cssW), Math.round(c.cssH), c.outSide, c.hudOut]))})`);
+    const lbad = cs.filter((c) => c.outSide.l > 0.5 && (c.outWho.join() !== 'drawFleetHud' || c.lbW == null || c.cssW >= c.lbW + 24 - 0.5));
+    ok(lbad.length === 0, `H3c ${W}×${H}: 左へ出るのは「順位表の枠 (${cs[0].lbW?.toFixed(0)}px) が表示幅 (${Math.round(cs[0].cssW)}px) に入らない」ときの順位表だけ (違反 ${lbad.length}/${cs.length}・左の最大 ${Math.max(...cs.map((c) => c.outSide.l)).toFixed(1)}px: ${JSON.stringify(lbad.slice(0, 3).map((c) => [c.opt, c.outSide.l.toFixed(1), c.outWho]))})`);
+    // 置き場所: 狭い画面 (メーターと順位表が横に並ばない) では帯・広い画面ではコース。3 部品が別々のキャンバスへ
+    // 散らばっていないことも求める (散らばると H4 の重なり検査が両方で空振りする)。
+    const split = cs.filter((c) => c.hudCv.length !== 1);
+    const placed = cs.filter((c) => (W >= 1000 ? c.hudCv[0] === 'course' : c.hudCv[0] === 'hudBand'));
+    ok(split.length === 0 && placed.length === cs.length,
+      `H3b ${W}×${H}: HUD 3 部品が 1 枚のキャンバスに揃って描かれ、置き場所が ${W >= 1000 ? 'コース' : '帯 (#hudBand)'} (散らばり ${split.length}・置き場所違い ${cs.length - placed.length}: ${JSON.stringify(cs.filter((c) => c.hudCv.length !== 1 || !(W >= 1000 ? c.hudCv[0] === 'course' : c.hudCv[0] === 'hudBand')).slice(0, 3).map((c) => [c.opt, c.hudCv, c.bandOn]))})`);
   }
   const lap = cells.filter((c) => c.overlaps.length > 0);
   ok(lap.length === 0, `H4 メーター・タイヤ HUD・順位表が互いに重ならない (全 ${cells.length} セル・重なり ${lap.length}: ${JSON.stringify(lap.slice(0, 3).map((c) => [c.opt, c.W, c.overlaps]))})`);
@@ -314,9 +339,14 @@ try {
     ok(vw && vw.minH >= TEXT_MIN - EPS, `V-H1 文字の表示高さの最小 ≥ ${TEXT_MIN} CSS px (最小 ${vw?.minH?.toFixed(2)}px「${vw?.minText}」@ ${vw?.opt} ${vw?.W})`);
     const vl = vcells.filter((c) => c.overlaps.length);
     ok(vl.length === 0, `V-H4 部品どうしが重ならない (重なり ${vl.length}: ${JSON.stringify(vl.slice(0, 3).map((c) => [c.opt, c.W, c.overlaps]))})`);
-    const vo = vcells.filter((c) => (c.W >= 1000 || c.cssH >= hudNeedH(c)) && c.hudOutN > 0);
-    ok(vo.length === 0, `V-H3 広い画面と、表示高さが必要高さ以上の狭い画面で HUD の文字がキャンバス内 (対象 ${vcells.filter((c) => c.W >= 1000 || c.cssH >= hudNeedH(c)).length} セル・はみ出しセル ${vo.length}: ${JSON.stringify(vo.slice(0, 3).map((c) => [c.opt, c.W, c.hudOut]))})`);
-    console.log(`  ℹ V-H3 狭い画面: はみ出す文字 ${vcells.filter((c) => c.W < 1000).map((c) => `${c.opt}@${c.W}=${c.hudOutN}/${c.hudN}(高さ ${Math.round(c.cssH)}/必要 ${Math.round(hudNeedH(c))}px)`).join('・')}`);
+    const vo = vcells.filter((c) => c.outSide.t > 0.5 || c.outSide.r > 0.5 || c.outSide.b > 0.5);
+    ok(vo.length === 0, `V-H3 変種でも HUD の文字が**描かれたキャンバス**の上・右・下から出ない (対象 ${vcells.length} セル・違反 ${vo.length}・最大 上 ${Math.max(...vcells.map((c) => c.outSide.t)).toFixed(1)}/右 ${Math.max(...vcells.map((c) => c.outSide.r)).toFixed(1)}/下 ${Math.max(...vcells.map((c) => c.outSide.b)).toFixed(1)} px: ${JSON.stringify(vo.slice(0, 3).map((c) => [c.opt, c.W, c.hudCv, c.outSide, c.hudOut]))})`);
+    const vLeft = vcells.filter((c) => c.outSide.l > 0.5 && (c.outWho.join() !== 'drawFleetHud' || c.lbW == null || c.cssW >= c.lbW + 24 - 0.5));
+    ok(vLeft.length === 0, `V-H3c 変種でも左へ出るのは「順位表の枠が表示幅に入らない」ときの順位表だけ (違反 ${vLeft.length}/${vcells.length}・左の最大 ${Math.max(...vcells.map((c) => c.outSide.l)).toFixed(1)}px: ${JSON.stringify(vLeft.slice(0, 3).map((c) => [c.opt, c.W, c.outSide.l.toFixed(1), c.outWho, c.lbW?.toFixed(0), c.cssW.toFixed(0)]))})`);
+    console.log(`  ℹ V-H3 左の出方: ${[...new Set(vcells.map((c) => `${c.W}=${c.outSide.l.toFixed(0)}px(枠 ${c.lbW?.toFixed(0)}/表示 ${c.cssW.toFixed(0)})`))].join('・')}`);
+    const vsplit = vcells.filter((c) => c.hudCv.length !== 1);
+    ok(vsplit.length === 0, `V-H3b 変種でも HUD 3 部品が 1 枚のキャンバスに揃う (散らばり ${vsplit.length}: ${JSON.stringify(vsplit.slice(0, 3).map((c) => [c.opt, c.W, c.hudCv]))})`);
+    console.log(`  ℹ V-H3 置き場所: ${[...new Set(vcells.map((c) => `${c.W}=${c.hudCv.join('+')}`))].join('・')}`);
     const vm = vcells.filter((c) => c.markerN > 0);
     const vmm = vm.filter((c) => c.markerN !== c.bodyN || c.markerWorstDist > 1);
     ok(vm.length > 0 && vmm.length === 0, `V-M6 ズーム中も全車のマーカー中心が車体中心と 1 CSS px 以内 (${vm.length} セル・最大ずれ ${Math.max(0, ...vm.map((c) => c.markerWorstDist)).toFixed(3)}px・不一致 ${vmm.length})`);

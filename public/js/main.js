@@ -71,7 +71,7 @@ const carTypeName = (ct) => {
   const base = hasKey('car.' + ct.key) ? t('car.' + ct.key) : ct.name;
   return ct.community ? '🌐 ' + base : base;
 };
-import { drawTrail, drawReferenceLine, drawSensors, drawCar, drawMeters, drawFleetHud, updatePanel, drawTireHud, layoutHud, drawCarMarkers, MARKER, layoutMinimap, drawMinimap } from './hud.js';
+import { drawTrail, drawReferenceLine, drawSensors, drawCar, drawMeters, drawFleetHud, updatePanel, drawTireHud, layoutHud, hudNeedH, drawCarMarkers, MARKER, layoutMinimap, drawMinimap } from './hud.js';
 import { drawDepthView } from './depth.js';
 import { drawTougeElevation } from './elev3d.js';
 import { fmtTime, loadBestRec } from './lap.js';
@@ -544,6 +544,39 @@ function pollLiveSfx() {
 // ＝共有/テーマ/物理に影響しない)。既定 OFF (A11Y.cvdSafe=false) では元の色をそのまま返す＝従来描画と一致。
 function dispColor(i, orig) { return A11Y.cvdSafe ? CVD.fleet[i % CVD.fleet.length] : orig; }
 
+// ── 計器パネルの帯 (BC6) ────────────────────────────────────────────────────────
+// HUD (メーター/タイヤ/順位表) がコース表示域に収まらないとき、コースの上ではなくコースの下の
+// #hudBand へ描く。描く関数は hud.js の同じものをそのまま使う (描画の二重実装をしない)。
+// 帯の backing store は devicePixelRatio 倍で持つ: コースキャンバスは内部解像度 (≥280 px/m) を CSS で
+// 縮小表示するため HUD が実質オーバーサンプリングされていた。帯を CSS px と 1:1 にすると、その端末で
+// 帯の文字だけ従来より粗くなる (BC6 の層 4 レビュー指摘。Xvfb は DPR=1 なので DPR を指定したセルで測る)。
+const bandCanvas = $('hudBand');
+const bandCtx = bandCanvas ? bandCanvas.getContext('2d') : null;
+function drawHudBand(fleetHudSlots, data, wCss) {
+  // 幅はコースキャンバスの**表示幅**に合わせる (順位表は右詰めなので、ずれると右端が揃わない)。
+  const w = Math.max(1, Math.round(wCss));
+  const tire4 = data ? data.tire4 : null;
+  // 高さは「**帯そのものの幅**で組んだ配置」から決める。呼び出し側が判定に使った配置はコースキャンバスの
+  // 幅 (小数) で組んであり、丸めた帯の幅とは 1px 未満ずれる。layoutHud はその 1px で分岐が変わりうるので
+  // (タイヤ HUD を右へ置く①と縦積み②で必要高さが違う・注記の折り返し行数も幅で決まる)、組み直してから
+  // 測らないと帯が足りずに下が切れる。hudNeedH は hv.hPx を読まないので、この順で循環しない。
+  const h = Math.max(1, Math.ceil(hudNeedH(layoutHud(bandCtx, fleetHudSlots, { wPx: w, hPx: 0 }, tire4))));
+  const dpr = Math.max(1, Math.min(3, window.devicePixelRatio || 1));
+  const bw = Math.max(1, Math.round(w * dpr)), bh = Math.max(1, Math.round(h * dpr));
+  if (bandCanvas.width !== bw || bandCanvas.height !== bh) {
+    bandCanvas.width = bw; bandCanvas.height = bh;
+    bandCanvas.style.width = w + 'px'; bandCanvas.style.height = h + 'px';   // 表示寸法は CSS px で固定
+  }
+  if (bandCanvas.hidden) bandCanvas.hidden = false;
+  bandCtx.setTransform(dpr, 0, 0, dpr, 0, 0);   // 以降は CSS px 座標系 (hud.js の HUD 寸法と同じ単位)
+  bandCtx.clearRect(0, 0, w, h);   // 地色は CSS (--canvas-bg) が持つ＝テーマ切替に自動で追従する
+  const hvB = { wPx: w, hPx: h };
+  const lay = layoutHud(bandCtx, fleetHudSlots, hvB, tire4);
+  if (data) { drawMeters(bandCtx, data, lay.meterW); drawTireHud(bandCtx, data, lay.tire); }
+  drawFleetHud(bandCtx, fleetHudSlots, hvB, activeIdx, lay.lbTop, lay.lb);
+}
+function hideHudBand() { if (bandCanvas && !bandCanvas.hidden) bandCanvas.hidden = true; }
+
 function render(edges) {
   const c = editing ? editor.course : course;
   // ビューポート変換 (P2): まず全面を背景色でクリアし (pan/zoom で基準コース矩形の外に隙間を作らない)、
@@ -561,7 +594,7 @@ function render(edges) {
     const ld = $('courseLoader'); if (ld) ld.classList.add('hidden');
     const st = document.querySelector('.stage'); if (st) st.classList.remove('loading');
   }
-  if (editing) { editor.drawOverlay(ctx, view); ctx.setTransform(1, 0, 0, 1, 0, 0); return; }
+  if (editing) { hideHudBand(); editor.drawOverlay(ctx, view); ctx.setTransform(1, 0, 0, 1, 0, 0); return; }   // BC6: 編集中は HUD 自体を描かない＝帯も畳む
 
   edges = edges || slots.map(s => carEdges(s.car));
   // 軌跡 (各車の色。色覚セーフ ON 時は安全パレットへ写像)
@@ -597,7 +630,8 @@ function render(edges) {
   const fleetHudSlots = slots.map((s, i) => ({ name: s.name, color: dispColor(i, s.color), lap: s.lap, car: s.car, running: running && s.running }));
 
   // メーター/パネルは選択車
-  let hudLay = null;
+  let hudLay = null;      // コース面に描いた HUD の配置。帯へ出したときは null (= ミニマップが全面を使える)
+  let hudData = null;
   if (a) {
     const reg = REGIMES[REGIME_STATE.active] || REGIMES.tabletop;   // 現在領域 (測距単位/上限の明示用・Y2)
     const data = {
@@ -625,14 +659,34 @@ function render(edges) {
         : null,
       crashed: a.car.crashed, running: running && a.running,
     };
-    hudLay = layoutHud(ctx, fleetHudSlots, hv, data.tire4);
-    drawMeters(ctx, data, hudLay.meterW);
+    hudData = data;
     updatePanel(refs, data);
-    drawTireHud(ctx, data, hudLay.tire);   // Stage AO12: 輪ごと摩擦円/タイヤ状態 HUD (表示層のみ・v2 のみ・data.tire4 が null なら no-op)
   }
-  // リーダーボード (全車)。狭い画面ではメーターの下へ (layoutHud)。
-  if (!hudLay) hudLay = layoutHud(ctx, fleetHudSlots, hv, null);
-  drawFleetHud(ctx, fleetHudSlots, hv, activeIdx, hudLay.lbTop, hudLay.lb);
+  // BC6: HUD を「コースの上」に描くか「コースの下の帯」に描くかを決める。帯へ出す条件は 2 つ:
+  //   ① メーターと順位表が横に並ばない (!side)。読める大きさ (文字 ≥10px) を保つと HUD がコースの
+  //      広い範囲を覆う。改修前の実測: 390 幅で中央 59.6%・320 幅で 71.6% を覆っていた。
+  //   ② 幅は足りても必要高さが表示域に入らない (表示高さの低い横長コース)。従来は下が切れて読めなかった。
+  // ⚠ どちらの条件も見るのは**コースキャンバスの表示幅・表示高さ (hv)** であって、ウィンドウ幅ではない。
+  //   .stage は .side と幅を分け合うので、ウィンドウ 1440px でも hv.wPx は 539〜612 CSS px しかない。
+  //   実測 (BC6 の層 4 レビューで再現): 既定 (ja・1 台) は 1440/1920 とも 68 コース全てコース面のまま
+  //   だが、英語 UI ＋装備の注記で順位表が広がる変種では 1440 で 11/68 が帯へ出る (1920 は 0/68)。
+  //   これは「入らないなら帯」という設計どおりの帰結で、既定の絵は改修前と画素一致する。
+  // 必要高さは hud.js の hudNeedH が単一真実源 (配置そのものから出すので、部品が増減しても追従する)。
+  // bandCtx が無い (#hudBand を持たない古い HTML がキャッシュされている等) ときは帯へ出さず従来描画へ
+  // 倒す — 倒さないと HUD が無言で全部消える (層 4 レビュー指摘)。
+  const lay0 = layoutHud(ctx, fleetHudSlots, hv, hudData ? hudData.tire4 : null);
+  if (bandCtx && (!lay0.side || hudNeedH(lay0) > hv.hPx + 0.5)) {
+    drawHudBand(fleetHudSlots, hudData, hv.wPx);   // コース面には 1 つも描かない (hudLay=null のまま)
+  } else {
+    hideHudBand();
+    hudLay = lay0;
+    if (hudData) {
+      drawMeters(ctx, hudData, hudLay.meterW);
+      drawTireHud(ctx, hudData, hudLay.tire);   // Stage AO12: 輪ごと摩擦円/タイヤ状態 HUD (表示層のみ・v2 のみ・data.tire4 が null なら no-op)
+    }
+    // リーダーボード (全車)。狭い画面ではメーターの下へ (layoutHud)。
+    drawFleetHud(ctx, fleetHudSlots, hv, activeIdx, hudLay.lbTop, hudLay.lb);
+  }
   // 位置マーカー (BB3): HUD の後に描く (順位表の下にいる車でも位置が分かる)。画面上の車長が MARKER.showBelowCss 未満のときだけ、各車の中心 (フットプリントの中心) に輪を重ねる。
   if (carMarkerOn()) {
     const k = VIEW.carScale || 1, F = CAR_FOOTPRINT;

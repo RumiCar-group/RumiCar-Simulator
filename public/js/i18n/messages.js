@@ -230,6 +230,7 @@ export const MESSAGES = {
   'aria.canvas.raceMap':  { ja: 'レース結果のコースマップ (各車の走行軌跡)', en: 'Race-result course map (each car\'s trajectory)' },
   'aria.canvas.ghostMap': { ja: 'ゴースト再生のコースマップ (記録の決定論リプレイ)', en: 'Ghost-replay course map (deterministic replay of records)' },
   'aria.canvas.course':   { ja: '走行コースの俯瞰ビュー (壁・車・センサーレイ・軌跡)', en: 'Top-down course view (walls, cars, sensor rays, trails)' },
+  'aria.canvas.hud':      { ja: '計器パネル (メーター・タイヤ・順位表)', en: 'Instrument panel (meters, tires, leaderboard)' },
   'aria.canvas.depth':    { ja: '選択車の一人称 (DEPTH) ビュー (前方センサーから見た壁の奥行き)', en: 'First-person (DEPTH) view of the selected car (wall depth from front sensors)' },
   'aria.canvas.elev3d':   { ja: '峠コースの立体プレビュー (高低差を斜め投影で表示)', en: 'Touge course 3D preview (elevation shown in oblique projection)' },
   'aria.drive.status':    { ja: '{name}: {n}周目 {state} 速度{kmh}km/h', en: '{name}: lap {n}, {state}, {kmh} km/h' },
