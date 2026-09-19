@@ -271,21 +271,76 @@ const browser = await launch();
 // コースを既定（1 台）で開いても**無言**だった（🏁 も `capacityOf(course,1)=1` なので NO_ROOM に
 // ならず「0台完走 / 1台リタイア」だけが出る）。AZ6 は発走直前 (reason==='race') に 1 台ぶんの
 // 実走プローブを払って告知する。**利用者の操作（▶ を押す）だけで確かめる。**
+// 【BC11・2026-09-19 是正】**枠 (bounds) を取り込み検査が受け取る大きさまで広げた。**
+//   初版は枠＝部屋そのもの（実測 0.323×0.320 m）だったが、BC3 が全取り込み経路へ課した
+//   `COURSE_LIMITS.bMin`（出荷 0.5 m）に **std/own とも `bounds.w` で落ちる**ようになり、
+//   保存コースとして選んでも**適用されない**。その結果この ⑩ は「前の普通のコースのまま ▶ を
+//   押して警告が出ない」を見ているだけになっていた（2026-09-18 二分探索で BC3 と特定・決定ログ BC-7(b)）。
+//   直し方: **壁と start は初版の数値のまま変えず、枠だけを広げる。**
+//     ・枠を広げて緩むのは `freeSpawn` の**廊下 BFS の探索箱**（`fleet.js:86` が候補を bounds で刈る）
+//       だけで、そこから外へ出られないのは次の行 `fleet.js:87` の `segClearOfWalls`（壁を横切らない）。
+//       直線グリッドの候補は bounds を見ておらず、初版から `onTrack`（start との見通し）が
+//       部屋の外を落としている。∴ **どちらの経路も枠に依らず部屋の中に閉じる**
+//       （実測 2026-09-19: 枠 0.323 と枠 0.503 でスポーン 6 点が完全一致・部屋の外 0 点）。
+//     ・落ち着く倍率も初版と同じ下限 0.5×。**途中経過は違う**（初版は ③ が 0.8→0.5 で一発、
+//       新枠は ③ が 0.8→0.6・続けて ④ の N 台フィットが 0.6→0.5）が、落ち着き先は同じ。
+//       ∴ **部屋/車の比は 奥行 3.40 車長・幅 8.00 車幅で初版と一致する**（実測 2026-09-19）。
+//   枠の値は **product に答えさせる**（`COURSE_LIMITS` は course.js の export に無いので書き写せない
+//   ＝ BC5 で実測）: `acceptCourseData` が受け取る枠を部屋の大きさから 0.01 m 刻みで上へ探し、
+//   **最初に合格した値**を使う（グリッド上の最初の合格値であって、下限そのものの値ではない）。
+//   **「治具が実際に適用された」ことと「治具では実際に走り出せない」ことを前提として測る**のが
+//   本質の直し（BC-7 の一般則: 取り込みの受理範囲を狭める改修は、範囲外を治具にした検証を静かに
+//   無効化する。前者が無いと黙って空振りし、後者が無いと治具の陳腐化を product の退行と読み違える）。
 {
   console.log('\n【⑩】静的には置けるが 1 台も走り出せないコース → ▶ の直前に告知（AZ6）');
   const { page, errors } = await newPage(browser);
   // 卓上の実寸から「閉じた部屋 幅 4×車幅 × 奥行 1.7×車長」を作る（AZ5 と同じ治具の作り方）。
-  const room = await page.evaluate(async () => {
+  const built = await page.evaluate(async () => {
     const cfg = await import(new URL('js/config.js', location.href).href);
+    const crs = await import(new URL('js/course.js', location.href).href);
     const L = cfg.CAR.length / cfg.SCALE_STATE.userK, W = cfg.CAR.width / cfg.SCALE_STATE.userK;
     const X = 1.7 * L, Y = 4 * W;
-    return { name: 'AZ6 動けない部屋', bounds: { w: X, h: Y }, start: { x: X / 2, y: Y / 2, theta: 0 },
-      walls: [{ x1: 0, y1: 0, x2: X, y2: 0 }, { x1: X, y1: 0, x2: X, y2: Y },
-              { x1: X, y1: Y, x2: 0, y2: Y }, { x1: 0, y1: Y, x2: 0, y2: 0 }] };
+    const start = { x: X / 2, y: Y / 2, theta: 0 };
+    const walls = [{ x1: 0, y1: 0, x2: X, y2: 0 }, { x1: X, y1: 0, x2: X, y2: Y },
+                   { x1: X, y1: Y, x2: 0, y2: Y }, { x1: 0, y1: Y, x2: 0, y2: 0 }];
+    const mk = (s) => ({ name: 'AZ6 動けない部屋', bounds: { w: s, h: s }, start, walls });
+    // 取り込み検査が受け取る枠を product に答えさせる（上限 5 m は探索の打ち切り）。
+    const r3 = (v) => Math.round(v * 1000) / 1000;
+    let frame = null;
+    for (let s = r3(Math.max(X, Y)); s <= 5.0001; s = r3(s + 0.01)) {
+      if (crs.acceptCourseData(mk(s), { own: true }).ok) { frame = s; break; }
+    }
+    return { X, Y, frame, room: frame === null ? null : mk(frame) };
   });
+  ok(built.frame !== null,
+     `⑩ 前提: 保存コースの取り込み検査を通る枠が見つかった（部屋 ${built.X.toFixed(3)}×${built.Y.toFixed(3)}m・枠 ${built.frame}m）`);
+  // **枠が見つからないときは以降を走らせない。** 代わりの治具を置くと「前提は揃っているのに
+  // product が告知しない」と読める出力になる（前提の緑が嘘になる）。
+  if (built.frame === null) {
+    console.log('  … 枠が見つからないため ⑩ の残りは実施しない（取り込み検査の下限を確認すること）');
+  } else {
+  const room = built.room;
   await seed(page, [room]);
   await page.selectOption('#courseSel', room.name);
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(2000);
+
+  // **取り込みで断られていないことを測る**（断られると courseSel は戻り、前のコースのまま ▶ を
+  // 押すことになる＝以下の検査が何も測らなくなる。初版にはこの前提が無かった）。
+  const applied = await page.evaluate(() =>
+    import(new URL('js/state.js', location.href).href).then((m) => m.course.name));
+  ok(applied === room.name, `⑩ 前提: 治具コースが実際に適用された（実測 state.course.name="${applied}"）`);
+  // 「静的には置ける」も独立オラクルで測る（⑤ が使う capacityOf を物差しにしない＝循環を避ける）。
+  ok(await spawnHitsWall(page, room) === false,
+     '⑩ 前提: 静的には置ける（独立オラクル freeSpawn+checkCollision で壁交差なし）');
+  // **治具が「走り出せない部屋」であることを、告知とは別に測る。** これが無いと、CAR 寸法や
+  // 物理定数が動いて治具が「走り出せる部屋」に化けたとき（実測: CAR ×2 でも ×0.5 でも化ける）、
+  // その赤を「告知経路が壊れた」と読み違える。物差しは product の `capacity.js:stuckAtN`
+  // （連続量 netMax と車長の比較はこの中。卓上側は `wf_az5_capzero.mjs` が netMax を直接出す）。
+  const stuck1 = await page.evaluate(() =>
+    Promise.all([import(new URL('js/capacity.js', location.href).href),
+                 import(new URL('js/state.js', location.href).href)])
+      .then(([cap, st]) => cap.stuckAtN(st.course, 'tabletop', 1)));
+  ok(stuck1 === 1, `⑩ 前提: この治具では 1 台が車長ぶんも動けない（product の stuckAtN(1)=${stuck1}・1 が「動けない」）`);
 
   const nCars = await page.evaluate(() => document.querySelectorAll('#fleetCols .carcol').length);
   ok(nCars === 1, `⑩ 前提: 既定の 1 台編成のまま（実測 ${nCars} 台）`);
@@ -303,6 +358,7 @@ const browser = await launch();
      '⑩ ▶ の直前に「実際に走り出せる車が 1 台もありません」と告知された（既定編成でも無言でない）');
   ok(!/台から 1 台にします|Setting the field from/.test(added),
      '⑩ 台数を変えていないので「{was} 台から {n} 台にします」とは言わない');
+  }
   ok(errors.length === 0, `⑦ JS エラー 0 件${errors.length ? ' — ' + errors.slice(0, 3).join(' / ') : ''}`);
   await page.close();
 }
