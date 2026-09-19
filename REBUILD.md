@@ -142,12 +142,12 @@ docker compose up -d        # nginx をネットワーク追加ぶん再作成
 
 ## 検証ゲートの実行
 
-66本の常設ゲートが同梱されています。改変後の回帰確認に使ってください。
+67本の常設ゲートが同梱されています。改変後の回帰確認に使ってください。
 
 ```bash
 cd RumiCar-Simulator
 node wf_run_all.mjs                    # 全ゲート実行
-WF_SKIP_TIMING=1 node wf_run_all.mjs   # 壁時計依存の1本を隔離した安定実行
+WF_SKIP_TIMING=1 node wf_run_all.mjs   # 壁時計に依存する章を隔離した安定実行
 node wf_run_all.mjs --list             # 実行対象/除外の一覧のみ
 ```
 
