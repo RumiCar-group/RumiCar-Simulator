@@ -125,7 +125,7 @@ GATES.push({ name: 'wf_official_result.mjs', args: ['--out', OFFICIAL_OUT] });
 // 意図的に非実行 (沈黙截断の禁止・CI-14 — 何を回さないかを明示する)。
 const EXCLUDED = {
   'probe (常に exit0・計測のみ＝アサート無し)': ['wf_ab5_measure.mjs'],
-  'library (単体実行不可・ゲートが import)': ['wf_i18n_hash.mjs', 'wf_frozen.mjs', 'wf_touge_driver.mjs', 'wf_drift_opt.mjs'],
+  'library (単体実行不可・ゲートが import)': ['wf_i18n_hash.mjs', 'wf_frozen.mjs', 'wf_touge_driver.mjs', 'wf_drift_opt.mjs', 'wf_course_corpus.mjs'],
   '変異ツール (product/manifest を書換＝non-変異証明のため除外)': ['wf_i18n_rehash.mjs', 'wf_refreeze.mjs'],
 };
 
