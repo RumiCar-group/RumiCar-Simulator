@@ -63,8 +63,11 @@ export async function launch({ slowMo = Number(process.env.RC_SLOWMO || 0) } = {
  * (goto の前に配線しないと起動時のエラーを取りこぼす)。
  * 返り値の errors/benign は配列参照なので、操作後に読めば累積が見える。
  */
-export async function newPage(browser, { width = 1440, height = 900, path = '', before = null } = {}) {
-  const page = await browser.newPage({ viewport: { width, height } });
+export async function newPage(browser, { width = 1440, height = 900, path = '', before = null, ...ctx } = {}) {
+  // BC5: 残りの指定はそのまま context オプションへ渡す (hasTouch 等)。タッチの検証には
+  // hasTouch:true の context が要るが、ここを塞いでいると各ゲートが browser.newPage を
+  // 自前で呼ぶことになり、本ファイルの計装 (console/pageerror/http の収集) を失う。
+  const page = await browser.newPage({ viewport: { width, height }, ...ctx });
   // before(page): goto の前に済ませたい準備 (page.route で上流の応答だけを差し替える・addInitScript 等)。
   // 起動時に走る取得を差し替えるには goto より前に配線するしかない (BB2)。
   if (before) await before(page);

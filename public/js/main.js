@@ -2652,31 +2652,47 @@ let dragSlot = -1;
 let edDrawing = false;   // コースエディタの連続描画/曲線モードでドラッグ中か
 // ---- P2: ビューのパン (ドラッグ移動) 状態 ----
 let panning = false, panLastX = 0, panLastY = 0;
+// BC5: どちらの入力がジェスチャを持っているか。**互いの番人**なので、両方のリスナより先に宣言する。
+// 片方が掴んでいる間、もう片方のイベントには所有権を渡さない（割り込みで状態が割れるのを防ぐ）。
+// 純マウス端末では touchDragging が常に false・純タッチ端末では mouseDragging が常に false なので、
+// どちらの単独環境でも従来と完全に同じ経路を通る。
+let touchDragging = false, mouseDragging = false;
 function startPan(ev) {
   setFollowOff();   // BB4: 位置を自分で動かす操作は「自分で見たい所を見る」意思表示＝追従を解除する
   panning = true;
   const p = canvasPx(ev); panLastX = p.cx; panLastY = p.cy;
   canvas.style.cursor = 'grabbing'; ev.preventDefault();
 }
-canvas.addEventListener('mousedown', (ev) => {
+// BC5: 本体を名前つき関数へ出し、マウスとタッチの両方から同じ経路を通す (判断を二重に書かない)。
+// **掴んだら true** を返す — タッチ側が「このジェスチャを引き受けたか」を判断するのに使う。
+// 引き受けないジェスチャ (等倍・非追従・非編集の空白) はページのスクロールへ譲る。
+function onCanvasDown(ev) {
   // 中ボタンはどのモードでもパン (描画/車ドラッグと衝突しない)。
-  if (ev.button === 1) { startPan(ev); return; }
+  if (ev.button === 1) { startPan(ev); return true; }
   if (editing) {
     if (editor.mode === 'draw' || editor.mode === 'curve') {
-      editor.startStroke(canvasPt(ev)); edDrawing = true; ev.preventDefault();
+      editor.startStroke(canvasPt(ev)); edDrawing = true; ev.preventDefault(); return true;
     } else if (editor.mode === 'rect') {
-      editor.startRect(canvasPt(ev)); edDrawing = true; ev.preventDefault();
+      editor.startRect(canvasPt(ev)); edDrawing = true; ev.preventDefault(); return true;
     }
-    return;
+    return false;   // wall/start/finish/erase/poly は click (タップ) で置く
   }
   const i = carAt(canvasPt(ev));
-  if (i >= 0) { dragSlot = i; selectCar(i); canvas.style.cursor = 'grabbing'; ev.preventDefault(); return; }
+  if (i >= 0) { dragSlot = i; selectCar(i); canvas.style.cursor = 'grabbing'; ev.preventDefault(); return true; }
   // 左ボタン・非編集・空白・拡大中 = パン (中ボタンの無いトラックパッド/マウス向け)。
   // 追従中は等倍でもパンを許す。ここを zoom>1 で塞ぐと、等倍で足りるコース (卓上コースの大半) では
   // 左ドラッグが startPan=setFollowOff に届かず、i18n が案内する解除手段が 1 つ死ぬ (BB4 層 4 で実測)。
-  if (ev.button === 0 && (vt.zoom > 1 || followOn())) startPan(ev);
-});
-canvas.addEventListener('mousemove', (ev) => {
+  if (ev.button === 0 && (vt.zoom > 1 || followOn())) { startPan(ev); return true; }
+  return false;
+}
+// BC5: **タッチのジェスチャが進行中なら、割り込んだマウスイベントへ所有権を渡さない。**
+// 層 4 レビュー指摘 → 自分で再現 (2026-09-19・390x844・zoom 2.20・同一 8 手・順序非依存):
+//   割り込みなし panΔ=(136.35, 113.62) / 途中で mouseup を 1 発 panΔ=(56.83, 47.36)
+//   ＝ mouseup が panning=false にする一方 touchDragging は true のままで、以後 preventDefault だけが
+//     続く「死んだジェスチャ」になっていた。射程はタッチとマウスを併用できる端末。
+// 純マウス端末では touchDragging が常に false なので、3 つとも従来と完全に同じ経路を通る。
+canvas.addEventListener('mousedown', (ev) => { if (!touchDragging) mouseDragging = onCanvasDown(ev); });
+function onCanvasMove(ev) {
   if (panning) {
     const p = canvasPx(ev);
     vt.panX += p.cx - panLastX; vt.panY += p.cy - panLastY;
@@ -2706,8 +2722,9 @@ canvas.addEventListener('mousemove', (ev) => {
     // 拡大中は空白でも 'grab' (パン可能) を示唆。
     canvas.style.cursor = carAt(p) >= 0 ? 'grab' : ((vt.zoom > 1 || followOn()) ? 'grab' : 'default');
   }
-});
-window.addEventListener('mouseup', () => {
+}
+canvas.addEventListener('mousemove', (ev) => { if (!touchDragging) onCanvasMove(ev); });
+function onCanvasUp() {
   if (panning) { panning = false; canvas.style.cursor = editing ? 'crosshair' : 'default'; return; }
   if (edDrawing) { if (editor.mode === 'rect') editor.endRect(); else editor.endStroke(); edDrawing = false; return; }
   if (dragSlot < 0) return;
@@ -2716,7 +2733,49 @@ window.addEventListener('mouseup', () => {
   // (これをしないと slot.running=false のままで loop が呼ばれず、古い driveDir で暴走する)
   if (running && slot && !slot.car.crashed) { slot.running = true; slot.loopTimer = 0; }
   dragSlot = -1; canvas.style.cursor = 'default';
-});
+}
+window.addEventListener('mouseup', () => { if (!touchDragging) { mouseDragging = false; onCanvasUp(); } });
+
+// ---- BC5: タッチ端末のポインタ操作 (2026-09-19 に実機相当で実測してから決めた形) ----
+// 実測 (390x844・hasTouch・CDP の実タッチ入力)。**ドラッグとタップで結果が違う**ので分けて書く:
+//   ・**ドラッグ**では canvas に mouse 系が 1 件も届かない (mousedown/mousemove/mouseup/click すべて
+//     0 件)。届くのは touchstart/touchmove/touchend と pointerdown/pointermove だけで、ブラウザが
+//     2 回目の pointermove あたりでジェスチャを**ページのスクロールへ持って行き pointercancel を出す**
+//     (scrollY が動く)。∴ v8.5.0 時点ではパンも追従解除も車のドラッグもエディタの連続描画も届かなかった。
+//   ・**タップ**では従来どおり mousemove/mousedown/mouseup/click が届く (実測: wall モードの 2 タップで
+//     壁が 1 本増える)。∴ 点で置く編集モードは元から動いており、ここで壊してはならない。
+// 対策は 2 つとも実測で有効だった: (a) 非 passive の touchstart で preventDefault (b) touch-action:none。
+//   **(a) を採る** — (b) はキャンバス上のドラッグを常に奪うので、掴むものが無いとき (等倍・非追従・
+//   非編集の空白) にページを指でスクロールできなくなる。(a) なら「掴んだときだけ」奪える。
+// マウスの経路 (onCanvasDown/Move/Up の登録) は一切変えていない ＝ マウスの挙動は不変。
+// 'wall'/'start'/'finish'/'erase'/'poly' は onCanvasDown が false を返す ＝ preventDefault しないので、
+// タップの互換 click が従来どおり editor.click() へ届く (これらは元からドラッグではなく点置き)。
+// TouchEvent の 1 点を canvasPx/canvasPt が読む形へ合わせる。実イベントの preventDefault は
+// 呼び出し側で行うので、ここの preventDefault は何もしない (startPan 等が呼ぶぶんを吸収する)。
+const touchAsMouse = (t) => ({ clientX: t.clientX, clientY: t.clientY, button: 0, preventDefault() {} });
+canvas.addEventListener('touchstart', (ev) => {
+  if (mouseDragging) return;   // マウスが掴んでいる最中は横取りしない（① の裏返し）
+  // 前のジェスチャの touchend/touchcancel を取りこぼしていても、新しい単指ジェスチャで必ず復帰する
+  // (取りこぼしたまま抜けると canvas がタッチに対して恒久的に無反応になる)。進行中に 2 本目の指が
+  // 乗るときは touches.length が 2 以上なのでここには落ちない ＝ 単指の touchstart は「新しい
+  // ジェスチャの始まり」しか意味しない。
+  if (touchDragging && ev.touches.length === 1) { touchDragging = false; onCanvasUp(); }
+  if (touchDragging) return;
+  if (ev.touches.length !== 1) return;                       // 2 本指以上はページのピンチへ譲る
+  if (!onCanvasDown(touchAsMouse(ev.touches[0]))) return;    // 掴まなかった = スクロールへ譲る
+  touchDragging = true;
+  ev.preventDefault();   // ここで初めてスクロールの横取りを止める (非 passive でないと効かない)
+}, { passive: false });
+canvas.addEventListener('touchmove', (ev) => {
+  if (!touchDragging) return;
+  if (ev.touches.length !== 1) { touchDragging = false; onCanvasUp(); return; }
+  onCanvasMove(touchAsMouse(ev.touches[0]));
+  ev.preventDefault();
+}, { passive: false });
+const endTouchDrag = () => { if (!touchDragging) return; touchDragging = false; onCanvasUp(); };
+canvas.addEventListener('touchend', endTouchDrag);
+canvas.addEventListener('touchcancel', endTouchDrag);
+
 // 拡大縮小は明示ボタンで行う (ホイールはページスクロールに任せ、コース上で挙動が変わらない=一貫操作)。
 // 拡大時の移動はドラッグ (左/中ボタン) で行う。
 const viewInBtn = $('viewIn'); if (viewInBtn) viewInBtn.addEventListener('click', () => zoomStep(+1));
@@ -2725,10 +2784,12 @@ const viewResetBtn = $('viewReset');
 // BB4: 「全体表示 ⤢」は追従も解除する (等倍に戻すのに追従が続くと次のフレームで拡大へ戻ってしまう)。
 // ＋／－ (zoomStep) は倍率だけを変えて追従は続ける (中央維持のまま寄り引きできる・2026-09-16 利用者裁定)。
 if (viewResetBtn) viewResetBtn.addEventListener('click', () => { setFollowOff(); resetView(); });
-canvas.addEventListener('click', (ev) => { if (editing) editor.click(canvasPt(ev)); });
+// BC5: タッチのドラッグ中に割り込んだ click で点を置かせない（① の同族。タッチのドラッグは
+// touchstart を preventDefault するので互換 click は出ないが、併用端末の実マウスの click は届く）。
+canvas.addEventListener('click', (ev) => { if (!touchDragging && editing) editor.click(canvasPt(ev)); });
 // 折れ線(クリック配置)モードはダブルクリックで確定 (先行する click 2 発で最終点は追加済み)。
 canvas.addEventListener('dblclick', (ev) => {
-  if (editing && editor.mode === 'poly') { editor.finalizePoly(); ev.preventDefault(); }
+  if (!touchDragging && editing && editor.mode === 'poly') { editor.finalizePoly(); ev.preventDefault(); }
 });
 
 // 各列の取込操作 (取込先 = その列)
