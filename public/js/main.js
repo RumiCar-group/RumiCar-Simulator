@@ -2714,6 +2714,46 @@ let panning = false, panLastX = 0, panLastY = 0;
 // 純マウス端末では touchDragging が常に false・純タッチ端末では mouseDragging が常に false なので、
 // どちらの単独環境でも従来と完全に同じ経路を通る。
 let touchDragging = false, mouseDragging = false;
+// BD3: **マウスがジェスチャを持っている間、タッチ由来の互換 mouse イベントへ所有権を渡さない。**
+// 上の①（マウス→タッチ）の裏返しで、向きが逆の同族。BC5 では塞がっていなかった経路。
+// 実測 (2026-09-20・390x844・zoom 2.197・CSS px へ正規化。数値は**手順ごとに違う**ので手順を併記する):
+//   ・左へ 40px のパン＋途中でタップ 1 回（スクラッチ `_bd3_repro.mjs`・タップは押下点の右 80px）:
+//       割込なし -40.00 → 割込あり +80.00 ＝ **差 120.00 CSS px**
+//   ・常設ゲートの手順（`check_bc5_touch.mjs` の DRAG=(44,33)・タップは別の空白点）:
+//       割込なし (44.00, 33.00) → 改修前は (-104.00, 76.00)、改修後は (44.00, 33.00)＝差 0.00
+//   ＝ タップの互換 mousemove が panLast を押下点から**タップ点へ掴み直し**、続く互換 mouseup が
+//     panning を落として以後のマウス移動が pan に届かなくなっていた。**BC5 前の HEAD と同値＝既存の不具合。**
+// 見分けは **UIEvent.sourceCapabilities.firesTouchEvents**（実測: 互換 mouse=true・実マウス=false・
+//   合成イベント(el.click())とペン由来は false・pointer 系は**属性が null**）。属性の無いブラウザでは
+//   判定できないので従来どおり通す＝そこでは直らないが悪化もしない（時間窓で推測しない）。
+// **互換 mouse を一律には落とさない** — 純タッチ端末の点置き編集（wall/start/finish/erase/poly）は
+//   この互換経路で動いている（BC5 で実測・T6）。
+// ⚠ 「純タッチ端末では mouseDragging が常に false」とは**言えない**（実測で反例あり）: touchstart が
+//   掴まなかった（＝preventDefault しなかった）タップでは互換 mousedown が下の 2 箇所へ届き、そこで
+//   onCanvasDown が真を返す状態になっていれば mouseDragging は true になる（指を置いたまま拡大した等）。
+//   ∴ 見分けだけでなく**所有者の素性**（mouseFromTouch）と**解放の証拠**（releaseMouseGesture）が要る。
+const fromTouch = (ev) => !!(ev.sourceCapabilities && ev.sourceCapabilities.firesTouchEvents);
+// **落とすのは「実マウスが持っているジェスチャ」に割り込んだ互換 mouse だけ**。
+// 進行中のジェスチャを始めたのが互換 mouse 自身のときは落としてはならない — 純タッチ端末では
+// touchstart が掴まなかったタップ（点置き編集など）が互換 mousedown へ委ねられており、その解放も
+// 互換 mouseup で来る。一律に落とすと解放が消えて mouseDragging が true のまま残り、
+// **以後 touchstart が恒久的に return してタッチが死ぬ**（2026-09-20 実測: 指を置いたまま拡大→離す、
+// の後にタッチのパンが 0.00 CSS px。改修前ツリーは 40.00 で生きていた）。
+let mouseFromTouch = false;   // 進行中のマウスジェスチャを始めたのが互換 mouse か
+const stolenFromMouse = (ev) => mouseDragging && !mouseFromTouch && fromTouch(ev);
+// 実マウスの mouseup は取りこぼしうる（ウィンドウの外でボタンを離す・タブ切替）。残ったジェスチャは
+// 同じく touchstart を恒久的に塞ぐので、**終わっている証拠が来たときだけ**解放する:
+//   ① ボタンを押していない実マウスのイベントが届いた（離した後に戻ってきた） ② ウィンドウがフォーカスを失った。
+// 時間窓で「そろそろ終わったはず」と推測しない（証拠のある解放だけを行う）。
+// 改修前は「タップの互換 mousedown が mouseDragging を計算し直す」ことで偶然この復帰が起きていた。
+// BD3 でその経路を塞ぐ以上、**復帰は明示的に持つ**（実測: 取りこぼし後のタッチ 2 タップで壁 +1 本＝改修前と同値）。
+function releaseMouseGesture() { if (!mouseDragging) return; mouseDragging = false; mouseFromTouch = false; onCanvasUp(); }
+window.addEventListener('blur', releaseMouseGesture);
+// 右クリックは onCanvasDown がボタンを見ないので車/描画を掴む（main.js の当該分岐は ev.button を見ない）。
+// その直後に出るネイティブメニューが mouseup を吸うため、解放イベントが来ない（実測: 右押下後に
+// cursor='grabbing' のまま contextmenu だけが届く）。**contextmenu はそのジェスチャが終わった証拠**として扱う
+// （メニュー自体は止めない＝preventDefault しない）。
+canvas.addEventListener('contextmenu', releaseMouseGesture);
 function startPan(ev) {
   setFollowOff();   // BB4: 位置を自分で動かす操作は「自分で見たい所を見る」意思表示＝追従を解除する
   panning = true;
@@ -2748,7 +2788,11 @@ function onCanvasDown(ev) {
 //   ＝ mouseup が panning=false にする一方 touchDragging は true のままで、以後 preventDefault だけが
 //     続く「死んだジェスチャ」になっていた。射程はタッチとマウスを併用できる端末。
 // 純マウス端末では touchDragging が常に false なので、3 つとも従来と完全に同じ経路を通る。
-canvas.addEventListener('mousedown', (ev) => { if (!touchDragging) mouseDragging = onCanvasDown(ev); });
+canvas.addEventListener('mousedown', (ev) => {
+  if (touchDragging || stolenFromMouse(ev)) return;
+  mouseDragging = onCanvasDown(ev);
+  mouseFromTouch = mouseDragging && fromTouch(ev);   // 掴んだのが互換 mouse なら解放も互換 mouse で来る
+});
 function onCanvasMove(ev) {
   if (panning) {
     const p = canvasPx(ev);
@@ -2780,7 +2824,12 @@ function onCanvasMove(ev) {
     canvas.style.cursor = carAt(p) >= 0 ? 'grab' : ((vt.zoom > 1 || followOn()) ? 'grab' : 'default');
   }
 }
-canvas.addEventListener('mousemove', (ev) => { if (!touchDragging) onCanvasMove(ev); });
+canvas.addEventListener('mousemove', (ev) => {
+  if (touchDragging || stolenFromMouse(ev)) return;
+  // ボタンを押していない実マウスの移動が来た＝そのジェスチャは既に終わっている（mouseup 取りこぼし）。
+  if (mouseDragging && !mouseFromTouch && !fromTouch(ev) && ev.buttons === 0) releaseMouseGesture();
+  onCanvasMove(ev);
+});
 function onCanvasUp() {
   if (panning) { panning = false; canvas.style.cursor = editing ? 'crosshair' : 'default'; return; }
   if (edDrawing) { if (editor.mode === 'rect') editor.endRect(); else editor.endStroke(); edDrawing = false; return; }
@@ -2791,7 +2840,7 @@ function onCanvasUp() {
   if (running && slot && !slot.car.crashed) { slot.running = true; slot.loopTimer = 0; }
   dragSlot = -1; canvas.style.cursor = 'default';
 }
-window.addEventListener('mouseup', () => { if (!touchDragging) { mouseDragging = false; onCanvasUp(); } });
+window.addEventListener('mouseup', (ev) => { if (!touchDragging && !stolenFromMouse(ev)) { mouseDragging = false; mouseFromTouch = false; onCanvasUp(); } });
 
 // ---- BC5: タッチ端末のポインタ操作 (2026-09-19 に実機相当で実測してから決めた形) ----
 // 実測 (390x844・hasTouch・CDP の実タッチ入力)。**ドラッグとタップで結果が違う**ので分けて書く:
@@ -2843,10 +2892,17 @@ const viewResetBtn = $('viewReset');
 if (viewResetBtn) viewResetBtn.addEventListener('click', () => { setFollowOff(); resetView(); });
 // BC5: タッチのドラッグ中に割り込んだ click で点を置かせない（① の同族。タッチのドラッグは
 // touchstart を preventDefault するので互換 click は出ないが、併用端末の実マウスの click は届く）。
+// ⚠ ここに stolenFromMouse を足さない（BD3 の初版では足していたが、実測してやめた）:
+//   ① click/dblclick は**連続状態に触れない**。飛びの原因だった panLast/dragSlot/stroke を書くのは
+//      mousedown/mousemove/mouseup の 3 本だけで、点置きは割り込んでも既存のジェスチャを壊さない。
+//   ② 足すと**害がある**: マウスのジェスチャが残っている間（右クリックの掴みっぱなし等）に、
+//      タッチのタップで壁を置く経路まで道連れで死ぬ（実測で +1 本 → +0 本）。
+//   ③ 「編集中は draw/curve/rect でしか mouseDragging が立たない」は**成り立たない** —
+//      編集に入る**前に**掴んだジェスチャはモードに関係なく残る（上の実測がその状態）。
 canvas.addEventListener('click', (ev) => { if (!touchDragging && editing) editor.click(canvasPt(ev)); });
 // 折れ線(クリック配置)モードはダブルクリックで確定 (先行する click 2 発で最終点は追加済み)。
 canvas.addEventListener('dblclick', (ev) => {
-  if (!touchDragging && editing && editor.mode === 'poly') { editor.finalizePoly(); ev.preventDefault(); }
+  if (!touchDragging && editing && editor.mode === 'poly') { editor.finalizePoly(); ev.preventDefault(); }   // poly は mouseDragging が立たない（上の注記）
 });
 
 // 各列の取込操作 (取込先 = その列)
