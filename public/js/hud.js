@@ -191,10 +191,29 @@ function tireBoxW(ctx, label) {
   ctx.restore();
   return w;
 }
-// 順位表 (リーダーボード) の寸法。wMin = 行の中身 (順位・色ドット・名前・LAP・BEST・状態) が収まる最小の枠幅。
+// 順位表 (リーダーボード) の寸法。wMin = 行の中身 (順位・色ドット・名前・LAP・BEST・状態) が**詰めずに**
+// 収まる枠幅 (＝自然幅。BD2 以降、狭い画面ではこれより細い枠も作る＝「取りうる最小」ではない)。
 // export しているのは常設ゲートが**独立した上界**としてこの値を引くため (check_bc6_hudband.mjs B3d)。
 // 枠幅を観測値どうしで比べると式の両辺に現れて相殺し、枠が太る退行を捕まえられない。
+// ⚠ B3d の母集団は ja・1 台・既定装備。en は注記が長く AS1 の実測合わせで 276px まで広がる (上界を超える)。
 export const LB = { rowH: 23, padT: 10, headH: 19, footH: 18, padL: 12, wMin: 268, noteMin: 10, noteLineH: 15 };
+// 行の列の自然位置 (枠の左端からの CSS px)・色ドットの半径・フォント・枠の外の左右余白。
+// LB.wMin=268 は「状態列の右端 + 余白」＝この並びそのものから決まっている値。
+const LB_COL = { rank: 12, dot: 33, name: 45, lap: 109, best: 139, state: 222 };
+const LB_DOT_R = 5.3, LB_ROW_FONT = 14, LB_HEAD_FONT = 13, LB_MARGIN = 12;
+// BD2: 表示幅が自然幅に足りないとき (スマホ幅) に枠を詰める。
+//   枠は右詰め (x0 = wPx − w − LB_MARGIN) なので、w が表示幅に入らないと左へはみ出して読めない。
+//   改修前は w の下限が LB.wMin 固定だったため、コース表示幅 256 CSS px (viewport 320px) では枠が 24px・
+//   文字が 12px 左へ出ていた (BC-9 ③ に「既知の構造的限界」として記録した状態)。
+//   詰め方は 2 段: ① **空白** (枠内の左右余白と列の隙間) を s 倍にする → ② それでも入らなければ
+//   **内容** (文字と色ドット) を kf 倍にする。文字は 10 CSS px を下限にする (BB3 H1「読める大きさ」と同じ)。
+//   s = kf = 1 のとき列位置・フォント・枠幅は改修前と一致する＝入る画面では絵が 1 px も変わらない。
+//   ⚠ 詰めには下限があるので「左へ出ない」は無条件ではない: s・kf が下限に張り付くと枠幅は **160.8 CSS px
+//   (ja・実測)** で止まり、帯の表示幅がそれ + LB_MARGIN を下回ると枠ごと左へ出る (実測の崖 = 表示幅
+//   172.8px ≒ viewport 233px)。読める大きさ (10 CSS px) を捨ててまで詰めない、という選択の帰結。
+//   出荷が支える viewport 280px の表示幅は 216px で、崖まで 43px の余裕がある。この余裕そのものを
+//   check_bc6_hudband.mjs B16 が毎回測る (「0 かどうか」でなく「崖までいくつ残っているか」)。
+const LB_SMIN = 0.45, LB_FONT_MIN = 10;
 
 // 順位表の注記 (練習ベストの断り・旧版記録・非既定装備) を組み立てる。
 function fleetNote(slots) {
@@ -224,26 +243,77 @@ function fleetNote(slots) {
   return note;
 }
 
-// 順位表の寸法 (幅・高さ・注記のフォントと行分割)。wPx = HUD 座標系での画面幅。
+// 行の各列が要する幅 [CSS px]。**状態列だけは実際に描く語 (i18n) を measureText で測る** (ja 28 / en 35 と
+// 言語で変わるため)。他の 4 列は「等幅 1 文字幅 × 文字数」の見積り＝**全角の車名 (自由入力) は見積りを超える**
+// (改修前から列は固定オフセットで同じ超過が起きる。BD2 はその見積りを枠幅の決定にも使うようになった)。
+// あわせて列の隙間と枠の右余白を自然位置 (LB_COL) から逆算する — 詰める対象は「空白」であって文字ではない。
+// 返り値の wNat は自然幅で、ja/en・既定編成では LB.wMin と一致する (LB.wMin はこの並びから決まった値)。
+function lbParts(ctx, slots) {
+  ctx.save();
+  ctx.font = LB_ROW_FONT + 'px monospace';
+  const ch = ctx.measureText('0').width;
+  const state = Math.max(...['hud.lb.run', 'hud.lb.stop', 'hud.lb.crash'].map((k) => ctx.measureText(t(k)).width));
+  ctx.restore();
+  // 順位=slots.length の桁数・名前=padEnd(5)・LAP=padStart(2)・BEST=slice(0,8)。いずれも drawFleetHud と同じ。
+  const cw = { rank: String(slots.length).length * ch, dot: LB_DOT_R * 2, name: 5 * ch, lap: 2 * ch, best: 8 * ch, state };
+  const gap = [
+    (LB_COL.dot - LB_DOT_R) - (LB_COL.rank + cw.rank),
+    LB_COL.name - (LB_COL.dot + LB_DOT_R),
+    LB_COL.lap - (LB_COL.name + cw.name),
+    LB_COL.best - (LB_COL.lap + cw.lap),
+    LB_COL.state - (LB_COL.best + cw.best),
+  ];
+  const padR = Math.max(4, LB.wMin - (LB_COL.state + cw.state));   // 状態列の右の余白 (実測 ja 18 / en 11)
+  const content = cw.rank + cw.dot + cw.name + cw.lap + cw.best + cw.state;
+  // space が 0 以下になると s の式が 0 除算 (NaN) になり、NaN は比較も clamp も素通りして
+  // 'NaNpx monospace' (無効値＝直前のフォントのまま) まで伝播する。空白が無い並びは「詰めない」で扱う。
+  const space = Math.max(1e-6, LB.padL + gap.reduce((a, b) => a + b, 0) + padR);
+  return { cw, gap, content, space, wNat: content + space };
+}
+
+// 順位表の寸法 (幅・高さ・列位置・フォント・注記の行分割)。wPx = HUD 座標系での画面幅。
 function fleetHudMetrics(ctx, slots, wPx) {
   const note = fleetNote(slots);
-  // AS1: 注記の実測幅にパネル幅を合わせる。固定幅 268px では注記が枠を越えて canvas の外へ
-  // 切れていた（実測: ja 282px / en 336px に対し内幅 244px）。パネルは右詰めなので広げると左へ伸びる。
+  const P = lbParts(ctx, slots);
+  const avail = wPx - LB_MARGIN * 2;        // 左右に同じ余白を取ったとき枠に使える幅
+  // ヘッダは列とは別建ての 1 本の整形済み文字列。これも 10 CSS px を割らせないので、**「入るか」の判定より
+  // 前に**測る (後で測ると、ヘッダのために枠を広げる必要があるのに nat と判定して詰めない経路ができる)。
+  ctx.save();
+  ctx.font = LB_HEAD_FONT + 'px monospace';
+  const hdrW = ctx.measureText(t('hud.lb.header')).width;
+  ctx.restore();
+  const hdrNeed = hdrW * (LB_FONT_MIN / LB_HEAD_FONT);   // ヘッダが 10 CSS px で要する内幅
+  const wNeed = Math.max(P.wNat, hdrNeed + LB.padL * 2); // 詰めずに済む幅 (ja/en 既定では = P.wNat = LB.wMin)
+  const nat = avail >= wNeed - 1e-9;        // 自然幅が入る＝改修前とまったく同じ経路 (列も枠もフォントも)
+  let s = 1, kf = 1;
+  if (!nat) {                               // BD2: ① 空白を s 倍に詰める → ② 足りなければ内容を kf 倍に縮める
+    s = (avail - P.content) / P.space;
+    if (s < LB_SMIN) { s = LB_SMIN; kf = (avail - LB_SMIN * P.space) / P.content; }
+    s = Math.min(1, Math.max(LB_SMIN, s));
+    kf = Math.min(1, Math.max(LB_FONT_MIN / LB_ROW_FONT, kf));
+  }
+  const padL = nat ? LB.padL : LB.padL * s;
+  // 枠幅。ヘッダが 10 CSS px を割るくらいなら枠の方を広げる (読めなくしない)。この下限が avail を超えると
+  // 枠は左へ出る＝上の「⚠ 崖」。
+  const w0 = Math.max(nat ? P.wNat : P.space * s + P.content * kf, hdrNeed + padL * 2);
+  // AS1: 注記の実測幅にパネル幅を合わせる。AS1 以前の固定幅 268px では注記が枠を越えて canvas の外へ
+  // 切れていた（当時の実測: ja 282px / en 336px に対し内幅 244px）。パネルは右詰めなので広げると左へ伸びる。
   let noteFont = 12;
   ctx.save();
   ctx.font = noteFont + 'px monospace';
   let noteW = ctx.measureText(note).width;
-  const wMax = Math.max(LB.wMin, wPx - 24);   // 画面幅を越えて広げない (狭い端末での保険)
-  const w = Math.min(Math.max(LB.wMin, noteW + LB.padL * 2), wMax);
+  const wMax = Math.max(w0, avail);   // 画面幅を越えて広げない (狭い端末での保険)
+  const w = Math.min(Math.max(w0, noteW + padL * 2), wMax);
   // wMax で頭打ちになる狭い画面では、注記側を縮めて収める。BB3: 下限は 10px (読める大きさ・旧 9px)。
-  while (noteW > w - LB.padL * 2 && noteFont > LB.noteMin) {
+  while (noteW > w - padL * 2 && noteFont > LB.noteMin) {
     ctx.font = (--noteFont) + 'px monospace';
     noteW = ctx.measureText(note).width;
   }
   // それでも収まらなければ、縮めずに行を折り返す (BB3。旧実装は枠の外へはみ出して切れていた)。
   // 空白の区切りで折り返し (英語の語の途中で切らない)、1 語が内幅を越えるとき (日本語は空白が無い) だけ文字単位で切る。
-  // 行頭・行末の空白は落とす。1 回の反復で必ず 1 語か 1 文字進むので終わる (内幅 ≥ wMin-2×padL = 244px)。
-  const inner = w - LB.padL * 2, fits = (x) => ctx.measureText(x).width <= inner;
+  // 行頭・行末の空白は落とす。**1 回の反復で必ず 1 語か 1 文字進む**ので内幅に依らず必ず終わる
+  // (BD2 以降、内幅は詰めで 150px 級まで下がりうる＝「内幅 244px」を前提にしてはならない)。
+  const inner = w - padL * 2, fits = (x) => ctx.measureText(x).width <= inner;
   const lines = [];
   if (fits(note)) lines.push(note);
   else {
@@ -264,7 +334,22 @@ function fleetHudMetrics(ctx, slots, wPx) {
   ctx.restore();
   const footH = LB.footH + (lines.length - 1) * LB.noteLineH;
   const h = LB.padT * 2 + LB.headH + LB.rowH * slots.length + footH;
-  return { w, h, noteFont, lines };
+  // 列の位置 (枠の左端から)。nat のときは LB_COL そのもの＝改修前と 1 px も変わらない。
+  let cols = LB_COL, dotR = LB_DOT_R;
+  if (!nat) {
+    dotR = LB_DOT_R * kf;
+    let x = padL;
+    cols = { rank: x };
+    x += P.cw.rank * kf + P.gap[0] * s;
+    cols.dot = x + dotR;
+    x += P.cw.dot * kf + P.gap[1] * s;
+    cols.name = x; x += P.cw.name * kf + P.gap[2] * s;
+    cols.lap = x;  x += P.cw.lap * kf + P.gap[3] * s;
+    cols.best = x; x += P.cw.best * kf + P.gap[4] * s;
+    cols.state = x;
+  }
+  const headFont = Math.max(LB_FONT_MIN, Math.min(LB_HEAD_FONT, LB_HEAD_FONT * (w - padL * 2) / hdrW));
+  return { w, h, noteFont, lines, cols, dotR, padL, rowFont: LB_ROW_FONT * kf, headFont };
 }
 
 // HUD の配置 (BB3)。hv = { wPx, hPx } は HUD 座標系 (CSS px) での画面の大きさ。
@@ -317,6 +402,8 @@ export function hudNeedH(lay) {
 // 複数車両のリーダーボード (右上。狭い画面ではメーターの下＝layoutHud)。slots=[{name,color,lap,car,running}], activeIdx=強調表示。
 // 周回数の多い順 → 現ラップ経過の短い順に並べる。view.wPx = HUD 座標系での画面幅。
 // top/metrics は layoutHud の結果 (省略時は右上・その場で寸法を測る)。
+// 列の位置・色ドットの半径・フォントは **すべて metrics (fleetHudMetrics) から受け取る**。ここに数値を
+// 置き直すと、狭い画面の詰め (BD2) が枠だけに効いて中身が枠からはみ出す。
 export function drawFleetHud(ctx, slots, view, activeIdx, top = 12, metrics = null) {
   if (!slots || slots.length === 0) return;
   const order = slots.map((s, i) => ({ s, i })).sort((a, b) => {
@@ -328,42 +415,42 @@ export function drawFleetHud(ctx, slots, view, activeIdx, top = 12, metrics = nu
   // 約 1.2 倍・box 幅を余裕をもって拡張)。表示内容・並び順・判定ロジックは無変更 (描画のみ)。
   const { rowH, padT, headH } = LB;
   const m = metrics || fleetHudMetrics(ctx, slots, view.wPx);
-  const { w, h, noteFont, lines } = m;
-  const x0 = view.wPx - w - 12, y0 = top;
+  const { w, h, noteFont, lines, cols, dotR, padL, rowFont, headFont } = m;
+  const x0 = view.wPx - w - LB_MARGIN, y0 = top;
   ctx.save();
   ctx.fillStyle = 'rgba(10,12,16,0.86)';
   ctx.fillRect(x0, y0, w, h);
   ctx.strokeStyle = 'rgba(255,255,255,0.18)'; ctx.lineWidth = 1; ctx.strokeRect(x0, y0, w, h);
-  ctx.font = '13px monospace'; ctx.fillStyle = '#9fb0c8';
-  ctx.fillText(t('hud.lb.header'), x0 + 12, y0 + padT + 12);
-  ctx.font = '14px monospace';
+  ctx.font = headFont + 'px monospace'; ctx.fillStyle = '#9fb0c8';
+  ctx.fillText(t('hud.lb.header'), x0 + padL, y0 + padT + 12);
+  ctx.font = rowFont + 'px monospace';
   order.forEach((o, rank) => {
     const s = o.s, y = y0 + padT + headH + rank * rowH + 16;
     const active = o.i === activeIdx;
     if (active) { ctx.fillStyle = 'rgba(255,255,255,0.07)'; ctx.fillRect(x0 + 2, y - 16, w - 4, rowH); }
     // 順位
-    ctx.fillStyle = '#cfd6e6'; ctx.fillText(String(rank + 1), x0 + 12, y);
+    ctx.fillStyle = '#cfd6e6'; ctx.fillText(String(rank + 1), x0 + cols.rank, y);
     // 色ドット (色覚セーフ ON 時は s.color は呼び出し側で安全パレットへ写像済み・crash 色のみここで写像)
     ctx.fillStyle = s.car?.crashed ? (A11Y.cvdSafe ? CVD.crash : VIEW.carCrash) : s.color;
-    ctx.beginPath(); ctx.arc(x0 + 33, y - 5, 5.3, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.arc(x0 + cols.dot, y - 5, dotR, 0, Math.PI * 2); ctx.fill();
     // 名前
     ctx.fillStyle = active ? '#fff' : '#cfd6e6';
-    ctx.fillText((s.name || '').slice(0, 5).padEnd(5), x0 + 45, y);
+    ctx.fillText((s.name || '').slice(0, 5).padEnd(5), x0 + cols.name, y);
     // LAP
-    ctx.fillStyle = A11Y.cvdSafe ? CVD.lap : '#7fe0a0'; ctx.fillText(String(s.lap?.laps ?? 0).padStart(2), x0 + 109, y);
+    ctx.fillStyle = A11Y.cvdSafe ? CVD.lap : '#7fe0a0'; ctx.fillText(String(s.lap?.laps ?? 0).padStart(2), x0 + cols.lap, y);
     // BEST
     ctx.fillStyle = (s.lap?.improved) ? '#ffd34d' : '#9fb0c8';
-    ctx.fillText(fmtTime(s.lap?.bestLap).slice(0, 8), x0 + 139, y);
+    ctx.fillText(fmtTime(s.lap?.bestLap).slice(0, 8), x0 + cols.best, y);
     // 状態 (テキスト=run/stop/crash の語で既に区別。色覚セーフ ON 時は緑/赤を安全色へ写像し色でも区別可能に)
     const st = s.car?.crashed ? t('hud.lb.crash') : (s.running ? t('hud.lb.run') : t('hud.lb.stop'));
     ctx.fillStyle = A11Y.cvdSafe
       ? (s.car?.crashed ? CVD.crash : (s.running ? CVD.run : '#8a93a3'))
       : (s.car?.crashed ? '#ff6b6b' : (s.running ? '#6fe39a' : '#8a93a3'));
-    ctx.fillText(st, x0 + 222, y);
+    ctx.fillText(st, x0 + cols.state, y);
   });
   // 注記 (1 行なら従来と同じ位置。折り返したときは下端から上へ積む)。
   ctx.font = noteFont + 'px monospace'; ctx.fillStyle = '#a3aebe';
-  lines.forEach((ln, k) => ctx.fillText(ln, x0 + LB.padL, y0 + h - padT + 2 - (lines.length - 1 - k) * LB.noteLineH));
+  lines.forEach((ln, k) => ctx.fillText(ln, x0 + padL, y0 + h - padT + 2 - (lines.length - 1 - k) * LB.noteLineH));
   ctx.restore();
 }
 

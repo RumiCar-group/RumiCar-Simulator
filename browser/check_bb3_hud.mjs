@@ -9,9 +9,9 @@
 //      基準: 全セルの最小 ≥ 10 CSS px。どの HUD も一度も描かれなかったセルは測れていないので ✗。
 //      H3: 画面固定 HUD の文字の箱が**描かれたキャンバス**の上・右・下から出ない (BC6 以降は全画面でゲート。
 //          改修前は表示高さ 81px 級のキャンバスに読める大きさの HUD が入らず、390/320 幅は情報表示に留めていた)
-//      H3c: 左へ出るのは「順位表の最小枠 (hud.js LB.wMin=268) が表示幅を超える」ときの順位表だけ。
-//          320px 幅級の画面では表示幅が 256 CSS px しかなく構造的に 12px 切れる (BC6 以前からの性質・
-//          BC6 が直した「下端の切れ」とは別の軸)。枠が入る表示幅では 0 をゲートする。
+//      H3c: 左からも 1 px も出ない (BD2)。BC6 の時点では順位表の最小枠 (hud.js LB.wMin=268) が
+//          表示幅 256 CSS px を超え、320px 幅級で構造的に 12px 切れていた (既知の限界として容認)。
+//          BD2 が狭い画面で枠を詰めるようにしたので、述語を「0」へ引き上げた。
 //      H3b: HUD 3 部品が 1 枚のキャンバスに揃い、置き場所が広い画面＝コース・狭い画面＝帯 (#hudBand)
 //      H4: メーター・タイヤ HUD・順位表の 3 部品 (各部品の文字の箱と塗り/枠の矩形の外接矩形) が互いに重ならない
 //          (全画面でゲート。別のキャンバスに描かれた部品どうしは重なりようがないので比べない)
@@ -136,11 +136,14 @@ try {
     const rec = all.filter((r) => r.kind === 'text');
     const hs = rec.map((r) => ({ h: Math.min(r.px * r.sx * sc(r).kx, r.px * r.sy * sc(r).ky), text: r.text }));
     // 画面固定 HUD の文字で、箱が**そのキャンバス**の外へ出ているもの (切れて読めない)。距離ラベルは壁際で外へ出うるので別に数える。
-    const outside = (r) => { const S2 = sc(r); return r.x0 < -0.5 || r.y0 < -0.5 || r.x1 > S2.w + 0.5 || r.y1 > S2.h + 0.5; };
+    // ⚠ r.x0/x1 は**そのキャンバスの内部 px**、S2.w/h は CSS px。掛け忘れると縮小表示されたコース面
+    //   (hs = canvas.width / CSS 幅 > 1) で過大判定になる (下の ovr() は kx/ky を掛けている＝そちらが正)。
+    const outside = (r) => { const S2 = sc(r); return r.x0 * S2.kx < -0.5 || r.y0 * S2.ky < -0.5 || r.x1 * S2.kx > S2.w + 0.5 || r.y1 * S2.ky > S2.h + 0.5; };
     const hudRec = rec.filter((r) => r.who !== 'drawSensors');
     const hudOut = hudRec.filter(outside).map((r) => r.text);
-    // BC6: 辺ごとの最大はみ出し量 [CSS px] と、はみ出した描き手。左だけは「順位表の最小枠 (LB.wMin) が
-    // 表示幅を超える」ときに構造的に出る (320 幅・BC6 以前からの性質) ので、他の 3 辺と分けて判定する。
+    // BC6: 辺ごとの最大はみ出し量 [CSS px] と、はみ出した描き手。BD2 以降は四辺とも 0 を要求する
+    // (左を分けて持っていたのは「順位表の最小枠 > 表示幅」で構造的に出ていた時期の名残)。辺ごとに
+    // **量**で持つのは、既知の限界と新しい退行を区別するため (BC-9 ⑤)。
     const ovr = (r) => { const S2 = sc(r); return { l: Math.max(0, -(r.x0 * S2.kx)), r: Math.max(0, r.x1 * S2.kx - S2.w), t: Math.max(0, -(r.y0 * S2.ky)), b: Math.max(0, r.y1 * S2.ky - S2.h) }; };
     const outSide = { l: 0, r: 0, t: 0, b: 0 }; const outWho = new Set();
     for (const r of hudRec) { const o = ovr(r); for (const k of ['l', 'r', 't', 'b']) outSide[k] = Math.max(outSide[k], o[k]); if (outside(r)) outWho.add(r.who); }
@@ -254,12 +257,11 @@ try {
     const cs = cells.filter((c) => c.W === W);
     const tot = cs.reduce((a, c) => a + c.hudN, 0), out = cs.reduce((a, c) => a + c.hudOutN, 0);
     // BC6: 全幅でゲート。狭い画面では HUD が帯へ出るので、**下が切れる**理由が無くなった。
-    //   左だけは別 (下の H3c)。順位表の最小枠 LB.wMin が表示幅を超える画面 (320 幅級) では右詰めの枠が
-    //   左へ出る — これは BC6 以前からの性質で、BC6 が直した「下端の切れ」とは別の軸。
+    //   BD2: 左も 0 になった (狭い画面では順位表の枠を詰める)。四辺を分けて量で持つのは BC-9 ⑤ のため。
     const bad = cs.filter((c) => c.outSide.t > 0.5 || c.outSide.r > 0.5 || c.outSide.b > 0.5);
     ok(bad.length === 0, `H3 ${W}×${H}: 画面固定 HUD の文字が**描かれたキャンバス**の上・右・下から出ない (はみ出す文字 ${out}/${tot}・違反 ${bad.length}/${cs.length} セル・最大 上 ${Math.max(...cs.map((c) => c.outSide.t)).toFixed(1)}/右 ${Math.max(...cs.map((c) => c.outSide.r)).toFixed(1)}/下 ${Math.max(...cs.map((c) => c.outSide.b)).toFixed(1)} px: ${JSON.stringify(bad.slice(0, 3).map((c) => [c.opt, Math.round(c.cssW), Math.round(c.cssH), c.outSide, c.hudOut]))})`);
-    const lbad = cs.filter((c) => c.outSide.l > 0.5 && (c.outWho.join() !== 'drawFleetHud' || c.lbW == null || c.cssW >= c.lbW + 24 - 0.5));
-    ok(lbad.length === 0, `H3c ${W}×${H}: 左へ出るのは「順位表の枠 (${cs[0].lbW?.toFixed(0)}px) が表示幅 (${Math.round(cs[0].cssW)}px) に入らない」ときの順位表だけ (違反 ${lbad.length}/${cs.length}・左の最大 ${Math.max(...cs.map((c) => c.outSide.l)).toFixed(1)}px: ${JSON.stringify(lbad.slice(0, 3).map((c) => [c.opt, c.outSide.l.toFixed(1), c.outWho]))})`);
+    const lbad = cs.filter((c) => c.outSide.l > 0.5);
+    ok(lbad.length === 0, `H3c ${W}×${H}: 画面固定 HUD の文字が左からも出ない (順位表の枠 ${cs[0].lbW?.toFixed(0)}px / 表示幅 ${Math.round(cs[0].cssW)}px・違反 ${lbad.length}/${cs.length}・左の最大 ${Math.max(...cs.map((c) => c.outSide.l)).toFixed(2)}px: ${JSON.stringify(lbad.slice(0, 3).map((c) => [c.opt, c.outSide.l.toFixed(2), c.outWho]))})`);
     // 置き場所: 狭い画面 (メーターと順位表が横に並ばない) では帯・広い画面ではコース。3 部品が別々のキャンバスへ
     // 散らばっていないことも求める (散らばると H4 の重なり検査が両方で空振りする)。
     const split = cs.filter((c) => c.hudCv.length !== 1);
@@ -341,8 +343,8 @@ try {
     ok(vl.length === 0, `V-H4 部品どうしが重ならない (重なり ${vl.length}: ${JSON.stringify(vl.slice(0, 3).map((c) => [c.opt, c.W, c.overlaps]))})`);
     const vo = vcells.filter((c) => c.outSide.t > 0.5 || c.outSide.r > 0.5 || c.outSide.b > 0.5);
     ok(vo.length === 0, `V-H3 変種でも HUD の文字が**描かれたキャンバス**の上・右・下から出ない (対象 ${vcells.length} セル・違反 ${vo.length}・最大 上 ${Math.max(...vcells.map((c) => c.outSide.t)).toFixed(1)}/右 ${Math.max(...vcells.map((c) => c.outSide.r)).toFixed(1)}/下 ${Math.max(...vcells.map((c) => c.outSide.b)).toFixed(1)} px: ${JSON.stringify(vo.slice(0, 3).map((c) => [c.opt, c.W, c.hudCv, c.outSide, c.hudOut]))})`);
-    const vLeft = vcells.filter((c) => c.outSide.l > 0.5 && (c.outWho.join() !== 'drawFleetHud' || c.lbW == null || c.cssW >= c.lbW + 24 - 0.5));
-    ok(vLeft.length === 0, `V-H3c 変種でも左へ出るのは「順位表の枠が表示幅に入らない」ときの順位表だけ (違反 ${vLeft.length}/${vcells.length}・左の最大 ${Math.max(...vcells.map((c) => c.outSide.l)).toFixed(1)}px: ${JSON.stringify(vLeft.slice(0, 3).map((c) => [c.opt, c.W, c.outSide.l.toFixed(1), c.outWho, c.lbW?.toFixed(0), c.cssW.toFixed(0)]))})`);
+    const vLeft = vcells.filter((c) => c.outSide.l > 0.5);
+    ok(vLeft.length === 0, `V-H3c 変種 (en・満員・非既定装備) でも左から出ない (違反 ${vLeft.length}/${vcells.length}・左の最大 ${Math.max(...vcells.map((c) => c.outSide.l)).toFixed(2)}px: ${JSON.stringify(vLeft.slice(0, 3).map((c) => [c.opt, c.W, c.outSide.l.toFixed(2), c.outWho, c.lbW?.toFixed(0), c.cssW.toFixed(0)]))})`);
     console.log(`  ℹ V-H3 左の出方: ${[...new Set(vcells.map((c) => `${c.W}=${c.outSide.l.toFixed(0)}px(枠 ${c.lbW?.toFixed(0)}/表示 ${c.cssW.toFixed(0)})`))].join('・')}`);
     const vsplit = vcells.filter((c) => c.hudCv.length !== 1);
     ok(vsplit.length === 0, `V-H3b 変種でも HUD 3 部品が 1 枚のキャンバスに揃う (散らばり ${vsplit.length}: ${JSON.stringify(vsplit.slice(0, 3).map((c) => [c.opt, c.W, c.hudCv]))})`);

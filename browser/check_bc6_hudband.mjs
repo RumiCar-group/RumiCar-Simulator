@@ -9,7 +9,9 @@
 //   狭い画面 {390×844, 320×568} × 出荷の全プリセット + 上流の投稿コース:
 //     B1 コースキャンバスに HUD 部品 (メーター/タイヤ/順位表) が **1 つも描かれない** (被覆率 0)
 //     B2 帯が展開され、3 部品すべてが**帯に**描かれる (欠けが無い＝HUD を失っていない)
-//     B3 帯に描かれた文字の箱が帯の中に収まる (はみ出し 0)
+//     B3 帯に描かれた文字の箱が帯の上・右・下からはみ出さない (0) ／ B3b 左も 0 (BD2 で 0 になった軸)
+//     B3c 順位表の**枠そのもの**も表示域の中 / B3d 枠幅 ≤ hud.js の LB.wMin (独立上界・母集団は ja 既定)
+//     B17 順位表の**行の中で隣り合う文字が重ならない** (BD2 で列位置が定数から計算値になったため)
 //     B4 帯の文字の表示高さの最小 ≥ 10 CSS px (BB3 H1 と同じ基準・帯でも守る)
 //     B5 帯の中で 3 部品が互いに重ならない
 //     B6 帯の表示幅がコースキャンバスの表示幅と一致する (順位表は右詰めなので、ずれると右端が揃わない)
@@ -24,7 +26,10 @@
 //   B13 devicePixelRatio > 1 の端末でも帯の文字が CSS px で同じ大きさ・同じ基準を満たす (backing store が DPR 倍)
 //   B10 編集モードでは帯が畳まれる (編集中は HUD 自体を描かない)
 //   B11 横はみ出し 0 / E JS・HTTP エラー 0
-//   ℹ ミニマップが出る画面幅の下限を走査して表示する (受け入れ基準の記録用・ゲートは 320 幅の全セル)
+//   走査 (画面幅 280〜1000px × 3 コース) は記録用ではなく **B12 (ミニマップ)・B14 (帯の単調性)・
+//     B15 (順位表の左はみ出し 0 と文字 ≥10px)** の母集団。加えて B16 が**崖までの余裕**を量で測る:
+//     詰めには下限があり (hud.js LB_SMIN/LB_FONT_MIN)、枠幅がそこで止まると左へ出る。極小の画面幅で
+//     product に枠幅の下限そのものを作らせ、支える最小幅 (280px) の表示幅との差を出す (0 でなく余裕を測る)。
 //
 // 使い方: bash run.sh check_bc6_hudband.mjs   (RC_BC6_ONLY=<数>・RC_BC6_MATCH=<正規表現> は試走用)
 import { launch, newPage, setLang, appModule, overflowX } from './lib.mjs';
@@ -140,6 +145,22 @@ try {
       for (const k of ['l', 'r', 't', 'b']) side[k] = Math.max(side[k], o[k]);
       if (outside(r)) outWho.add(r.who);
     }
+    // 順位表の**行の中**で隣り合う文字の箱のすき間 [CSS px] の最小。BD2 で列位置が定数から計算値に
+    // なったので、枠が表示域に収まっていても中の列どうしが重なりうる。部品単位の重なり検査 (overlaps)
+    // は drawFleetHud を 1 つの外接矩形に畳むので、この退行を構造的に見ない。
+    // ⚠ この記録には **2 フレーム分**の描画が入る (上の raf 2 回)。ベースラインで束ねて x で並べ直すと
+    //   別フレームの列が同じ行に混ざり、負のすき間が出る。drawFleetHud は 1 行を 順位→名前→LAP→BEST→状態
+    //   の順に描くので、**記録順のまま**「同じベースライン かつ x が右へ進む」隣接ペアだけを見る
+    //   (フレームの境目は x が左へ戻るので自然に外れる)。色ドットは arc+fill で記録されない。
+    const lbT = txt.filter((r) => r.who === 'drawFleetHud');
+    let lbRowGap = null, lbPairN = 0;
+    for (let i = 1; i < lbT.length; i++) {
+      const a = lbT[i - 1], b = lbT[i];
+      if (Math.abs(a.y1 - b.y1) > 0.5 || b.x0 <= a.x0) continue;
+      lbPairN++;
+      const g = (b.x0 - a.x1) * sc(b).kx;
+      if (lbRowGap == null || g < lbRowGap) lbRowGap = g;
+    }
     const bandTxt = txt.filter((r) => r.cv === 'hudBand');
     const mini = all.filter((r) => r.kind === 'rect' && r.who === 'drawMinimap' && r.call === 'strokeRect');
     return {
@@ -148,11 +169,13 @@ try {
       hudCv: [...new Set(names.map((k) => parts[k].cv))].sort(), parts: names.sort(), partBox: parts, overlaps,
       courseCover, courseCoverRatio: courseCover / (rc.width * rc.height),
       bandBottom, bandSlack: bandOn ? rb.height - bandBottom : null,
-      txtN: txt.length, outN: txt.filter(outside).length, outTxt: [...new Set(txt.filter(outside).map((r) => r.text))].slice(0, 5),
+      txtN: txt.length, minTxtH: txt.length ? Math.min(...txt.map(hOf)) : null,
+      outN: txt.filter(outside).length, outTxt: [...new Set(txt.filter(outside).map((r) => r.text))].slice(0, 5),
       outSide: side, outWho: [...outWho].sort(),
       lbBox: parts.drawFleetHud ? { x0: parts.drawFleetHud.x0, x1: parts.drawFleetHud.x1, w: parts.drawFleetHud.x1 - parts.drawFleetHud.x0 } : null,
       // 順位表の**文字**の最左 (枠の左端ではない)。枠の内側の余白を実測で導くために持つ。
       lbTextX0: (() => { const t2 = txt.filter((r) => r.who === 'drawFleetHud'); return t2.length ? Math.min(...t2.map((r) => r.x0 * sc(r).kx)) : null; })(),
+      lbRowGap, lbPairN,
       bandTxtN: bandTxt.length, bandMinH: bandTxt.length ? Math.min(...bandTxt.map(hOf)) : null,
       bandMinText: bandTxt.length ? bandTxt.reduce((a, r) => (!a || hOf(r) < hOf(a) ? r : a)).text : null,
       miniN: mini.length, miniBox: mini.length ? { x: mini[0].x0 * SC.course.kx, y: mini[0].y0 * SC.course.ky, x1: mini[0].x1 * SC.course.kx, y1: mini[0].y1 * SC.course.ky } : null,
@@ -195,20 +218,14 @@ try {
   const outTRB = narrow.filter((c) => c.outSide.t > 0.5 || c.outSide.r > 0.5 || c.outSide.b > 0.5);
   ok(outTRB.length === 0,
     `B3 帯に描かれた文字が帯の上・右・下からはみ出さない (違反 ${outTRB.length}/${narrow.length}・最大 上 ${Math.max(...narrow.map((c) => c.outSide.t)).toFixed(1)} / 右 ${Math.max(...narrow.map((c) => c.outSide.r)).toFixed(1)} / 下 ${Math.max(...narrow.map((c) => c.outSide.b)).toFixed(1)} px: ${JSON.stringify(outTRB.slice(0, 3).map((c) => [c.opt, c.W, c.outSide, c.outTxt]))})`);
-  // B3b 左のはみ出しは「順位表の枠 (右詰め・右余白 12) が表示幅に入らない」ときだけ・量も枠幅から導ける値ちょうど。
-  //   ⚠ これは **BC6 以前からある性質** で、BC6 の受け入れ基準 (下端の切れ) とは別の軸。改修前の実測でも
-  //     320 幅は 68/68 セルではみ出していた (390 幅は 0)。順位表の最小枠 (hud.js LB.wMin) が表示幅を超えるため。
-  //     「既知だから見ない」にすると枠が更に大きくなる退行を見逃すので、**導出した上界で縛る**:
-  //       期待はみ出し = max(0, 枠幅 + 右余白 − 表示幅)   (右余白は広い画面のセルから実測する＝定数を写さない)
-  //   右余白と枠内の左余白は、枠が収まっている**広い画面のセルから実測**する (product の定数を写さない)。
-  const wideLb = wide.filter((c) => c.lbBox && c.lbTextX0 != null);
-  const rightPad = Math.min(...wideLb.map((c) => c.cssW - c.lbBox.x1));
-  const innerPad = Math.min(...wideLb.map((c) => c.lbTextX0 - c.lbBox.x0));
-  const wantLeft = (c) => Math.max(0, c.lbBox.w + rightPad - c.cssW - innerPad);   // 文字の左端が表示域から出る量
-  const lbLeftBad = narrow.filter((c) => !c.lbBox || Math.abs(c.outSide.l - wantLeft(c)) > 0.5
-    || (c.outSide.l > 0.5 && c.outWho.join() !== 'drawFleetHud'));
-  ok(wideLb.length > 0 && lbLeftBad.length === 0,
-    `B3b 左のはみ出しは順位表だけ・量は「枠幅 + 右余白 ${rightPad.toFixed(0)} − 表示幅 − 枠内の左余白 ${innerPad.toFixed(0)}」ちょうど (違反 ${lbLeftBad.length}/${narrow.length}: ${JSON.stringify(lbLeftBad.slice(0, 3).map((c) => [c.opt, c.W, c.outSide.l.toFixed(1), c.lbBox ? wantLeft(c).toFixed(1) : null, c.outWho]))})`);
+  // B3b 左のはみ出しも 0 (BD2)。BC6 の時点では「順位表の最小枠 (hud.js LB.wMin=268) > 帯の表示幅」で
+  //   構造的にはみ出しており (320 幅で 68/68 セル・文字が 12px 外)、**導出した上界との一致**で縛るに
+  //   とどめていた (BC-9 ③)。BD2 が狭い画面で枠を詰めるようにしたので、述語を「0」へ引き上げる。
+  //   量で測るのは BC-9 ⑤ と同じ (2 値にすると「既知の限界」と「新しい退行」を分けられない)。
+  //   ⚠ 枠幅が両辺に現れる式は空振りする (BC-9 ⑥) ので、**枠が太る退行は下の B3d が独立に縛る**。
+  const lbLeftBad = narrow.filter((c) => c.outSide.l > 0.5);
+  ok(narrow.length > 0 && lbLeftBad.length === 0,
+    `B3b 帯に描かれた文字が帯の左からもはみ出さない (違反 ${lbLeftBad.length}/${narrow.length}・左の最大 ${Math.max(0, ...narrow.map((c) => c.outSide.l)).toFixed(2)} px: ${JSON.stringify(lbLeftBad.slice(0, 3).map((c) => [c.opt, c.W, c.outSide.l.toFixed(2), c.outWho]))})`);
   // B3d 順位表の枠幅そのものを**独立の上界**で縛る。B3b/B3c の式には枠幅が両辺に現れて相殺するので、
   //   枠が太る退行は B3b/B3c だけでは緑のまま通る (層 4 レビュー指摘)。上界は product の hud.js が持つ
   //   最小枠 LB.wMin ＝この母集団 (ja・1 台・既定装備) で順位表が取る幅そのもの。注記がこれを超えて
@@ -217,16 +234,24 @@ try {
   const fatLb = LBW == null ? cells.filter(() => true) : cells.filter((c) => c.lbBox && c.lbBox.w > LBW + 0.5);
   ok(LBW != null && fatLb.length === 0,
     `B3d 順位表の枠幅が hud.js の LB.wMin (${LBW}px) 以下 (実測 ${Math.min(...cells.filter((c) => c.lbBox).map((c) => c.lbBox.w)).toFixed(1)}〜${Math.max(...cells.filter((c) => c.lbBox).map((c) => c.lbBox.w)).toFixed(1)}px・超過 ${fatLb.length}${LBW == null ? '・LB が hud.js から引けない' : ''}: ${JSON.stringify(fatLb.slice(0, 3).map((c) => [c.opt, c.W, c.lbBox?.w.toFixed(1)]))})`);
-  // B3c 枠が入る表示幅のセルでは左のはみ出しも 0 (= 「入るのに切れる」退行を落とす)。
-  const roomy = narrow.filter((c) => c.lbBox && c.cssW >= c.lbBox.w + rightPad + innerPad - 0.5);
-  const roomyBad = roomy.filter((c) => c.outSide.l > 0.5);
-  ok(roomy.length > 0 && roomyBad.length === 0,
-    `B3c 順位表の枠が入る表示幅のセル (${roomy.length}/${narrow.length}) では左のはみ出しも 0 (違反 ${roomyBad.length})`);
+  // B3c 文字ではなく**順位表の枠そのもの**が、描かれたキャンバスの中に収まる。文字だけを見る B3b は、
+  //   枠が外へ出ていても中の文字がたまたま内側なら緑になりうる (枠の退行を文字では捕まえきれない)。
+  const lbCells = cells.filter((c) => c.lbBox && c.partBox && c.partBox.drawFleetHud);
+  const lbCanvasW = (c) => (c.partBox.drawFleetHud.cv === 'hudBand' ? c.bandCssW : c.cssW);
+  const lbFrameBad = lbCells.filter((c) => c.lbBox.x0 < -0.5 || c.lbBox.x1 > lbCanvasW(c) + 0.5);
+  ok(lbCells.length > 0 && lbFrameBad.length === 0,
+    `B3c 順位表の枠が描かれたキャンバスの中に収まる (対象 ${lbCells.length} セル・違反 ${lbFrameBad.length}・枠の左端の最小 ${Math.min(...lbCells.map((c) => c.lbBox.x0)).toFixed(2)}px: ${JSON.stringify(lbFrameBad.slice(0, 3).map((c) => [c.opt, c.W, c.lbBox.x0.toFixed(1), c.lbBox.x1.toFixed(1), lbCanvasW(c).toFixed(1)]))})`);
   for (const [W] of NARROW) {
     const cs = narrow.filter((c) => c.W === W);
-    const short = cs.filter((c) => c.outSide.l > 0.5);
-    console.log(`  ℹ ${W} 幅: 表示幅 ${cs[0].cssW.toFixed(0)}px・順位表の枠 ${cs[0].lbBox.w.toFixed(0)}px → 左のはみ出し ${cs.length ? Math.max(...cs.map((c) => c.outSide.l)).toFixed(0) : 0}px (${short.length}/${cs.length} セル)${short.length ? ' ← BC6 以前からの既知の限界 (順位表の最小枠 > 表示幅)。BC6 は下端の切れを 0 にした軸' : ''}`);
+    console.log(`  ℹ ${W} 幅: 表示幅 ${cs[0].cssW.toFixed(0)}px・順位表の枠 ${cs[0].lbBox.w.toFixed(0)}px (左端 ${cs[0].lbBox.x0.toFixed(0)}px) → 左のはみ出し ${cs.length ? Math.max(...cs.map((c) => c.outSide.l)).toFixed(2) : 0}px`);
   }
+  // B17 (BD2) 順位表の**行の中**で隣り合う文字が重ならない。枠が収まっていても中が潰れていたら読めない。
+  //   改修前は列が定数 (LB_COL) だったので構造的に起きなかったが、BD2 で列は s/kf からの計算値になった。
+  //   すき間は連続量で出す (「重なったか」の 2 値だと、詰まっていく途中が見えない＝CI-14)。
+  const rowCells = cells.filter((c) => c.lbPairN > 0 && c.lbRowGap != null);
+  const rowBad = rowCells.filter((c) => c.lbRowGap <= 0);
+  ok(rowCells.length === cells.length && rowBad.length === 0,
+    `B17 順位表の行の中で隣り合う文字が重ならない (対象 ${rowCells.length}/${cells.length} セル・測った隣接ペア ${cells.reduce((a, c) => a + (c.lbPairN || 0), 0)} 組・違反 ${rowBad.length}・すき間の最小 ${rowCells.length ? Math.min(...rowCells.map((c) => c.lbRowGap)).toFixed(2) : '—'} CSS px: ${JSON.stringify(rowBad.slice(0, 3).map((c) => [c.opt, c.W, c.lbRowGap.toFixed(2)]))})`);
   const worst = narrow.reduce((a, c) => (c.bandMinH != null && (!a || c.bandMinH < a.bandMinH) ? c : a), null);
   ok(!!worst && worst.bandMinH >= TEXT_MIN - EPS,
     `B4 帯の文字の表示高さの最小 ≥ ${TEXT_MIN} CSS px (最小 ${worst ? worst.bandMinH.toFixed(2) : '—'}px「${worst?.bandMinText}」@ ${worst?.opt} ${worst?.W})`);
@@ -278,7 +303,8 @@ try {
       const m = await measure();
       if (m.miniN >= 2 && low === null) low = W;
       if (m.miniN < 2) low = null;   // 出なくなったら下限を取り直す (連続して出る最小幅を探す)
-      scanRes.push({ v, W, mini: m.miniN >= 2, band: m.bandOn, cssH: m.cssH });
+      scanRes.push({ v, W, mini: m.miniN >= 2, band: m.bandOn, cssH: m.cssH, cssW: m.cssW,
+        left: m.outSide.l, minTxtH: m.minTxtH, lbW: m.lbBox ? m.lbBox.w : null, lbX0: m.lbBox ? m.lbBox.x0 : null });
     }
     await setFollow(false);
   }
@@ -303,6 +329,40 @@ try {
   }
   ok(flips.length > 0 && flips.every((f) => f[1] <= 1),
     `B14 帯の出る/出ないが画面幅に対して単調 (境界は高々 1 つ・[コース, 切替回数, 帯だった標本] = ${JSON.stringify(flips)})`);
+
+  // B15 (BD2) 走査した**全幅**で順位表が左へはみ出さず、文字も読める大きさを保つ。NARROW の 2 幅だけ
+  //   では「詰め方が幅に対して連続か」を見られない (280〜1000px を通して測る)。詰めるほど文字は小さく
+  //   なりうるので、はみ出しと文字の大きさは**同じ標本で同時に**固定する (片方だけだと逃げ道が残る)。
+  //   ⚠ 「順位表が描かれなかった標本」を読み飛ばすと、HUD が消える退行が無言で緑になる。標本ごとに
+  //     順位表が現に描かれたこと (lbW != null) を**同じ述語の中で**要求する (B12 と同じ作法)。
+  const scanMissing = scanRes.filter((x) => x.lbW == null || x.minTxtH == null);
+  const scanOut = scanRes.filter((x) => x.left > 0.5 || x.lbX0 < -0.5);
+  const scanSmall = scanRes.filter((x) => x.minTxtH != null && x.minTxtH < TEXT_MIN - EPS);
+  const scanH = scanRes.filter((x) => x.minTxtH != null).map((x) => x.minTxtH);
+  ok(scanRes.length > 0 && scanMissing.length === 0 && scanOut.length === 0 && scanSmall.length === 0,
+    `B15 走査幅 ${SCAN[0]}〜${SCAN.at(-1)}px の全標本 (${scanRes.length}) で順位表が描かれ (欠け ${scanMissing.length})・文字と枠が左へ出ず・文字 ≥ ${TEXT_MIN} CSS px (はみ出し ${scanOut.length}・小さすぎ ${scanSmall.length}・左の最大 ${Math.max(0, ...scanRes.map((x) => x.left)).toFixed(2)}px・文字の最小 ${scanH.length ? Math.min(...scanH).toFixed(2) : '—'}px・枠 ${scanRes.filter((x) => x.lbW != null).length ? Math.min(...scanRes.filter((x) => x.lbW != null).map((x) => x.lbW)).toFixed(0) + '〜' + Math.max(...scanRes.filter((x) => x.lbW != null).map((x) => x.lbW)).toFixed(0) + 'px' : '—'}: ${JSON.stringify([...scanOut, ...scanSmall].slice(0, 4).map((x) => [x.v, x.W, x.left.toFixed(2), x.minTxtH == null ? null : x.minTxtH.toFixed(2)]))})`);
+
+  // B16 (BD2) **崖の位置**を量で残す。順位表の詰めには下限 (hud.js の LB_SMIN / LB_FONT_MIN) があり、
+  //   枠幅がそこで止まると帯の表示幅に入らず左へ出る。下限は式を写さず **product に極小の画面幅 (200px)
+  //   を与えて作らせて**読む (再実装しない・CI-9)。
+  //   ⚠ 赤になる条件は B3c とほぼ同時で、**先に警告する検査ではない** (枠の下限が支える最小幅で入らなく
+  //     なった瞬間に、両方が同時に赤になる)。B16 の値は「崖がどこか・余裕がいくつか」を毎回 1 行で残す
+  //     ためのもので、落ちたときに原因 (下限が太ったのか・表示幅が痩せたのか) が一手で分かる。
+  {
+    await page.setViewportSize({ width: 200, height: 844 });
+    await page.waitForTimeout(600);
+    const tiny = await measure();
+    await page.setViewportSize({ width: SCAN[0], height: 844 });
+    await page.waitForTimeout(600);
+    const atMin = await measure();
+    const floorW = tiny.lbBox ? tiny.lbBox.w : null;
+    // 崖 = 枠幅の下限 + 右余白。右余白は「枠が収まっている幅」のセルから実測する (定数を写さない)。
+    const rightPad = atMin.lbBox ? atMin.cssW - atMin.lbBox.x1 : null;
+    const margin = (floorW != null && rightPad != null) ? atMin.cssW - (floorW + rightPad) : null;
+    ok(floorW != null && rightPad != null && margin != null && margin > 0 && atMin.lbBox.x0 >= -0.5,
+      `B16 支える最小の画面幅 ${SCAN[0]}px (表示幅 ${atMin.cssW?.toFixed(1)}px) から崖までの余裕 ${margin == null ? '—' : margin.toFixed(1)} CSS px > 0 (枠幅の下限 ${floorW == null ? '—' : floorW.toFixed(2)}px ＝ 画面幅 200px で product が作る枠・右余白 ${rightPad == null ? '—' : rightPad.toFixed(1)}px・${SCAN[0]}px での枠の左端 ${atMin.lbBox ? atMin.lbBox.x0.toFixed(1) : '—'}px)`);
+    console.log(`  ℹ 順位表の枠幅の下限 ${floorW == null ? '—' : floorW.toFixed(2)}px → 左へ出はじめる表示幅 ≈ ${floorW == null || rightPad == null ? '—' : (floorW + rightPad).toFixed(1)}px (画面幅 200px での枠の左端 ${tiny.lbBox ? tiny.lbBox.x0.toFixed(1) : '—'}px)`);
+  }
 
   // ── B13: devicePixelRatio > 1 の端末 (Xvfb は DPR=1 なので context で明示する) ──
   {
