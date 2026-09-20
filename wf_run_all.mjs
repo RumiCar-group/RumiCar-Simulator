@@ -115,6 +115,12 @@ const GATES = [
   //   ライブ経路 (requestAnimationFrame) の実測は実ブラウザゲート browser/check_bc7_frame.mjs。
   //   所要は本ホスト実測 9.1s（wf_run_all 内・2026-09-19）。
   'wf_bc7_budget.mjs',
+  // BD1: 実走容量 driveableCapN の覚え書きが「同じコース」を**形状**で判定すること。鍵が course.name だった
+  //   ため、保存コースの壁だけを編集して同じ名前で ✔適用すると古い実走判定が返っていた（BC-12 ③(a)）。
+  //   壁だけ違う 2 組（本数が変わる/座標だけ変わる）× 順序の両方向で真値（stuckAtN）との一致・digest の
+  //   衝突ゼロ・項目数の上限・carScale 掃引で増えないこと・鍵を壊す変異 4 件の検出力を固定する。
+  //   本番 UI（▶→編集→✔適用→▶）での再現と是正は browser/check_bd1_capkey.mjs。所要は本ホスト実測 11.5s（単独・2026-09-20）。
+  'wf_bd1_capkey.mjs',
 ].map((name) => ({ name, args: [] }));
 
 // official_result は決定論2回照合→result.json 再検証→Node pin 照合の複合ゲート (AP20)。

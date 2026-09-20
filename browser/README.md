@@ -80,7 +80,7 @@ const ver = await appModule(page, 'js/config.js', (m) => m.APP_VERSION);  // 本
 
 ## 既存ゲート群との関係
 
-`wf_*.mjs` の常設ゲート（`wf_run_all.mjs` の68本）は **`node_modules` 不要**であることが
+`wf_*.mjs` の常設ゲート（`wf_run_all.mjs` の69本）は **`node_modules` 不要**であることが
 フレッシュクローン検証の前提になっている。ブラウザ依存をそこへ持ち込まないよう、
 Playwright を使う検証は**本ディレクトリに隔離**する。`node_modules` は git 無視済み。
 
