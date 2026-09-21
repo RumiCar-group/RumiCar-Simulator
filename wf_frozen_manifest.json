@@ -20,11 +20,11 @@
   "canonicalNode": {
     "node": "22.22.1",
     "v8": "12.4.254.21-node.35",
-    "resultSha256": "28aedb93be4a8c0cb5eaf0f256d87723bb6a7edfe14cbcd2b2f875bf7550384a",
-    "pinnedAt": "2026-09-19",
+    "resultSha256": "e76d0399c58d1ea18d03282b4b67ec4b031a0d4cea44f31e95452cf102a39739",
+    "pinnedAt": "2026-09-21",
     "eventId": "official-sample-circuit",
-    "appVersion": "v8.6.0",
-    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: Stage BC 結了: 版 v8.6.0 (MINOR/AQ-4)。タッチ端末の操作 (BC5)・狭い画面の HUD 帯 (BC6)・コース取り込みの単一入口と 2 基準 (BC3)・投稿コースの選択復元 (BC4)・配信の Cache-Control (BC1)・i18n ゲート⑪ (BC2)・性能基準の再定義 (BC7)・上流 README 生成元 (BC8)・az2 ⑩ の検出力回復 (BC11)。走行物理 (physics*.js/contact_v2.js/sensors.js/fleet.js/geom.js) は差分 0 ＝ verifyHash c731ecce・順位・グリッドは不変。result.json の差は engineVer/appVersion の版文字列だけで、resultSha256 は APP_VERSION 経由で変わるため再ピン (AQ-1)。"
+    "appVersion": "v8.7.0",
+    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: BD6: Stage BD 結了で APP_VERSION v8.6.0 → v8.7.0 (MINOR/AQ-4)。engineFingerprint 経由で resultSha256 が変わるため再ピン (AQ-1)。verifyHash は不変 = 走行物理 無改変。"
   },
   "history": [
     {
