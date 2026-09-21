@@ -29,25 +29,30 @@
 // 選択経路も `selectCourse → applyCourse → enforceFitRatio('course')` と投稿コースと同一。
 // 上流 GitHub に依存しないのでレート制限や未配置でぶれない。
 import { launch, newPage, appModule, setLang } from './lib.mjs';
+// 【BD4・2026-09-21】「閉じた部屋」治具の寸法と**枠の導出**は 4 本のゲートで 1 つ（卓上 2 本と同じ module を呼ぶ）。
+// 本ファイルは node 側で治具を組み、ページへは**データとして**渡す（BB2 のコーパス共有 `wf_course_corpus.mjs`
+// と同じ型＝写しを作らない）。node とページが同じ寸法・同じ取り込み判定を見ていることは ① が前提として測る。
+import { closedRoomFixture, frameViolations, ROOM } from '../wf_roomfixture.mjs';
+import { setCarScale, setRegimeScale, CAR } from '../public/js/config.js';
 
 let pass = 0, fail = 0;
 const fails = [];
 const ok = (c, m) => { if (c) { pass++; console.log('  ✓ ' + m); } else { fail++; fails.push(m); console.log('  ✗ ' + m); } };
 
-// ── 治具（寸法は卓上・carScale 1 の CAR 0.190×0.080 m を前提に選定。実測で性質を確認済み）──────
+// ── 治具 ────────────────────────────────────────────────────────────────────────
 // (1) 袋小路の部屋: 静的には 3 台置けるが、実走では 1 台も車長ぶん動けない（⑥ 経路の母体）。
 //     奥行 1.7×車長 = 前方 0.5 車長は空く（fitsAllCars の driveable 判定を満たす）が車長ぶんは走れない。
 //     幅 4×車幅 = 横に複数台並べられる（静的 capN ≥ 2 ＝ ⑥ に入る条件）。
-const ROOM_X = 1.7 * 0.190, ROOM_Y = 4.0 * 0.080;
-const FIX_ROOM = {
-  name: 'AZ5 袋小路テスト',
-  bounds: { w: ROOM_X + 0.2, h: ROOM_Y + 0.2 },
-  start: { x: 0.5 * 0.190 + 0.005, y: ROOM_Y / 2, theta: 0 },
-  walls: [
-    { x1: 0, y1: 0, x2: ROOM_X, y2: 0 }, { x1: ROOM_X, y1: 0, x2: ROOM_X, y2: ROOM_Y },
-    { x1: ROOM_X, y1: ROOM_Y, x2: 0, y2: ROOM_Y }, { x1: 0, y1: ROOM_Y, x2: 0, y2: 0 },
-  ],
-};
+// 【BD4・2026-09-21】**寸法のハードコードと独自の枠をやめた。** 旧実装は車体寸法を `0.190`/`0.080` で
+//   書き写し、枠を「部屋 + 0.2 m」= 0.523×0.520 に取っていた。これは `COURSE_LIMITS.bMin`(0.5) まで
+//   **余裕が 0.023 m しかなく**、車体寸法が 10% 縮むだけで own 取り込みが `bounds.w` で落ちる
+//   （実測 2026-09-21）。落ちたら本治具は保存コースとして適用されず、下の ① は「前のコースのまま」を
+//   見るだけになる ＝ BC11 が `check_az2_fitguard` ⑩ で踏んだ空振りと同じ形。
+//   ∴ 寸法も枠も `wf_roomfixture.mjs` に答えさせ、**適用されたことを前提として測る**（BC-12 ①）。
+setRegimeScale(1); setCarScale(1);
+const ROOM_FX = closedRoomFixture({ name: 'AZ5 袋小路テスト', L: CAR.length, W: CAR.width,
+  start: (X, Y, L) => ({ x: 0.5 * L + 0.005, y: Y / 2, theta: 0 }) });
+const FIX_ROOM = ROOM_FX.data;
 // 閉じた廊下。gap と長さで収容台数を決める。finish を持たせないと `raceableCourse()` が先に止める。
 const corridor = (name, len, gap) => {
   const xa = 1.0, xb = 1.0 + len, yc = 9.0;
@@ -143,6 +148,22 @@ const browser = await launch();
 {
   console.log('\n【①】置けるが実走で 1 台も走り出せないコース × 多台 → 実走ゼロとして告知する');
   const { page, errors } = await newPage(browser);
+  // 【BD4】治具そのものの前提を先に測る。①「枠が product に答えさせた値である」②「node とページが
+  //   同じ車体寸法・同じ取り込み判定を見ている」。どちらかが崩れると以降は空振りする。
+  const viol = frameViolations(ROOM_FX);
+  ok(viol.length === 0,
+     `前提: 枠は product が答えた値（部屋 ${ROOM.depth}×車長 × ${ROOM.width}×車幅`
+     + ` = ${ROOM_FX.X.toFixed(3)}×${ROOM_FX.Y.toFixed(3)}m・枠 ${ROOM_FX.frame}m）${viol.length ? ' — ' + viol.join(' / ') : ''}`);
+  const live = await page.evaluate(async (d) => {
+    const cfg = await import(new URL('js/config.js', location.href).href);
+    const crs = await import(new URL('js/course.js', location.href).href);
+    return { L: cfg.CAR.length / cfg.SCALE_STATE.userK, W: cfg.CAR.width / cfg.SCALE_STATE.userK,
+             accepted: d === null ? null : crs.acceptCourseData(d, { own: true }).ok };
+  }, FIX_ROOM);
+  ok(Math.abs(live.L - CAR.length) < 1e-12 && Math.abs(live.W - CAR.width) < 1e-12,
+     `前提: node とページの車体寸法が一致（node ${CAR.length.toFixed(6)}×${CAR.width.toFixed(6)}`
+     + ` / page ${live.L.toFixed(6)}×${live.W.toFixed(6)}）＝同じ治具を組んでいる`);
+  ok(live.accepted === true, `前提: ページ側の取り込み検査も枠 ${ROOM_FX.frame}m を受け取る（実測 ok=${live.accepted}）`);
   await seed(page, [FIX_ROOM]);
 
   // ⑥ は slots.length > 1 のときだけ実走プローブを回す。先に 1 台足してから治具コースを選ぶ。
@@ -154,6 +175,19 @@ const browser = await launch();
   const before = (await logText(page)).length;
   await page.selectOption('#courseSel', FIX_ROOM.name);
   const added = await settle(page, before);
+
+  // **取り込みで断られていないことを測る**（断られると courseSel は戻り、前のコースのまま以降を見る
+  //   ことになる＝この検査が何も測らなくなる。BC11 が `check_az2_fitguard` ⑩ で踏んだ形・BC-12 ①）。
+  const applied = await page.evaluate(() =>
+    import(new URL('js/state.js', location.href).href).then((m) => m.course.name));
+  ok(applied === FIX_ROOM.name, `① 前提: 治具コースが実際に適用された（実測 state.course.name="${applied}"）`);
+  // **治具が「走り出せない部屋」であることを、告知とは別の物差しで測る**（BC-12 ①）。無いと、CAR 寸法や
+  //   物理定数が動いて治具が「走り出せる部屋」に化けたとき、その赤を「product の退行」と読み違える。
+  const stuck1 = await page.evaluate(() =>
+    Promise.all([import(new URL('js/capacity.js', location.href).href),
+                 import(new URL('js/state.js', location.href).href)])
+      .then(([cap, st]) => cap.stuckAtN(st.course, 'tabletop', 1)));
+  ok(stuck1 === 1, `① 前提: この治具では 1 台が車長ぶんも動けない（product の stuckAtN(1)=${stuck1}・1 が「動けない」）`);
 
   ok(RE.capZeroDrive.test(added), '① 実走ゼロを告知している（「置くことはできても走り出せる車が 1 台もありません」）');
   ok(!RE.capReduced.test(added), '① 「最大 n 台なら走り出せます」とは言っていない（旧実装が 0→1 の丸めで出していた嘘）');

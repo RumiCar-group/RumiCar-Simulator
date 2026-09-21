@@ -45,6 +45,7 @@ import { buildFromSpec, normalizeCourse } from './public/js/course.js';
 import { fitsAllCars, capacityOf } from './public/js/fleet.js';
 import { setCarScale, setRegimeScale, CAR, FLEET, REGIMES } from './public/js/config.js';
 import { settleFitRatio, FIT } from './public/js/fitguard.js';
+import { closedRoomFixture, frameViolations, ROOM } from './wf_roomfixture.mjs';
 import { runRace } from './public/js/race_engine.js';
 import { PROGRAM_BY_KEY } from './public/js/programs.js';
 
@@ -220,6 +221,28 @@ function narrowCorridorFixture() {
   return normalizeCourse({ name: 'AZ2 fixture: wide frame / closed narrow corridor', walls, bounds: { w: W, h: H }, start: { x: 2.0, y: yc, theta: 0 } });
 }
 
+// ── 治具: **静的には置けるが 1 台も走り出せない**閉じた小部屋（H) と E) ⑤ が共用）──────────
+// 【BD4・2026-09-21】部屋の寸法と**枠 (bounds) の導出**は `wf_roomfixture.mjs` が唯一の定義
+// （本ゲート・`wf_az5_capzero.mjs`・`browser/check_az2_fitguard.mjs`・`browser/check_az5_race.mjs`
+//   の 4 本で同じ導出を使う。`wf_ba1_fitcore.mjs:68` の写しだけは凍結ダイジェストのため意図して残す）。
+// 旧実装はここで枠を正方 2.0 m に固定し、部屋を (0.2, 0.84) へ浮かせていた。
+// **枠は走行の母体に効かない**（実測 2026-09-21: 配置を変えずに枠だけ 2.0 → 0.503 にしたときの
+//   スポーン 6 点の差は cs 1/0.8/0.6/0.5 のすべてで厳密に 0）。一方 **部屋の平行移動は 0 ではない**
+//   （cs0.8 で 1 点ぶん 0.22 m ずれる＝`fleet.js:72` の重複除去キーが絶対座標のため割当順が入れ替わる）。
+//   ただし収容オラクルの答えは全倍率で一致する（`fitsAllCars(6)`・`capacityOf` が旧＝新）。
+// **枠は取り込み検査の `COURSE_LIMITS.bMin` に効く**ので、各本が別々の根拠で値を持っていると
+// BC11 でブラウザ側に起きた「治具が適用されず検査が静かに空振り」が別の本で再発しうる。
+function pocketFixture() {
+  setRegimeScale(kL('tabletop')); setCarScale(1);
+  const fx = closedRoomFixture({ name: 'AZ6 pocket: 閉じた小部屋', L: CAR.length, W: CAR.width,
+    start: (X, Y) => ({ x: X * 0.35, y: Y / 2, theta: 0 }) });
+  // **代わりの枠を勝手に作らない。** 組めない治具で先へ進むと、以降の前提の緑が嘘になる。
+  // 枠が見つからない場合だけここで止める（他の違反は E) ⑤ が全件を名指しで赤くする）。
+  if (fx.frame === null || fx.course === null)
+    throw new Error(`治具「閉じた小部屋」を組めない: product の取り込み検査 (acceptCourseData) が受理した枠が無い（frame=${fx.frame}）`);
+  return fx;
+}
+
 console.log('Stage AZ2/AZ6 フィットガード・ゲート — 落ち着いた先で実態収容 capN ≥ 1 を守る');
 console.log('='.repeat(78));
 
@@ -302,15 +325,10 @@ report("C) ④' 後に carScale が復元されなかったセル（AZ6）", fxN
   const hFail = [];
   const openGeom = () => ({ bounds: { w: 3, h: 3 }, start: { x: 1.5, y: 1.5, theta: 0 },
     walls: [{ x1: 0, y1: 0, x2: 3, y2: 0 }, { x1: 3, y1: 0, x2: 3, y2: 3 }, { x1: 3, y1: 3, x2: 0, y2: 3 }, { x1: 0, y1: 3, x2: 0, y2: 0 }] });
-  // 収まらない側＝E) ⑤ と同じ「外形は広く、スタート地点だけ閉じた小部屋」（卓上 cs1 で静的に 3 台）。
-  setRegimeScale(kL('tabletop')); setCarScale(1);
-  const L = CAR.length, W = CAR.width;
-  const pocketGeom = () => {
-    const X = 1.7 * L, Y = 4 * W, W0 = 2.0, y0 = W0 / 2 - Y / 2, x0 = 0.2;
-    return { bounds: { w: W0, h: W0 }, start: { x: x0 + X * 0.35, y: W0 / 2, theta: 0 },
-      walls: [{ x1: x0, y1: y0, x2: x0 + X, y2: y0 }, { x1: x0 + X, y1: y0, x2: x0 + X, y2: y0 + Y },
-              { x1: x0 + X, y1: y0 + Y, x2: x0, y2: y0 + Y }, { x1: x0, y1: y0 + Y, x2: x0, y2: y0 }] };
-  };
+  // 収まらない側＝E) ⑤ と同じ「静的には置けるが 1 台も走り出せない閉じた小部屋」（卓上 cs1 で静的に 3 台）。
+  // 寸法と枠は `pocketFixture()`（= wf_roomfixture.mjs）が単一真実源。**毎回組み直す**
+  // （② が `Object.assign` で中身を差し替えるので、共有した配列を持ち回らない）。
+  const pocketGeom = () => { const d = pocketFixture().data; return { bounds: d.bounds, start: d.start, walls: d.walls }; };
   const mk = (name, g) => normalizeCourse({ name, ...g });
   {
     setRegimeScale(kL('tabletop')); setCarScale(1);
@@ -738,22 +756,41 @@ const noFx = { regime: (n) => { setRegimeScale(kL(n)); }, scale: (k2) => setCarS
 //   **時間では測らない**（環境ノイズに負ける）。「静的には置けるが 1 台も走り出せない」治具を使い、
 //   **`capZeroDrive` が立つかどうか**という二値で測る — 立てば実走プローブが走った動かぬ証拠になる。
 {
-  // 外形は広く（③ が縮めない）、スタート地点だけ閉じた小部屋＝静的 capN≥1・実走 0。
-  const mk = () => {
-    setRegimeScale(kL('tabletop')); setCarScale(1);
-    const L = CAR.length, W = CAR.width, X = 1.7 * L, Y = 4 * W, W0 = 2.0, y0 = W0 / 2 - Y / 2, x0 = 0.2;
-    return normalizeCourse({ name: 'AZ6 perf fixture: pocket', bounds: { w: W0, h: W0 },
-      start: { x: x0 + X * 0.35, y: W0 / 2, theta: 0 },
-      walls: [{ x1: x0, y1: y0, x2: x0 + X, y2: y0 }, { x1: x0 + X, y1: y0, x2: x0 + X, y2: y0 + Y },
-              { x1: x0 + X, y1: y0 + Y, x2: x0, y2: y0 + Y }, { x1: x0, y1: y0 + Y, x2: x0, y2: y0 }] });
-  };
-  const pocket = mk();
+  // 静的には置けるが（③ が縮めても 1 台は置ける）1 台も走り出せない閉じた小部屋＝静的 capN≥1・実走 0。
+  // 寸法と枠は `pocketFixture()`（= wf_roomfixture.mjs）が単一真実源。
+  const pocketFx = pocketFixture();
+  const pocket = pocketFx.course;
+  // ── 【BD4・2026-09-21】治具そのものの前提 ①（**治具を使う前に**測る）──────────────────
+  //   枠を各所で勝手に決めていた時代の穴（BC11＝枠 < COURSE_LIMITS.bMin で保存コースとして適用されず、
+  //   検査が静かに空振りした）を、**枠を書き換える変異で名指しで赤くなる形**で固定する。
+  //   判定は `wf_roomfixture.mjs:frameViolations`（取り込み own/std ＋ **グリッド整合と最小性**）。
+  //   後ろ 2 つが非循環な本体で、枠を 2.0 や 0.523 や 0.5 に書き直す変異を赤にする（実測 2026-09-21）。
+  {
+    const viol = frameViolations(pocketFx);
+    for (const m of viol) perfBad.push(`⑤ の治具: ${m}`);
+    console.log(`  ⑤ 治具の枠: ${pocketFx.frame}m（product の取り込み検査が答えた値）・違反 ${viol.length} 件`);
+  }
   const run = (reason) => {
     setRegimeScale(kL('tabletop')); setCarScale(1);
     return settleFitRatio(pocket, { regime: 'tabletop', userK: 1, slotCount: 1, reason }, noFx);
   };
   const race = run('race');
-  console.log(`  ⑤ 治具（外形 2×2m・スタート地点だけ閉じた小部屋）: reason='race' → capZeroDrive=${race.capZeroDrive}・capZeroStatic=${race.capZeroStatic}`);
+  console.log(`  ⑤ 治具（閉じた小部屋 ${ROOM.depth}×車長 × ${ROOM.width}×車幅 = ${pocketFx.X.toFixed(3)}×${pocketFx.Y.toFixed(3)}m・`
+    + `枠 ${pocketFx.frame}m＝product の取り込み検査が答えた値）: reason='race' → capZeroDrive=${race.capZeroDrive}・capZeroStatic=${race.capZeroStatic}`);
+  // ── 【BD4・2026-09-21】治具そのものの前提 ②: **部屋/車の比が凍結値のまま**──────────────
+  //   落ち着き先（卓上 cs0.5）で 奥行 3.40 車長・幅 8.00 車幅。統一前の実測値（2026-09-21・旧枠 2.0m でも
+  //   同値）＝**走行の母体を変えていない**ことの数値の証人。部屋の倍数（ROOM）か落ち着き先の倍率の
+  //   どちらが動いてもここが赤くなる。**落ち着き先の寸法で測るので `run('race')` の後に置く。**
+  //   ⚠ この比は `ROOM.depth / 落ち着き先の userK` に等しく（車長は約分で消える）、**枠には反応しない**。
+  //      ∴ 赤くなったとき容疑は 2 つ — 治具の倍数（ROOM）が動いた／product の carScale 下限
+  //      （`fitguard.js:FIT.userKMin`）が動いた。どちらかを名指しできるよう **落ち着き先の userK も出す**。
+  {
+    const rd = pocketFx.X / CAR.length, rw = pocketFx.Y / CAR.width;
+    console.log(`     部屋/車比（落ち着き先 cs${race.userK}）: 奥行 ${rd.toFixed(2)} 車長・幅 ${rw.toFixed(2)} 車幅（凍結 3.40 / 8.00）`);
+    if (Math.abs(rd - 3.40) > 5e-3 || Math.abs(rw - 8.00) > 5e-3)
+      perfBad.push(`⑤ の治具の部屋/車比が凍結値から動いた（奥行 ${rd.toFixed(3)}（3.40）・幅 ${rw.toFixed(3)}（8.00）・落ち着き先 cs${race.userK}`
+        + `・ROOM=${ROOM.depth}/${ROOM.width}）＝治具の倍数か product の carScale 下限のどちらかが動いた`);
+  }
   if (race.capZeroStatic) perfBad.push('⑤ の治具が静的にも置けない＝この検査は ⑥ を通っていない（治具の作り直しが要る）');
   if (!race.capZeroDrive) perfBad.push("reason==='race' でも実走ゼロを検出できていない（⑥ の 1 台分岐が死んでいる＝下の 0 件は空振り）");
   const browsed = [];

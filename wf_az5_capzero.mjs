@@ -62,6 +62,7 @@ import { applyRegime } from './public/js/physics_dyn.js';
 import { setCarScale, setRegimeScale, setPhysicsMode, CAR, FLEET, REGIMES, REGIME_STATE, SCALE_STATE, SENSOR_NOISE, SENSOR_HOLD, SENSOR_OPTICS, PHYSICS } from './public/js/config.js';
 import { PROGRAM_BY_KEY } from './public/js/programs.js';
 import { FROZEN } from './wf_frozen.mjs';
+import { closedRoomFixture, frameViolations, ROOM } from './wf_roomfixture.mjs';
 
 const specs = JSON.parse(fs.readFileSync('./public/data/courses.json', 'utf8'));
 const kL = (r) => REGIMES[r].L / REGIMES.tabletop.L;
@@ -114,13 +115,24 @@ function narrowCorridorFixture() {
 //     奥行きは「前方 0.5 車長は空く（fitsAllCars の driveable 判定を満たす）が、車長ぶんは走れない」値に取る。
 //     幅は 2 台以上を横に並べられる値に取る（静的 capN ≥ 2 ＝ main.js ⑥ に入る条件）。寸法は現 CAR から導く
 //     ので、車体寸法が変わっても治具の性質（静的に置ける／走り出せない）が保たれる。
+// 【BD4・2026-09-21】寸法と**枠 (bounds) の導出**は `wf_roomfixture.mjs` が唯一の定義
+//   （本ゲート・`wf_az2_fitguard.mjs`・`browser/check_az2_fitguard.mjs`・`browser/check_az5_race.mjs`
+//    の 4 本で同じ導出を使う）。旧実装はここで枠を「部屋 + 0.2 m」の非正方（0.523×0.520）に取っていた。
+//   値としては `COURSE_LIMITS.bMin`(0.5) を上回っていたが、それは偶然であって根拠ではない
+//   （実測 2026-09-21: 余裕は 0.023 m しかなく、車体寸法が 10% 縮むだけで own 取り込みが `bounds.w` で落ちる。
+//    同じ治具のブラウザ側 `check_az2_fitguard` は枠＝部屋で bMin を下回り、BC3 が全取り込み経路へ bMin を
+//    課した瞬間に**適用されず静かに空振り**した＝BC11 が是正）。
+//   ∴ 枠は 4 本とも product の入口 `acceptCourseData` に答えさせる。
 function deadEndRoomFixture() {
-  const X = 1.7 * CAR.length, Y = 4.0 * CAR.width;
-  const walls = [
-    { x1: 0, y1: 0, x2: X, y2: 0 }, { x1: X, y1: 0, x2: X, y2: Y },
-    { x1: X, y1: Y, x2: 0, y2: Y }, { x1: 0, y1: Y, x2: 0, y2: 0 },
-  ];
-  return normalizeCourse({ name: 'AZ5 fixture: dead-end room', walls, bounds: { w: X + 0.2, h: Y + 0.2 }, start: { x: 0.5 * CAR.length + 0.005, y: Y / 2, theta: 0 } });
+  const fx = closedRoomFixture({ name: 'AZ5 fixture: dead-end room', L: CAR.length, W: CAR.width,
+    // **引数の L から導く**（外側の CAR.length を読むと、L と CAR.length が食い違う呼び方をした瞬間に
+    //   部屋と start が別の寸法から作られる）。0.5 車長 + 5mm の意味づけは上のコメントのとおり。
+    start: (X, Y, L) => ({ x: 0.5 * L + 0.005, y: Y / 2, theta: 0 }) });
+  // **代わりの枠を勝手に作らない**（組めない治具で先へ進むと、以降の前提の緑が嘘になる）。
+  // **`course` まで確かめる**（枠だけ見て進むと、受理していないコースで走って別の場所が謎の例外で落ちる）。
+  if (fx.frame === null || fx.course === null)
+    throw new Error(`治具「閉じた部屋」を組めない: product の取り込み検査 (acceptCourseData) が受理した枠が無い（frame=${fx.frame}）`);
+  return fx;
 }
 
 // ── A) 反証条件の固定 ──────────────────────────────────────────────────────────
@@ -143,7 +155,13 @@ console.log('\nA-1) race_engine: 収容 0 台のレースを成立させない�
 console.log('\nA-2) capacity: 実走の収容ゼロを 1 に丸めない（治具: 卓上・閉じた部屋 幅 4×車幅 × 奥行 1.7×車長）');
 {
   setRegimeScale(1); setCarScale(1);
-  const fx2 = deadEndRoomFixture();
+  const room = deadEndRoomFixture();
+  const fx2 = room.course;
+  // 【BD4】治具そのものの前提: **枠が product に答えさせた値であること**。枠を各所で勝手に決めて
+  //   いた時代の穴（BC11＝枠 < COURSE_LIMITS.bMin で保存コースとして適用されず、検査が静かに空振り）を
+  //   ここでも赤くする。判定は `wf_roomfixture.mjs:frameViolations`（取り込み own/std ＋ グリッド整合＋最小性）。
+  report(`治具の枠 ${room.frame}m の違反（product に答えさせた値であること）`, frameViolations(room));
+  console.log(`       （部屋 ${ROOM.depth}×車長 × ${ROOM.width}×車幅 = ${room.X.toFixed(3)}×${room.Y.toFixed(3)}m）`);
   const capStatic = capacityOf(fx2, MAXN);
   ok(capStatic >= 2, `静的 capacityOf = ${capStatic} 台（≥2 = main.js ⑥ に入る条件を満たす＝旧実装が嘘をつく母体）`);
   const st1 = stuckAtN(fx2, 'tabletop', 1);

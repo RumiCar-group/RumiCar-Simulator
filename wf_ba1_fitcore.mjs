@@ -64,7 +64,12 @@ function fixtures() {
       { x1: xa, y1: yc - gap / 2, x2: xb, y2: yc - gap / 2 }, { x1: xb, y1: yc - gap / 2, x2: xb, y2: yc + gap / 2 },
       { x1: xb, y1: yc + gap / 2, x2: xa, y2: yc + gap / 2 }, { x1: xa, y1: yc + gap / 2, x2: xa, y2: yc - gap / 2 }] }));
   }
-  {   // スタート地点だけ閉じた小部屋（wf_az2_fitguard.mjs E) ⑤ と同形・卓上 cs1 の寸法で固定）
+  {   // スタート地点だけ閉じた小部屋。**【BD4・2026-09-21】意図して凍結した写しである。**
+      //   BD4 は同型の治具 4 本（wf_az2_fitguard / wf_az5_capzero / browser の 2 本）の枠の導出を
+      //   `wf_roomfixture.mjs` へ 1 つにまとめ、部屋を原点・枠を product に答えさせた値（0.503m）へ揃えた。
+      //   **ここだけ揃えない**: 下の PINNED は改修前ツリー（63fa638）で取った出力ダイジェストで、配置を
+      //   変えると凍結値を刻み直すことになり、回帰記録としての価値が消える。∴ 枠 2.0・部屋 (0.2, 0.84)・
+      //   車体寸法のリテラルをそのまま残す（wf_az2_fitguard E) ⑤ とは**もう同形ではない**）。
     const L = 0.19, Wc = 0.08, X = 1.7 * L, Y = 4 * Wc, W0 = 2.0, y0 = W0 / 2 - Y / 2, x0 = 0.2;
     out.push(normalizeCourse({ name: 'fx:pocket', bounds: { w: W0, h: W0 }, start: { x: x0 + X * 0.35, y: W0 / 2, theta: 0 }, walls: [
       { x1: x0, y1: y0, x2: x0 + X, y2: y0 }, { x1: x0 + X, y1: y0, x2: x0 + X, y2: y0 + Y },

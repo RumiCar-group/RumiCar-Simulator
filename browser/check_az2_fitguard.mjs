@@ -36,6 +36,11 @@
 // 選択経路も `selectCourse → applyCourse → enforceFitRatio('course')` と投稿コースと同一。
 // 上流 GitHub に依存しないので、レート制限や未配置でぶれない。
 import { launch, newPage, appModule } from './lib.mjs';
+// 【BD4・2026-09-21】「閉じた部屋」治具の寸法と**枠の導出**は 4 本のゲートで 1 つ（卓上 2 本・browser 2 本が同じ module を呼ぶ）。
+// 本ファイルは node 側で治具を組み、ページへは**データとして**渡す（BB2 のコーパス共有 `wf_course_corpus.mjs`
+// と同じ型＝写しを作らない）。node とページが同じ寸法・同じ取り込み判定を見ていることは ⑩ が前提として測る。
+import { closedRoomFixture, frameViolations, ROOM } from '../wf_roomfixture.mjs';
+import { setCarScale, setRegimeScale, CAR } from '../public/js/config.js';
 
 let pass = 0, fail = 0;
 const fails = [];
@@ -271,7 +276,7 @@ const browser = await launch();
 // コースを既定（1 台）で開いても**無言**だった（🏁 も `capacityOf(course,1)=1` なので NO_ROOM に
 // ならず「0台完走 / 1台リタイア」だけが出る）。AZ6 は発走直前 (reason==='race') に 1 台ぶんの
 // 実走プローブを払って告知する。**利用者の操作（▶ を押す）だけで確かめる。**
-// 【BC11・2026-09-19 是正】**枠 (bounds) を取り込み検査が受け取る大きさまで広げた。**
+// 【BC11・2026-09-19 是正／BD4・2026-09-21 で 4 本に統一】**枠 (bounds) を取り込み検査が受け取る大きさまで広げた。**
 //   初版は枠＝部屋そのもの（実測 0.323×0.320 m）だったが、BC3 が全取り込み経路へ課した
 //   `COURSE_LIMITS.bMin`（出荷 0.5 m）に **std/own とも `bounds.w` で落ちる**ようになり、
 //   保存コースとして選んでも**適用されない**。その結果この ⑩ は「前の普通のコースのまま ▶ を
@@ -288,38 +293,51 @@ const browser = await launch();
 //   枠の値は **product に答えさせる**（`COURSE_LIMITS` は course.js の export に無いので書き写せない
 //   ＝ BC5 で実測）: `acceptCourseData` が受け取る枠を部屋の大きさから 0.01 m 刻みで上へ探し、
 //   **最初に合格した値**を使う（グリッド上の最初の合格値であって、下限そのものの値ではない）。
+//   【BD4】同じ治具が卓上 2 本（`wf_az2_fitguard.mjs` / `wf_az5_capzero.mjs`）にもあり、枠だけが 3 通りに
+//   分かれていた（正方 2.0 m 固定／部屋 +0.2 m／ここの探索）。卓上 2 本は値が**偶然** bMin を上回って
+//   いただけで、ここと同じ根拠を持っていたわけではない。∴ 上の探索を `wf_roomfixture.mjs` へ出し、
+//   4 本ともそれを呼ぶ。組む場所も node 側へ移した（卓上 2 本と同じ関数を呼ぶ）。
+//   **統一したのは部屋の寸法と枠の導出まで**で、発進位置 `start` は各ゲートの旧実装をそのまま保存して
+//   呼び出し側が与える（az2 ⑤ は部屋の左壁から 0.35X・az5 は 0.5 車長+5mm・ここは X/2）。前方の余地が
+//   違うので `stuckAtN` が測るものは 4 本で同一ではない — **同一なのは「閉じた部屋の大きさと枠」だけ**。
 //   **「治具が実際に適用された」ことと「治具では実際に走り出せない」ことを前提として測る**のが
 //   本質の直し（BC-7 の一般則: 取り込みの受理範囲を狭める改修は、範囲外を治具にした検証を静かに
 //   無効化する。前者が無いと黙って空振りし、後者が無いと治具の陳腐化を product の退行と読み違える）。
 {
   console.log('\n【⑩】静的には置けるが 1 台も走り出せないコース → ▶ の直前に告知（AZ6）');
   const { page, errors } = await newPage(browser);
-  // 卓上の実寸から「閉じた部屋 幅 4×車幅 × 奥行 1.7×車長」を作る（AZ5 と同じ治具の作り方）。
-  const built = await page.evaluate(async () => {
+  // 卓上の実寸から「閉じた部屋 幅 4×車幅 × 奥行 1.7×車長」を作る（卓上 2 本と**同じ関数**・BD4）。
+  setRegimeScale(1); setCarScale(1);
+  const built = closedRoomFixture({ name: 'AZ6 動けない部屋', L: CAR.length, W: CAR.width,
+    start: (X, Y) => ({ x: X / 2, y: Y / 2, theta: 0 }) });
+  // **node で組んだものが、ページでも同じ治具であることを測る。** どちらかがズレると（配信ツリーが
+  // 別・車体既定が別）「前提は揃っているのに product が告知しない」と読める出力になる。
+  //   ・車体寸法 … ページの実寸を carScale で正規化した値（旧実装がここから X/Y を作っていた値そのもの）
+  //   ・取り込み判定 … ページ側の `acceptCourseData` も同じ枠を受け取るか（node 側だけで決めない）
+  const live = await page.evaluate(async (d) => {
     const cfg = await import(new URL('js/config.js', location.href).href);
     const crs = await import(new URL('js/course.js', location.href).href);
-    const L = cfg.CAR.length / cfg.SCALE_STATE.userK, W = cfg.CAR.width / cfg.SCALE_STATE.userK;
-    const X = 1.7 * L, Y = 4 * W;
-    const start = { x: X / 2, y: Y / 2, theta: 0 };
-    const walls = [{ x1: 0, y1: 0, x2: X, y2: 0 }, { x1: X, y1: 0, x2: X, y2: Y },
-                   { x1: X, y1: Y, x2: 0, y2: Y }, { x1: 0, y1: Y, x2: 0, y2: 0 }];
-    const mk = (s) => ({ name: 'AZ6 動けない部屋', bounds: { w: s, h: s }, start, walls });
-    // 取り込み検査が受け取る枠を product に答えさせる（上限 5 m は探索の打ち切り）。
-    const r3 = (v) => Math.round(v * 1000) / 1000;
-    let frame = null;
-    for (let s = r3(Math.max(X, Y)); s <= 5.0001; s = r3(s + 0.01)) {
-      if (crs.acceptCourseData(mk(s), { own: true }).ok) { frame = s; break; }
-    }
-    return { X, Y, frame, room: frame === null ? null : mk(frame) };
-  });
-  ok(built.frame !== null,
-     `⑩ 前提: 保存コースの取り込み検査を通る枠が見つかった（部屋 ${built.X.toFixed(3)}×${built.Y.toFixed(3)}m・枠 ${built.frame}m）`);
+    return { L: cfg.CAR.length / cfg.SCALE_STATE.userK, W: cfg.CAR.width / cfg.SCALE_STATE.userK,
+             accepted: d === null ? null : crs.acceptCourseData(d, { own: true }).ok };
+  }, built.data);
+  // 枠が product に答えさせた値であることを node 側で全件判定する（取り込み own/std ＋ グリッド整合＋最小性）。
+  const viol = frameViolations(built);
+  ok(viol.length === 0,
+     `⑩ 前提: 枠は product が答えた値（部屋 ${ROOM.depth}×車長 × ${ROOM.width}×車幅`
+     + ` = ${built.X.toFixed(3)}×${built.Y.toFixed(3)}m・枠 ${built.frame}m）${viol.length ? ' — ' + viol.join(' / ') : ''}`);
+  ok(Math.abs(live.L - CAR.length) < 1e-12 && Math.abs(live.W - CAR.width) < 1e-12,
+     `⑩ 前提: node とページの車体寸法が一致（node ${CAR.length.toFixed(6)}×${CAR.width.toFixed(6)}`
+     + ` / page ${live.L.toFixed(6)}×${live.W.toFixed(6)}）＝同じ治具を組んでいる`);
+  ok(live.accepted === true,
+     `⑩ 前提: ページ側の取り込み検査も枠 ${built.frame}m を受け取る（実測 ok=${live.accepted}）`);
   // **枠が見つからないときは以降を走らせない。** 代わりの治具を置くと「前提は揃っているのに
   // product が告知しない」と読める出力になる（前提の緑が嘘になる）。
-  if (built.frame === null) {
-    console.log('  … 枠が見つからないため ⑩ の残りは実施しない（取り込み検査の下限を確認すること）');
+  // **ページ側が受理しないときも残りを走らせない。** node が受理してページが拒否する状態
+  // （配信ツリーが古い等）で先へ進むと、⑩ の本体が「前の普通のコースのまま ▶ を押す」空振りになる。
+  if (built.frame === null || built.course === null || live.accepted !== true) {
+    console.log('  … 取り込み検査が受理する枠が無いため ⑩ の残りは実施しない（取り込み検査の下限を確認すること）');
   } else {
-  const room = built.room;
+  const room = built.data;
   await seed(page, [room]);
   await page.selectOption('#courseSel', room.name);
   await page.waitForTimeout(2000);

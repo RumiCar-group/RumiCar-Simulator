@@ -131,7 +131,8 @@ GATES.push({ name: 'wf_official_result.mjs', args: ['--out', OFFICIAL_OUT] });
 // 意図的に非実行 (沈黙截断の禁止・CI-14 — 何を回さないかを明示する)。
 const EXCLUDED = {
   'probe (常に exit0・計測のみ＝アサート無し)': ['wf_ab5_measure.mjs'],
-  'library (単体実行不可・ゲートが import)': ['wf_i18n_hash.mjs', 'wf_frozen.mjs', 'wf_touge_driver.mjs', 'wf_drift_opt.mjs', 'wf_course_corpus.mjs'],
+  // wf_roomfixture.mjs = 「閉じた部屋」治具の寸法と枠の導出 (BD4・卓上 2 本と browser/check_az2_fitguard.mjs が共有)。
+  'library (単体実行不可・ゲートが import)': ['wf_i18n_hash.mjs', 'wf_frozen.mjs', 'wf_touge_driver.mjs', 'wf_drift_opt.mjs', 'wf_course_corpus.mjs', 'wf_roomfixture.mjs'],
   '変異ツール (product/manifest を書換＝non-変異証明のため除外)': ['wf_i18n_rehash.mjs', 'wf_refreeze.mjs'],
 };
 
