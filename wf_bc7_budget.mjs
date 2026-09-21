@@ -9,7 +9,7 @@
 //   守る実態: 利用者が **FLEET.maxCars 台**を **UI が出せる最大の速度倍率**で走らせたとき、
 //             シミュレーション時刻が実時間×速度倍率から遅れないこと。
 //
-//   導出: ライブの 1 フレームで進めるべきシム時間は `dt × speedMax`（main.js:493 `const sdt = real * speed;`）。
+//   導出: ライブの 1 フレームで進めるべきシム時間は `dt × speedMax`（main.js:496 `const sdt = real * speed;`）。
 //         実時間比 R ≡ シム秒/壁秒 で回る物理は、その計算に `dt × speedMax / R` 秒かかる。
 //         これを 1 フレーム `dt` のうち割合 φ 以下に収める要件は dt が約分されて
 //               **R ≥ speedMax / φ**
@@ -18,30 +18,45 @@
 //         2〜6% ＝ φ に 4〜14 倍の余裕。BC7 決定ログ参照）。
 //   ∴ 下限 R_min = speedMax / φ。speedMax と maxCars は **product から読む**ので、
 //     アプリ側が速度上限や最大台数を変えたら下限は自動で追従する。
-//   （φ・D 章の帯・実ブラウザ側の LAG_MAX は本ホスト実測から置いた定数で、これらは凍結値である。
-//     「凍結した数字を持たない」のは **下限の導出元** だけ、という限定であることを明記しておく。）
+//   （φ・D 章の帯・E3 の絶対下限 ABS_FLOOR・実ブラウザ側の LAG_MAX は本ホスト実測／過去の受け入れから
+//     置いた定数で、これらは凍結値である。「凍結した数字を持たない」のは **下限の導出元** だけ、という
+//     限定であることを明記しておく。）
 //
 // 【測っている経路とライブ経路の刻みの違い（過小評価ではなく過大評価＝安全側）】
 //   本ゲートが時間を測るのは race_engine（`runRace`）で、ライブ経路（`main.js:integrateLive`）ではない。
 //   刻みは一致しない:
 //     ・v2   : ライブも race_engine も 1/`SIM.physicsHz`（`fleet.js:640` / `race_engine.js:49`）＝**一致**
-//     ・dynamic/standard の多車 interact: ライブは 1 ステップ上限 1/`SIM.loopHz`（`main.js:475`・
+//     ・dynamic/standard の多車 interact: ライブは 1 ステップ上限 1/`SIM.loopHz`（`main.js:478`・
 //       `config.js:918` loopHz=20 ＝ 50ms）に対し race_engine は 1/`SIM.physicsHz`（=16.7ms）固定。
 //       ∴ 同じシム秒あたり race_engine の方がステップ数が多く、`report:true` の観測コストも余分に払う。
 //   つまり [dyn] の R は**ライブの実力より悲観側**に出る。下限を割れば赤になる向きなので偽の緑にはならないが、
 //   [dyn] の数値をライブの実力そのものとして読んではならない。ライブ経路の実測は browser/check_bc7_frame.mjs。
 //
-// 【既存ゲートとの関係】`wf_ao5_calib.mjs` の J（fullscale v2 6 台 `simSec/wall ≥ 10×`）は、本ゲートの
-//   [v2f] と**コース・領域・エンジン・フィールド・crashRule・interact がすべて同一**で、違いは
-//   `laps`/`maxSec` だけ（J=40 周/60 秒・本ゲート=99 周/30 秒＝同じ軌跡の前半）。床は J が 10×、本ゲートが
-//   speedMax/φ=12× なので**本ゲートの方が厳しく、J は本ゲートに包含される**。J は残してある（撤去は BC7 の
-//   スコープ外）ので、E 章でこの包含関係が崩れていないことを毎回測る。
+// 【既存ゲートとの関係】`wf_ao5_calib.mjs` にあった J（fullscale v2 6 台 `simSec/wall ≥ 10×`）は本ゲートの
+//   [v2f] に包含されるため **BD5（2026-09-21）で撤去した**。包含は BD5 で実測してある:
+//     ・同一 — コース（courses.json の同一オブジェクト）・領域 fullscale・エンジン v2・フィールド（6 台の
+//       配列が JSON byte 同値）・crashRule・interact。
+//     ・違い — `laps`（40 / 99。fullscale の 60 秒では 6 台とも lapsCompleted=0 ＝効いていない）・
+//       `maxSec`（60 / 30）・**`report`（J は渡さない / 本ゲートは true ＝観測コストを余分に払う＝安全側）**。
+//       「違いは laps/maxSec だけ」と書いていた BC7 当時の注記は report を数え落としていた（BD5 で是正）。
+//     ・軌跡 — 本ゲート [v2f] の 1800 tick は旧 J の前半 1800 tick と `trace` の tickChecksum 列で完全一致。
+//       **verifyHash では確かめられない**（canonObj に `laps` が入る・race_engine.js:475）。
+//     ・床 — 旧 J 10× に対し本ゲート speedMax/φ=12×。実測 R（N=5・warm 1 を捨てる）は
+//       旧 J med 52.9×/min 52.1×（一様退行 min 5.21 倍で赤）／[v2f] med 46.7×/**min 46.3×**（min 3.86 倍で赤）。
+//       **C は min で判定する**ので min 同士を比べて **本ゲートが先に赤くなる**（走行が短いほど 1 回あたりの
+//       固定費が効くため）。
+//   **包含しきれないもの**: 「シム 30〜60 秒の区間だけが重くなる退行」は本ゲートからは見えない
+//   （旧 J の壁時計を分解すると前半 30s 0.648s・後半 30s 0.486s ＝ 後半だけ 11.0 倍の退行が要る。実務上は
+//   一様退行が先に C で捕まる）。∴ **AO_spec §11 較正目標表:191 の帯「6台×60s ヘッダレス ≥10倍速」を
+//   60 秒の形のまま機械検査するゲートは BD5 以降存在しない**（本ゲートは 30 秒 × 12×）。AO_spec は時点仕様
+//   なので書き換えていない。旧 J が持っていた絶対下限 10× は E3 へ backstop として移設した。
 //
 // 【旧基準との換算】R と µs/tick/台 は `µs = 1e6 / (RACE_HZ × nCars × R)` で 1 対 1 に対応する。
 //   本ゲートはこの換算値も印字するので、旧記録（AP13 44.1・AW-3 60.6）と同じ土俵で読める。
 //
-// 【壁時計ゲートの扱い】WF_SKIP_TIMING=1 のとき**時間に依存する検査だけ**を skip する
-//   （wf_ao5_calib J と同じ運用・AP21）。決定論と構造の検査は常に走る。
+// 【壁時計ゲートの扱い】WF_SKIP_TIMING=1 のとき**時間に依存する検査だけ**（C/D 章）を skip する（AP21 の運用）。
+//   決定論と構造の検査は常に走る。BD5 で wf_ao5_calib J を撤去したので、**WF_SKIP_TIMING に応答する常設
+//   ゲートは本ゲートだけ**になった（wf_az2_fitguard の PERF_BUDGET_MS は対象外・wf_run_all.mjs:16）。
 //
 // 使い方: node wf_bc7_budget.mjs [--n <試行数>]     exit 0=PASS / 1=FAIL
 // ════════════════════════════════════════════════════════════════════════════
@@ -111,6 +126,26 @@ const CASES = [
 ];
 
 console.log('\nB) 母集団の実行と決定論（時間を測る前に「同じ仕事を測っているか」を固定する）');
+// B0: **床を当てる治具が母集団に在ること**。E3 は「導出した床 ≥ 絶対下限」しか見ないので、CASES から
+//     ケースを消しても床は 12× のまま緑になる（BD5 で実測: [v2f] を丸ごと削っても exit 0・全緑）。
+//     BD5 以前は wf_ao5_calib J が fullscale×v2×maxCars を独立に測っていたが、撤去でその冗長が無くなった。
+//     ∴ ここで名指しの構造検査にする。D1 は res.dyn/res.v2t を直接触るので、消えると TypeError で
+//     落ちて**名前のない失敗**になる。それより前（B の走行前）に置いて、どのケースが消えたかを言わせる。
+//     コースも名指しする: [v2f] のコースが入れ替わると「旧 J を包含する」という主張が黙って壊れる。
+const REQUIRED = {
+  dyn: { regime: 'tabletop',  physics: undefined, course: oval },    // アプリ既定エンジン
+  v2t: { regime: 'tabletop',  physics: 'v2',      course: oval },    // 利用者が精密 v2 を選んだとき
+  v2f: { regime: 'fullscale', physics: 'v2',      course: circuit }, // 旧 wf_ao5_calib J を包含する治具（BD5）
+};
+for (const [key, want] of Object.entries(REQUIRED)) {
+  const c = CASES.find((x) => x.key === key);
+  const shape = c && c.regime === want.regime && c.spec.physics === want.physics
+    && c.spec.course === want.course && c.spec.interact === true
+    && Array.isArray(c.spec.field) && c.spec.field.length === maxCars;
+  ok(shape, `B0[${key}] 母集団に ${want.regime}×${want.physics || 'dynamic'}×${maxCars}台×interact`
+     + `×「${want.course.name}」の治具が在る`
+     + `${c ? '' : '（ケースごと消えている＝床だけ残って全緑になる）'}`);
+}
 const res = {};
 for (const c of CASES) {
   applyRegime(c.regime);
@@ -168,6 +203,10 @@ console.log('\nD) ホスト非依存の回帰トリップワイヤ（同一実�
 const BAND = { lo: 1.5, hi: 4.5 };
 if (SKIP_TIMING) {
   skip('D 壁時計アサートを WF_SKIP_TIMING=1 でスキップ（timing 隔離・AP21）');
+} else if (!res.dyn || !res.v2t) {
+  // B0 が既に名指しで赤くしているが、ここを素通りさせると TypeError で summary ごと落ちて
+  // **名前のない失敗**になる。fail-closed に名前を付けて残りの章を走らせる。
+  ok(false, `D1 比を取る母集団が欠けている（dyn=${!!res.dyn} / v2t=${!!res.v2t}）＝B0 を見よ`);
 } else {
   const rDyn = q(res.dyn.ratios, .5), rV2 = q(res.v2t.ratios, .5);
   const cost = rDyn / rV2;      // = 卓上 v2 の 1 tick あたりコスト ÷ 卓上 dynamic のそれ
@@ -185,14 +224,18 @@ const initSpeed = Number((mainSrc.match(/^let speed = ([\d.]+);/m) || [])[1]);
 const uiValue = m ? Number((m[0].match(/\bvalue="([\d.]+)"/) || [])[1]) : NaN;   // A1 が赤でも TypeError で落ちない
 ok(Number.isFinite(initSpeed), `E1: main.js の再生速度の初期値 let speed = ${initSpeed}`);
 ok(Number.isFinite(uiValue) && initSpeed === uiValue, `E2: 実装の初期値 ${initSpeed} と UI の value ${uiValue} が一致`);
-// E3: 既存の壁時計ゲート wf_ao5_calib J（本ゲート [v2f] と同一治具）の床を本ゲートが下回っていないこと。
-//     下回ると「BC7 が J を置き換えた」という主張が崩れ、J の方が強い＝両方要る状態になる。
-const calibSrc = readFileSync(join(ROOT, 'wf_ao5_calib.mjs'), 'utf8');
-const jFloor = Number((calibSrc.match(/ok\(ratio >= ([\d.]+),/) || [])[1]);
-ok(Number.isFinite(jFloor) && R_MIN >= jFloor,
-   Number.isFinite(jFloor)
-     ? `E3: 本ゲートの下限 ${R_MIN.toFixed(1)}× は wf_ao5_calib J の床 ${jFloor}× 以上（J を包含する）`
-     : 'E3: wf_ao5_calib J の床を読めなかった＝包含関係を確かめられない（J 側の綴りが変わった可能性）');
+// E3: 絶対下限の backstop。R_MIN は product（UI の speedMax）から導出するので「速度上限を下げる」変更で
+//     **下限も黙って下がる**。要件追従はそれで正しいが、下限そのものが過去の受け入れ水準を割ったことには
+//     気づけない。BD5 で撤去した wf_ao5_calib J の床 10× をここへ移設し、床にする。
+//     **出典**: AO_spec §11 較正目標表（`docs/stage_ao/AO_spec.md:182` の節・`:191`「6台×60s ヘッドレス／
+//     実時間の ≥10倍速」）。§12 AO5（`:203`）は「性能述語」としか書かず数値を持たないので出典にならない。
+//     **E3 の入力は 2 つ**（R_MIN = speedMax / φ）: product 側の speedMax（index.html の #speed の max）と、
+//     本ゲート自身の φ（PHYS_SHARE）。φ を上げれば product 無改変でも赤くなるので、赤いときは両方見る。
+const ABS_FLOOR = 10;   // 旧 wf_ao5_calib J の床＝AO_spec §11 較正目標表（BD5 で移設した凍結値）
+ok(R_MIN >= ABS_FLOOR,
+   `E3: 要件由来の下限 ${R_MIN.toFixed(1)}× は絶対下限 ${ABS_FLOOR}× 以上`
+   + `（speedMax=${speedMax}・φ=${PHYS_SHARE}。φ 据え置きなら speedMax が`
+   + ` ${(ABS_FLOOR * PHYS_SHARE).toFixed(2)} を下回ると赤＝AO_spec §11 の受け入れ水準を割る）`);
 
 console.log(line);
 console.log(`検査: ${pass + fail} 件 / PASS ${pass} / FAIL ${fail}${skipped ? ` / SKIP ${skipped} (WF_SKIP_TIMING)` : ''}`);

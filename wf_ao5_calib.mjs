@@ -1,6 +1,8 @@
 // wf_ao5_calib.mjs — Stage AO5 受け入れゲート (リポジトリ追跡・本番フロー/実オラクル / CI-8/9/14)。
 // ════════════════════════════════════════════════════════════════════════════
-// AO5「fullscale 較正＋applyRegime 統合＋v2 既定化＋性能予算」を AO_spec §11/§12 AO5 の受け入れへ
+// AO5「fullscale 較正＋applyRegime 統合＋v2 既定化」を AO_spec §11/§12 AO5 の受け入れへ
+// （AO5 のもう 1 つの受け入れ「性能」＝ AO_spec §11 較正目標表:191「6台×60s ヘッドレス 実時間の ≥10倍速」は
+//   BD5 で wf_bc7_budget.mjs へ移した。下の「J. 性能予算（撤去済）」節を見よ。）
 // 「知覚→測定の翻訳」で連続量マージンの機械検査に落とす。**再実装せず 実 CarV2.step/applyRegime/
 // applyRegimeV2/runRace/engineFingerprint・診断オラクル (_latCapSS 摩擦円容量) を呼ぶ**。
 //   A 較正インフラ: applyRegimeV2 が V2 の定出力ドライブトレインを領域別に書く・**DYN(=DynCar/AN 基盤) 無改変**・
@@ -13,7 +15,9 @@
 //   G §11 制動: AWD(両軸)∈[32,45]m・かつ v2 は現行 DynCar より全車短い (改善=退行でない)。
 //   H spec.physics: f0/f1 canonical byte 不変 (dynamic=canon にキー無)・v2 決定論・v2≠dynamic・mode 復元。
 //   I engineFingerprint.physicsMode を持つ (版照合メタ)。
-//   J 性能予算: 6台×60s fullscale v2 ヘッドレスが実時間の ≥10倍速。
+// （旧 J「性能予算: 6台×60s fullscale v2 ≥10倍速」は BD5〔2026-09-21〕で撤去し wf_bc7_budget へ寄せた。
+//   理由と実測は下の「J. 性能予算（撤去済）」節に残してある。**本ゲートは壁時計アサートを持たない**
+//   ＝ WF_SKIP_TIMING は本ゲートでは効かない。）
 // いずれか失敗で非ゼロ終了。canonical f0/f1・AO1〜4 等は別ゲートで別途緑 (v2 は guarded branch)。
 // ════════════════════════════════════════════════════════════════════════════
 import { CarV2, V2, applyRegimeV2 } from './public/js/physics_v2.js';
@@ -24,7 +28,7 @@ import { PROGRAMS } from './public/js/programs.js';
 import { CAR, CONST, PHYSICS, setPhysicsMode } from './public/js/config.js';
 import { FROZEN } from './wf_frozen.mjs';   // AP3: 凍結値は中央マニフェスト経由
 
-let pass = 0, fail = 0, skipped = 0; const fails = [];
+let pass = 0, fail = 0; const fails = [];
 function ok(cond, msg) { if (cond) pass++; else { fail++; fails.push(msg); } }
 const DT = 1 / 60, g = 9.81;
 function mk(type, regime = 'fullscale') { applyRegime(regime); const c = new CarV2({ x: 0, y: 0, theta: 0, grip: 1, downhill: 0 }); c.type = type; return c; }
@@ -170,34 +174,39 @@ const NORMALS = ['normal_ff', 'normal_fr', 'normal_awd'];
   ok('physicsMode' in fp && ['standard', 'dynamic', 'v2'].includes(fp.physicsMode), `I: engineFingerprint.physicsMode=${fp.physicsMode}`);
 }
 
-// ── J. 性能予算: 6台×60s fullscale v2 ヘッドレス ≥10倍速 ────────────────────────
-// AP21: J は唯一の壁時計 (process.hrtime) アサート＝負荷ホストで非決定論に落ちうる。
-// WF_SKIP_TIMING=1 のとき J のみをスキップし (pass/fail いずれにも計上しない)、標準ランナー
-// wf_run_all の timing 隔離モードで安定緑を得られるようにする (A〜I の決定論検査は不変)。
-if (process.env.WF_SKIP_TIMING === '1') {
-  skipped++;
-  console.log('  ⤿ J: 性能予算(壁時計 ≥10×) を WF_SKIP_TIMING=1 によりスキップ (timing 隔離・AP21)');
-} else {
-  const courses = (await import('./public/data/courses.json', { with: { type: 'json' } })).default;
-  const spec = courses.find(c => /競技サーキット/.test(c.name)) || courses.find(c => /競技グラウンド/.test(c.name));
-  const course = buildFromSpec(spec);
-  const prog = (k) => { const p = PROGRAMS.find(x => x.key === k); return { src: p.code, lang: p.lang || 'c', carType: p.carType }; };
-  const keys = ['comp_circuit', 'comp_estimate', 'recon_racer', 'comp_circuit', 'comp_estimate', 'recon_racer'];
-  const field = keys.map((k, i) => { const p = prog(k); return { name: 'C' + i, lang: p.lang, src: p.src, carType: p.carType, rear: false, encoder: true }; });
-  const t0 = process.hrtime.bigint();
-  const r = runRace({ course, regime: 'fullscale', laps: 40, field, physics: 'v2', crashRule: { rejoin: true, penaltySec: 3 }, interact: true, maxSec: 60 });
-  const wall = Number(process.hrtime.bigint() - t0) / 1e9; const ratio = r.simSec / wall;
-  ok(ratio >= 10, `J: 6台×60s fullscale v2 = ${ratio.toFixed(1)}× 実時間 (≥10× / wall=${wall.toFixed(2)}s)`);
-}
+// ── J. 性能予算（撤去済・BD5 2026-09-21）─────────────────────────────────────
+// 旧 J「6台×60s fullscale v2 ヘッドレスが実時間の ≥10倍速」は wf_bc7_budget.mjs の [v2f] に
+// **包含される**ことを BD5 で実測したので撤去した（重複した壁時計アサートを 1 本へ寄せる）。
+//   実測（engine v8.6.0 / node v22.22.1 / warm 1 + 本測 3）:
+//     ・6 条件が同一 — コース（courses.json の同一オブジェクト「競技サーキット (フルスケール)」）・
+//       領域 fullscale・エンジン v2・フィールド（6 台の配列が JSON byte 同値）・
+//       crashRule{rejoin:true,penaltySec:3}・interact:true。
+//     ・違いは laps（40 / 99。fullscale の 60 秒では 6 台とも lapsCompleted=0 ＝**効いていない**）・
+//       maxSec（60 / 30）・report（無 / 有＝[v2f] の方が観測コストを余分に払う＝安全側）。
+//     ・軌跡は trace の tickChecksum 列で **[v2f] の 1800 tick = 旧 J の前半 1800 tick と完全一致**。
+//       （verifyHash では確かめられない: canonObj に laps が入る・race_engine.js:475）
+//     ・床は旧 J が 10×、[v2f] が speedMax/φ = 3/0.25 = 12×。実測 R（N=5・warm 1 を捨てる）は
+//       旧 J が med 52.9×/min 52.1×（＝一様退行 med 5.29 倍・min 5.21 倍で赤）に対し
+//       [v2f] が med 46.7×/min 46.3×（＝med 3.90 倍・**min 3.86 倍**で赤）。
+//       **wf_bc7_budget の C は min で判定する**（wf_bc7_budget.mjs の C 章）ので min 同士を比べて
+//       5.21 > 3.86 ＝ **[v2f] が先に赤くなる**（短い走行ほど 1 回あたりの固定費が効くので、
+//       同じ仕事でも [v2f] の R は低く出る）。
+//   **失うもの（正直に）**: 「シム 30〜60 秒の区間だけが重くなる退行」は [v2f] からは見えない。
+//     旧 J 自身の壁時計を分解すると（同 N=5 の中央値）前半 30s が 0.648s・後半 30s が 0.486s（後半 R=61.7×）で、
+//     旧 J が赤（R<10 ＝ wall>6.00s）になるには**後半だけが 11.0 倍**重くなる必要がある。
+//     ∴ AO_spec §11 の帯「6台×**60s** ≥10倍速」を 60 秒の形のまま機械検査するゲートは BD5 以降**存在しない**
+//     （C[v2f] は 30 秒 × 12×）。AO_spec は時点仕様なので書き換えていない。
+//   絶対下限 10× は wf_bc7_budget の E3 へ backstop として移設した（speedMax を UI で下げると
+//   要件由来の下限が黙って下がるため）。
 
 applyRegime('tabletop');   // 復元
 
 // ── 結果 ─────────────────────────────────────────────────────────────────────
 const line = '─'.repeat(66);
 console.log(line);
-console.log('Stage AO5 ゲート  (fullscale 較正＋applyRegimeV2＋v2 既定化＋性能予算)');
+console.log('Stage AO5 ゲート  (fullscale 較正＋applyRegimeV2＋v2 既定化)');
 console.log(line);
-console.log(`  検査: ${pass + fail} 件 / PASS ${pass} / FAIL ${fail}${skipped ? ` / SKIP ${skipped} (WF_SKIP_TIMING)` : ''}`);
+console.log(`  検査: ${pass + fail} 件 / PASS ${pass} / FAIL ${fail}`);
 if (fail) { console.log(line); for (const m of fails) console.log('  ✗ ' + m); }
 console.log(line);
 console.log('結果: ' + (fail ? 'FAIL' : 'PASS'));
