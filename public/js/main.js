@@ -3014,12 +3014,19 @@ async function loadFilerFile(entry) {
 $('repoClose').addEventListener('click', closeFiler);
 
 // 手動ボタン (押下中のみ)
+// BE1: 「押している間」は解放イベントを 1 本に頼らない（BD-8 ⑥）。1 本でも取りこぼすと keys[key] が
+//   true のまま残り、applyManual が毎フレーム駆動/操舵を立て続ける＝**指を離しても走り続ける**。
+//   ・touchcancel: タッチが中断されると touchend は来ない（実測: 改修前は解放後 +58〜89 px 走って壁に衝突）。
+//   ・contextmenu: mousedown はボタンを見ないので右押下でも押下になる。Linux/mac の Chrome ではネイティブ
+//     メニューが mouseup を吸い contextmenu だけが届く（実測: +66〜69 px・衝突。Windows は mouseup の後に
+//     contextmenu が来るので元から残らない）。メニュー自体は止めない（preventDefault しない）。
 function holdButton(id, key) {
   const el = $(id);
   const dn = (e) => { e.preventDefault(); keys[key] = true; };
   const up = () => { keys[key] = false; };
   el.addEventListener('mousedown', dn); el.addEventListener('touchstart', dn, { passive: false });
   el.addEventListener('mouseup', up); el.addEventListener('mouseleave', up); el.addEventListener('touchend', up);
+  el.addEventListener('touchcancel', up); el.addEventListener('contextmenu', up);
 }
 holdButton('mFwd', 'ArrowUp'); holdButton('mBack', 'ArrowDown');
 holdButton('mLeft', 'ArrowLeft'); holdButton('mRight', 'ArrowRight');
@@ -3033,6 +3040,11 @@ window.addEventListener('keydown', (e) => {
   }
 });
 window.addEventListener('keyup', (e) => { keys[e.key] = false; });
+// BE1: ウィンドウがフォーカスを失うと keyup はこのページへ来ない（矢印を押したまま別タブ・別ウィンドウへ
+//   移る。実測: 改修前は戻った後に走り続けて衝突／左右は後の前進が 1 rad 超曲がる）。押しているキーと
+//   ボタンをすべて離す。戻った後も押し続けているなら押し直しが要る（キーボードでタブを切り替えると矢印の
+//   キーリピートはそこで止まる）が、止まる向きに倒す＝走り続けるより安全側。
+window.addEventListener('blur', () => { for (const k of Object.keys(keys)) keys[k] = false; });
 
 // ---- 起動 ----
 // バージョン表示 + 変更履歴ポップアップ (ヘッダーのバッジ。単一ソース = config.APP_VERSION と changelog.js の CHANGELOG)。
