@@ -416,10 +416,26 @@ export const CAR_PARAM_DOC = [
   ['drift', 'ドリフト設定(null=滑らない)。{trigger,grip,gain,minSp,slipYaw,slipSlide,attack,release,brakeDrift}'],
 ];
 
+// 組込 6 車種の key。モジュール評価時 (＝どの登録よりも前) に確定する。
+// 【BE3・2026-09-24】登録の入口で組込の上書きを拒む根拠。旧 registerCarType は組込 key も無条件に
+//   置き換えていた (unregisterCarType には保護があるのに登録側には無かった＝BD-3(b))。改修前ツリーの
+//   実ブラウザで再現: localStorage の自作車に key 'normal_fr' が 1 件あると起動時に組込 FR が置き換わり、
+//   `capacity.js` のプローブ車の物理が変わるのに driveableCapN の鍵は動かない。公式レースの持ち込み車種も
+//   組込 key のままレース後に居残り、`custom: true` が付くので「追加」ボタンの重複検査もすり抜けた。
+const BUILTIN_CAR_KEYS = new Set(CAR_TYPES.map(t => t.key));
+export function isBuiltinCarKey(key) { return BUILTIN_CAR_KEYS.has(String(key)); }   // registerCarType と同じく文字列で判定
+
 // 独自車種を登録する (利用者定義。最低限 key/name と駆動系パラメータがあればよい)。
-// 既定値で埋めるので、一部だけ指定しても動く。重複キーは置き換える。
+// 既定値で埋めるので、一部だけ指定しても動く。重複キーは置き換える (自作車の再登録＝更新)。
+// **組込 key は登録しない** (null を返す)。拒否の告知は呼び出し側が理由つきで出す (BE3)。
 export function registerCarType(def) {
   if (!def || !def.key) return null;
+  // key は CAR_TYPE_BY_KEY[key] で文字列へ変換されて引かれるので、判定も文字列で行う (['normal_fr'] 等の非文字列 key で
+  //   すり抜けない・層 4 の実測)。
+  if (BUILTIN_CAR_KEYS.has(String(def.key))) return null;
+  return _putCarType(def);
+}
+function _putCarType(def) {
   const base = mkType('normal', 'fr'); // 既定の土台 (FR ノーマル)
   const t = { ...base, ...def, custom: true };
   // drift は { ...} or null。指定が object なら既定とマージ。
@@ -434,6 +450,35 @@ export function registerCarType(def) {
   if (idx >= 0) CAR_TYPES[idx] = t; else CAR_TYPES.push(t);
   CAR_TYPE_BY_KEY[t.key] = t;
   return t;
+}
+
+// 公式レースの持ち込み車種 (full JSON・W_spec §1) を**そのレースの間だけ**登録し、元へ戻す関数を返す。
+// 【BE3】ここだけは組込 key も登録する: `race_ui.js` の carDefForEntry は、利用者がローカルで上書き (V3) した
+//   組込車種を組込 key のまま同梱する＝公式記録はその定義で走ったものなので、拒むと記録が再現しない
+//   (resultSha256 が変わる)。代わりに finally で**元の参照**へ戻し、レース後のセッション (プローブ車・
+//   自作車の重複検査・次のレース) に居残らせない。登録の順序・上書きの規則 (後勝ち・drift 未指定は現行の
+//   定義から継承) は旧 registerCarType と同一＝レース中の挙動は 1 bit も変えない。
+export function registerRaceCarTypes(defs) {
+  // 戻す先は「表そのものの写し」(並び・自分の鍵ごとの参照・原型)。key を突き合わせて個別に戻す形にしないのは、
+  //   CAR_TYPES 側は `x.key === key` (型を変えない比較)・CAR_TYPE_BY_KEY 側は文字列へ変換した鍵で引くので、
+  //   非文字列の key (5 と '5'・['normal_fr'] 等) で両者がずれ、戻し残し・重複が出るため (層 4 の実測)。
+  //   写しに戻せば、JSON で来うるどの形の key (文字列・数値・配列・オブジェクト・'__proto__') でも、レース前の状態へ
+  //   参照ごと戻る (Symbol の key は JSON から来ないので対象外)。
+  const list = CAR_TYPES.slice();
+  const byKey = Object.keys(CAR_TYPE_BY_KEY).map(k => [k, CAR_TYPE_BY_KEY[k]]);
+  const proto = Object.getPrototypeOf(CAR_TYPE_BY_KEY);   // key '__proto__' の代入は原型を差し替える
+  function restoreRaceCarTypes() {
+    CAR_TYPES.length = 0;
+    for (const t of list) CAR_TYPES.push(t);
+    for (const k of Object.keys(CAR_TYPE_BY_KEY)) delete CAR_TYPE_BY_KEY[k];
+    if (Object.getPrototypeOf(CAR_TYPE_BY_KEY) !== proto) Object.setPrototypeOf(CAR_TYPE_BY_KEY, proto);
+    for (const [k, t] of byKey) CAR_TYPE_BY_KEY[k] = t;
+  }
+  // 登録の途中で投げても戻す (2 回目の層 4 の実測: key が {"toString":1} の carDef は CAR_TYPE_BY_KEY[key] の文字列化で
+  //   投げる。呼び出し側はまだ戻す関数を受け取っていないので、ここで戻さないと先に登録した定義が居残る)。
+  try { for (const def of defs) if (def && def.key) _putCarType(def); }
+  catch (e) { restoreRaceCarTypes(); throw e; }
+  return restoreRaceCarTypes;
 }
 
 // 独自車種の登録解除 (個別削除)。組込車種 (custom でない既定6種) は保護して解除しない

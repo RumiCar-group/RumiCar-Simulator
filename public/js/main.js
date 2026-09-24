@@ -3387,6 +3387,13 @@ loadPresets().then(() => {
     rebuildCourseList(c.name);
   }
   logLine(t('log.coursesLoaded', { n: PRESETS.length }));
+  // BE3: 組込と同じ key の自作車種は起動時に登録しなかった (car_crud.js)。黙って捨てず、どれをなぜかを 1 行知らせる。
+  if (CC.builtinSkipped && CC.builtinSkipped.length) {   // 古い car_crud.js がキャッシュに残っていれば無い (BA1)
+    // 名前は先頭 10 件まで (ログ欄は 8,000 字で頭を切る。投稿車種・投稿コースの告知と同じ扱い)。件数は常に全件。
+    const SHOWN = 10, sk = CC.builtinSkipped;
+    const items = sk.slice(0, SHOWN).map((d) => `${d.name || '?'} (${d.key})`).join(', ') + (sk.length > SHOWN ? `, … (+${sk.length - SHOWN})` : '');
+    logLine(t('log.customCarsBuiltin', { n: CC.builtinSkipped.length, items }));
+  }
   // 設定共有 (AF2): 復元完了。共有リンク由来なら復元を通知し、以降の設定変更だけが hash を
   // 更新できるようにする (復元途中の部分状態で hash を壊さないためのゲート解除)。
   shareReady = true;

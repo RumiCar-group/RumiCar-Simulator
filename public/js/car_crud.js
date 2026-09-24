@@ -249,6 +249,8 @@ function renderCarForm(def) {
 // メッセージは現在言語で eager に解決する (i18n キーを静的参照に保ち孤児検査③を汚さない)。
 function validateCarDef(def) {
   if (!def || typeof def !== 'object' || !def.key || !def.name) return { ok: false, msg: t('cars.add.errRequired') };
+  // BE3: 組込 key に `custom` 印が付く経路 (公式レースの持ち込み車種の居残り) は config.js の registerRaceCarTypes が
+  //   レース後に元の参照へ戻すので塞がった。改修前はその居残りの後にここをすり抜けて組込を上書き・保存できた。
   if (CAR_TYPE_BY_KEY[def.key] && !CAR_TYPE_BY_KEY[def.key].custom) return { ok: false, msg: t('cars.add.errDupKey', { key: def.key }) };
   const badNum = (v) => v !== undefined && (typeof v !== 'number' || !Number.isFinite(v)); // 明示 null / NaN は不正
   for (const [p] of CAR_NUM_PARAMS) if (badNum(def[p])) return { ok: false, msg: t('cars.add.errNum', { field: p }) };
@@ -376,7 +378,13 @@ function clearAllOverrides() {
 export function initCarCrud(deps) {
   ({ $, escapeHtml, carTypeName, logLine, buildFleetColumns, pruneSlotCarTypes, submitToGithub } = deps);
   // 起動時: 保存済みの独自車種を登録 (車種メニューに反映)
-  for (const def of loadCustomCars()) { try { registerCarType(def); } catch (e) {} }
+  // BE3: 組込と同じ key の自作車は登録しない (組込を置き換えない)。黙って捨てず main.js が起動時に理由つきで告知し、
+  //   保存データは消さない (一覧に残るので「複製」で別 key にできる・「削除」で片づけられる)。
+  const builtinSkipped = [];
+  for (const def of loadCustomCars()) {
+    if (def && isBuiltinKey(def.key)) { builtinSkipped.push(def); continue; }
+    try { registerCarType(def); } catch (e) {}
+  }
   // 起動時の組込上書き適用 (CAR_NUM_PARAMS/DRIFT_NUM_PARAMS/fillCarDef 定義後)
   applyAllCarOverrides();
   setBuiltinEditUI(); // 初期状態 (保存/取消は隠す)
@@ -503,5 +511,5 @@ export function initCarCrud(deps) {
   });
   $('carOvrSaveBtn').addEventListener('click', saveBuiltinOverride);
   $('carOvrCancelBtn').addEventListener('click', cancelBuiltinEdit);
-  return { loadCustomCars, isBuiltinKey, renderCarParamTable, renderCarForm, readCarForm };
+  return { loadCustomCars, isBuiltinKey, renderCarParamTable, renderCarForm, readCarForm, builtinSkipped };
 }

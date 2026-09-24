@@ -16,6 +16,7 @@
 //  - ⚠ クロスPF 浮動小数決定論 (Math.sin/cos 等の last-ULP 差) は W1 で実測 → policy 確定。
 //    verifyHash / 毎tick チェックサムでビット差を検出できるよう設計。
 import { SIM, CONST, SENSOR_NOISE, SENSOR_HOLD, SENSOR_OPTICS, REGIME_STATE, REGIMES, registerCarType, SCALE_STATE, setCarScale, APP_VERSION, PHYSICS, setPhysicsMode } from './config.js';
+import * as configNS from './config.js';   // BE3: 足した名前は名前空間から「あれば使う」(BA1・キャッシュ混在)
 import { applyRegime } from './physics_dyn.js';
 import { carEdges } from './physics.js';
 import { makeSlot, rebuildSpawns, integrateSlot, integrateFleetV2, tickSlot, othersFor, releaseDrive, applyStartGate, capacityOf, normTire, normGear, normSusp, normSteer, normBrake } from './fleet.js';
@@ -135,7 +136,7 @@ export function computeRaceTimeout({ course, laps = 3, regime = null }) {
 //   field    : [{ name, lang:'c'|'py'|'js', src, carType?, carDef?, rear?, encoder?, tire?, gear?, susp?, steerSet?, brake? }]。グリッド=配列順。
 //              tire='slip'|'rain' は v2 エンジンのタイヤセット (Stage AO6/AS9・v2 のみ参照・既定 normal)。
 //              gear='short'|'tall'|'auto2' は v2 の任意装備ギア比 (Stage AS9・v2 のみ参照・既定 direct=直結)。
-//              carDef を与えると registerCarType で登録 (持ち込み車種=full JSON・W_spec §1)。
+//              carDef を与えると registerRaceCarTypes でレース中だけ登録 (持ち込み車種=full JSON・W_spec §1。終了時に元へ戻す＝BE3)。
 //   crashRule: { rejoin:false→クラッシュ=DNF / true→penaltySec 加算で復帰, penaltySec:3 }。
 //   interact : 他車を障害物/センサー対象に含めるか (true=対戦/false=独立TT)。
 //   maxSec   : セーフティ上限秒 (未完走はこの時点で DNF=timeout)。**未指定なら computeRaceTimeout で
@@ -220,6 +221,7 @@ export function runRace(spec) {
   const gridUsed = (Array.isArray(grid) && grid.length > 0) ? grid : null;
   let fitField = field;
   let fitReduced = 0;
+  let restoreCarTypes = null;   // BE3: 持ち込み車種の登録を戻す関数 (finally で呼ぶ)
 
   try {
     // **fit ガードは try の内側に置く (AZ5・2026-09-12)。** 下の NO_ROOM は上の `setCarScale(1)` /
@@ -242,7 +244,16 @@ export function runRace(spec) {
       if (nFit < field.length) { fitReduced = field.length - nFit; fitField = field.slice(0, nFit); }
     }
     // --- 持ち込み車種 (full JSON) を登録 ---
-    for (const e of fitField) if (e.carDef && e.carDef.key) registerCarType(e.carDef);
+    // 【BE3・2026-09-24】旧実装は registerCarType でグローバルの車種表へ登録したまま戻さなかった。組込 key の
+    //   carDef (race_ui の carDefForEntry が同梱する形) はレース後もその定義で居残り、利用者の練習走行・容量プローブ
+    //   (capacity.js の normal_fr)・次のレースまで他人の定義で走らせていた (改修前ツリーで実測: 持ち込み normal_fr の
+    //   レースの後、同じ field のレースの verifyHash が 7cee2df9 → e2821fc6 に変わった)。レース中の登録は同じ順序・
+    //   同じ規則のまま (＝結果は不変)、finally で元の参照へ戻す。
+    //   `registerRaceCarTypes` は BE3 で config.js に足した名前なので**名前付き import しない**（古い config.js がキャッシュに
+    //   残るブラウザでモジュールグラフ全体が読み込めなくなる＝BA1 の規則）。無ければ旧経路（登録したまま）で走る＝旧版と同じ。
+    const carDefs = fitField.map((e) => e.carDef).filter((d) => d && d.key);
+    if (configNS.registerRaceCarTypes) restoreCarTypes = configNS.registerRaceCarTypes(carDefs);
+    else for (const d of carDefs) registerCarType(d);
 
     // --- スロット生成 (グリッド = エントリー順)。log は収集のみ (描画/DOM 非依存) ---
     const logs = [];
@@ -560,5 +571,6 @@ export function runRace(spec) {
     if (regime && regimePrev) applyRegime(regimePrev);
     setCarScale(userKPrev);                  // AK2/D10: スライダー位置を復元 (regime 復元後に再適用=最終状態を厳密復元)
     setPhysicsMode(physModePrev);            // AO5: 物理エンジンを復元 (spec.physics 未指定なら no-op=元と同値)
+    if (restoreCarTypes) restoreCarTypes();   // BE3: 持ち込み車種を外し、上書きした定義を元の参照へ戻す
   }
 }

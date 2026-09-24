@@ -23,7 +23,24 @@ import { course } from './state.js';
 // --- 依存注入スロット(initRaceUI で main.js から束縛。関数本文は bare 参照のまま=byte 不変) ---
 let $, escapeHtml, logLine, activeSlot, exitEdit, courseDisplayName, carTypeLabel, entryCarLabel, setActiveProgram, playCountdown, resolveRaceCourse, submitToGithub;
 
+// 【BE3・2026-09-24】持ち込み車種 (carDef) は runRace の finally で車種表から外れる (config.js registerRaceCarTypes)。
+//   レース後に描く結果表・ゴーストの凡例が carTypeLabel (＝車種表を引く) のままだと、持ち込みの自作車が key の生文字列で
+//   出る (層 4 の指摘・改修前は車種表に居残っていたので名前が出ていた)。そのレースの field が持つ carDef から引く。
+//   同じ key の自作車・投稿車種 (custom 印) が手元にあっても、レース中に走ったのは持ち込みの定義なので、その名前を出す
+//   (2 回目の層 4 の指摘)。組込 key (custom 印なし＝出荷の定義か V3 の上書き) は従来どおり手元の組込名。
+function fieldCarLabeler(field) {
+  const defs = new Map();
+  for (const f of field || []) if (f && f.carDef && f.carDef.key != null) defs.set(String(f.carDef.key), f.carDef);
+  return (ct) => {
+    const d = defs.get(String(ct));
+    const cur = CAR_TYPE_BY_KEY[String(ct)];
+    if (d && d.name && (!cur || cur.custom)) return String(d.name);
+    return entryCarLabel(ct, d);
+  };
+}
+
 function renderRaceResult(res, meta) {
+  const carLabel = meta.carLabel || carTypeLabel;   // BE3: 持ち込み車種のあるレースは field 由来のラベル
   // 色は field(=結果)のインデックスで割当 (FLEET.colors)。W3 は field=slots 順なので live 列色と一致、
   // W4 開催は entries+filler の独自順なので field idx 基準が正 (slot とは対応しない)。
   const colorOf = (idx) => FLEET.colors[idx % FLEET.colors.length];
@@ -89,7 +106,7 @@ function renderRaceResult(res, meta) {
     }
     const winner = res.finishers[0];
     bannerHtml = `<div class="race-winner-banner"><span class="rw-name">${esc(t('race.winner', { name: winner.name }))}</span> ` +
-      `<span class="hint">${esc(carTypeLabel(winner.carType))}</span>${recordHtml}</div>`;
+      `<span class="hint">${esc(carLabel(winner.carType))}</span>${recordHtml}</div>`;
   }
 
   // --- 結果本体 (勝者バナー → ミニマップ凡例 → 完走 → DNF → レポート) ---
@@ -106,7 +123,7 @@ function renderRaceResult(res, meta) {
       html += `<tr class="${rowCls.trim()}">` +
         `<td>${f.rank}</td>` +
         `<td><span class="race-dot" style="background:${colorOf(f.idx)}"></span>${esc(f.name)}</td>` +
-        `<td>${esc(carTypeLabel(f.carType))}</td>` +
+        `<td>${esc(carLabel(f.carType))}</td>` +
         `<td>${fmtTime(f.totalTimeMs / 1000)}</td>` +
         `<td>${f.bestLapMs != null ? fmtTime(f.bestLapMs / 1000) : '—'}</td>` +
         `<td>${f.penaltiesSec ? '+' + f.penaltiesSec + 's' : '—'}</td>` +
@@ -133,7 +150,7 @@ function renderRaceResult(res, meta) {
     for (const d of res.dnf) {
       html += '<tr>' +
         `<td><span class="race-dot" style="background:${colorOf(d.idx)}"></span>${esc(d.name)}</td>` +
-        `<td>${esc(carTypeLabel(d.carType))}</td>` +
+        `<td>${esc(carLabel(d.carType))}</td>` +
         `<td>${d.lapsCompleted}</td>` +
         `<td>${esc(t('race.reason.' + d.reason))}</td>` +
         '</tr>';
@@ -174,7 +191,7 @@ function renderRaceResult(res, meta) {
   $('raceResults').innerHTML = html;
   // 👻 ゴースト再生 (W6): ghost 軌跡があるときだけボタンを出し、直近レースを stash して再生に使う。
   pendingRaceGhost = (res.ghost && res.ghost.frames && res.ghost.frames.length)
-    ? { ghost: res.ghost, course: rc, title: esc(courseDisplayName(rc)), replay: meta.replay || { kind: 'recorded' } } : null;  // AK6: 公式再実行は rerun/ライブは recorded
+    ? { ghost: res.ghost, course: rc, title: esc(courseDisplayName(rc)), replay: meta.replay || { kind: 'recorded' }, carLabel: meta.carLabel } : null;  // AK6: 公式再実行は rerun/ライブは recorded
   const gb = $('raceGhost'); if (gb) gb.hidden = !pendingRaceGhost;
   const dlg = $('dlgRace');
   applyI18n(dlg);            // 静的 data-i18n (タイトル) を現在言語で反映
@@ -444,6 +461,7 @@ function verifyOfficialLocally(race) {
   const crashTxt = crashRule.rejoin ? t('race.crashRule.rejoin', { s: crashRule.penaltySec || 3 }) : t('race.crashRule.dnf');
   renderRaceResult(res, {
     laps, regime, crashTxt, course: rcourse, verifyHtml: noteHtml,
+    carLabel: fieldCarLabeler(field),   // BE3: 持ち込み車種はレース後に車種表に無い
     replay: { kind: 'rerun', recVer: event.engineVer || '' },   // AK6: 公式記録の再実行=最新エンジン再走 (記録とは別物になり得る)
     eventInfo: {
       classLabel: t('event.class.' + (event.class || 'open')),
@@ -788,7 +806,7 @@ function ghostVsWorld(cls, course) {
   $('dlgRankings').close();
   // AK6: 公式記録は frames を保存しないため、世界ベストのゴーストは現行エンジンでの再走 (rerun)。記録の
   // engineVer を添えて「収録フレーム再生ではない=別物になり得る」を正直に表示する。
-  openGhostReplay({ ghost: res.ghost, course: rcourse, title: t('ghost.vsWorld'), replay: { kind: 'rerun', recVer: rec.engineVer || '' } });
+  openGhostReplay({ ghost: res.ghost, course: rcourse, title: t('ghost.vsWorld'), replay: { kind: 'rerun', recVer: rec.engineVer || '' }, carLabel: fieldCarLabeler(field) });
 }
 
 // ===== AB11 (PX-004): 観戦リプレイの車間(gap)/オーバーテイク可視化 (DOM 層) =====
@@ -849,7 +867,7 @@ function openGhostReplay(data, onClose) {
     : `<p class="ghost-replaynote">${esc(t('ghost.replay.recorded'))}</p>`;
   $('ghostMeta').innerHTML = `<table class="race-metatab"><tr><th>${esc(t('race.meta.course'))}</th><td>${esc(courseDisplayName(rc))}</td></tr></table>` + repNote;
   $('ghostLegend').innerHTML = g.names.map((nm, i) =>
-    `<span class="ghost-leg"><span class="race-dot" style="background:${colorOf(i)}"></span>${esc(nm)} <span class="hint">${esc(carTypeLabel(g.carTypes[i]))}</span></span>`).join('');
+    `<span class="ghost-leg"><span class="race-dot" style="background:${colorOf(i)}"></span>${esc(nm)} <span class="hint">${esc((data.carLabel || carTypeLabel)(g.carTypes[i]))}</span></span>`).join('');
   // AB11: 順位/車間/オーバーテイク用の状態 (累積距離を前計算・観測のみ＝hash 不変)。
   ghostAnim = { g, rc, mview, colorOf, frame: 0, playing: true, lastTs: null,
     model: ghostProgressModel(g.frames, g.names.length, rc.bounds.w, rc.bounds.h),
