@@ -191,14 +191,15 @@ function tireBoxW(ctx, label) {
   ctx.restore();
   return w;
 }
-// 順位表 (リーダーボード) の寸法。wMin = 行の中身 (順位・色ドット・名前・LAP・BEST・状態) が**詰めずに**
-// 収まる枠幅 (＝自然幅。BD2 以降、狭い画面ではこれより細い枠も作る＝「取りうる最小」ではない)。
+// 順位表 (リーダーボード) の寸法。wMin = **既定の車名 (半角) の編成で**行の中身 (順位・色ドット・名前・LAP・BEST・
+// 状態) が**詰めずに**収まる枠幅 (＝その編成の自然幅。BD2 以降、狭い画面ではこれより細い枠も作る＝「取りうる最小」
+// ではない。BE4 以降、半角 5 文字より広い車名があると名前の列の差だけ自然幅が広がる＝「取りうる最大」でもない)。
 // export しているのは常設ゲートが**独立した上界**としてこの値を引くため (check_bc6_hudband.mjs B3d)。
 // 枠幅を観測値どうしで比べると式の両辺に現れて相殺し、枠が太る退行を捕まえられない。
 // ⚠ B3d の母集団は ja・1 台・既定装備。en は注記が長く AS1 の実測合わせで 276px まで広がる (上界を超える)。
 export const LB = { rowH: 23, padT: 10, headH: 19, footH: 18, padL: 12, wMin: 268, noteMin: 10, noteLineH: 15 };
 // 行の列の自然位置 (枠の左端からの CSS px)・色ドットの半径・フォント・枠の外の左右余白。
-// LB.wMin=268 は「状態列の右端 + 余白」＝この並びそのものから決まっている値。
+// LB.wMin=268 は「状態列の右端 + 余白」＝この並び (名前の列は半角 5 文字) そのものから決まっている値。
 const LB_COL = { rank: 12, dot: 33, name: 45, lap: 109, best: 139, state: 222 };
 const LB_DOT_R = 5.3, LB_ROW_FONT = 14, LB_HEAD_FONT = 13, LB_MARGIN = 12;
 // BD2: 表示幅が自然幅に足りないとき (スマホ幅) に枠を詰める。
@@ -213,7 +214,23 @@ const LB_DOT_R = 5.3, LB_ROW_FONT = 14, LB_HEAD_FONT = 13, LB_MARGIN = 12;
 //   172.8px ≒ viewport 233px)。読める大きさ (10 CSS px) を捨ててまで詰めない、という選択の帰結。
 //   出荷が支える viewport 280px の表示幅は 216px で、崖まで 43px の余裕がある。この余裕そのものを
 //   check_bc6_hudband.mjs B16 が毎回測る (「0 かどうか」でなく「崖までいくつ残っているか」)。
+//   BE4: 全角の車名では名前の列が広がる分だけ下限も上がる (全角 5 文字を含む編成で ja 185.40 / en 187.25 CSS px・
+//   実測 → 崖は表示幅 197.4 / 199.2px)。それでも 280px の表示幅 216px に入る (余裕 18.6 / 16.7px。この余裕は
+//   check_be4_lbname.mjs P6 が毎回測る)。名前の列幅には上限 (全角 5 文字) があるので、下限もこれより上がらない。
 const LB_SMIN = 0.45, LB_FONT_MIN = 10;
+// 名前の列に描く文字数と、列幅の上限 (BE4)。上限は「全角 5 文字」＝ 5 × 行のフォント px。
+const LB_NAME_N = 5, LB_NAME_MAX = LB_NAME_N * LB_ROW_FONT;
+// 順位表の名前の列に描く文字列 (BE4)。車名は自由入力 (main.js の .cc-name・maxlength=6) なので、先頭 5 文字を
+// **書記素 (見た目の 1 文字)** で切る。旧実装の slice(0, 5) は UTF-16 の単位で切るので、絵文字 (サロゲート
+// ペア) を途中で割って化けた文字を描いていた (「🚗🏁😀」→「🚗🏁」＋孤立サロゲート・実測)。
+// 列幅の見積り (lbParts) と描画 (drawFleetHud) はこの 1 つの関数を通す＝測る文字列と描く文字列が常に同じ。
+// 旧実装の右の空白詰め (padEnd(5)) は画素を出さないのでやめた (測る幅に見えない空白を数えないため)。
+const LB_SEG = (typeof Intl !== 'undefined' && Intl.Segmenter) ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+function lbName(name) {
+  const s = String(name || '');
+  const g = LB_SEG ? Array.from(LB_SEG.segment(s), (x) => x.segment) : Array.from(s);
+  return g.slice(0, LB_NAME_N).join('');
+}
 
 // 順位表の注記 (練習ベストの断り・旧版記録・非既定装備) を組み立てる。
 function fleetNote(slots) {
@@ -243,23 +260,33 @@ function fleetNote(slots) {
   return note;
 }
 
-// 行の各列が要する幅 [CSS px]。**状態列だけは実際に描く語 (i18n) を measureText で測る** (ja 28 / en 35 と
-// 言語で変わるため)。他の 4 列は「等幅 1 文字幅 × 文字数」の見積り＝**全角の車名 (自由入力) は見積りを超える**
-// (改修前から列は固定オフセットで同じ超過が起きる。BD2 はその見積りを枠幅の決定にも使うようになった)。
+// 行の各列が要する幅 [CSS px]。**状態列と名前列は実際に描く文字列を measureText で測る** (状態は ja 28 / en 35 と
+// 言語で変わる・名前は自由入力で全角 5 文字なら 70)。他の 3 列 (順位・LAP・BEST) は数字と記号だけなので
+// 「等幅 1 文字幅 × 文字数」の見積りで足りる。
 // あわせて列の隙間と枠の右余白を自然位置 (LB_COL) から逆算する — 詰める対象は「空白」であって文字ではない。
+// 名前の後ろの隙間は**半角 5 文字 (nameNom) から**逆算する (LB_COL はその幅で並べた値)。名前が半角 5 文字より
+// 広いときは、その差 (nameGrow) だけ名前より右の列を右へ送り、枠もその分だけ広がる (BE4。旧実装は隙間を
+// 実幅から逆算していなかったので、全角の名前が LAP 列へ 自然時 6.00px・詰め時 最大 20.71px 食い込んでいた)。
+// 等幅フォントに字形がある半角文字 (英数字・記号・半角カナ＝実測) だけの車名は実幅 ≤ nameNom なので nameGrow = 0
+// ＝ 改修前と同じ値・同じ経路。半角でも別フォントへ落ちる字形はその実幅で測る (見積りより広ければ列を広げる)。
 // 返り値の wNat は自然幅で、ja/en・既定編成では LB.wMin と一致する (LB.wMin はこの並びから決まった値)。
 function lbParts(ctx, slots) {
   ctx.save();
   ctx.font = LB_ROW_FONT + 'px monospace';
   const ch = ctx.measureText('0').width;
   const state = Math.max(...['hud.lb.run', 'hud.lb.stop', 'hud.lb.crash'].map((k) => ctx.measureText(t(k)).width));
+  const nameW = Math.max(0, ...slots.map((s) => ctx.measureText(lbName(s.name)).width));
   ctx.restore();
-  // 順位=slots.length の桁数・名前=padEnd(5)・LAP=padStart(2)・BEST=slice(0,8)。いずれも drawFleetHud と同じ。
-  const cw = { rank: String(slots.length).length * ch, dot: LB_DOT_R * 2, name: 5 * ch, lap: 2 * ch, best: 8 * ch, state };
+  // 順位=slots.length の桁数・LAP=padStart(2)・BEST=slice(0,8)。いずれも drawFleetHud と同じ。
+  // 名前は実測 (上限 LB_NAME_MAX＝全角 5 文字。これを超える字形は描画側で列幅へ縮める)。上限は nameNom を
+  // 下回らせない (1 文字幅が 1em を超える字体でも nameGrow が負にならない＝名前の後ろの隙間が縮まない)。
+  const nameNom = LB_NAME_N * ch;
+  const name = nameW > nameNom ? Math.min(nameW, Math.max(nameNom, LB_NAME_MAX)) : nameNom;
+  const cw = { rank: String(slots.length).length * ch, dot: LB_DOT_R * 2, name, lap: 2 * ch, best: 8 * ch, state };
   const gap = [
     (LB_COL.dot - LB_DOT_R) - (LB_COL.rank + cw.rank),
     LB_COL.name - (LB_COL.dot + LB_DOT_R),
-    LB_COL.lap - (LB_COL.name + cw.name),
+    LB_COL.lap - (LB_COL.name + nameNom),
     LB_COL.best - (LB_COL.lap + cw.lap),
     LB_COL.state - (LB_COL.best + cw.best),
   ];
@@ -268,7 +295,7 @@ function lbParts(ctx, slots) {
   // space が 0 以下になると s の式が 0 除算 (NaN) になり、NaN は比較も clamp も素通りして
   // 'NaNpx monospace' (無効値＝直前のフォントのまま) まで伝播する。空白が無い並びは「詰めない」で扱う。
   const space = Math.max(1e-6, LB.padL + gap.reduce((a, b) => a + b, 0) + padR);
-  return { cw, gap, content, space, wNat: content + space };
+  return { cw, gap, content, space, wNat: content + space, nameGrow: name - nameNom };
 }
 
 // 順位表の寸法 (幅・高さ・列位置・フォント・注記の行分割)。wPx = HUD 座標系での画面幅。
@@ -334,8 +361,13 @@ function fleetHudMetrics(ctx, slots, wPx) {
   ctx.restore();
   const footH = LB.footH + (lines.length - 1) * LB.noteLineH;
   const h = LB.padT * 2 + LB.headH + LB.rowH * slots.length + footH;
-  // 列の位置 (枠の左端から)。nat のときは LB_COL そのもの＝改修前と 1 px も変わらない。
+  // 列の位置 (枠の左端から)。nat のときは LB_COL そのもの＝改修前と 1 px も変わらない
+  // (BE4: 名前が半角 5 文字より広いときだけ、名前より右の列をその差だけ右へ送る)。
   let cols = LB_COL, dotR = LB_DOT_R;
+  if (nat && P.nameGrow > 0) {
+    const g = P.nameGrow;
+    cols = { ...LB_COL, lap: LB_COL.lap + g, best: LB_COL.best + g, state: LB_COL.state + g };
+  }
   if (!nat) {
     dotR = LB_DOT_R * kf;
     let x = padL;
@@ -349,7 +381,9 @@ function fleetHudMetrics(ctx, slots, wPx) {
     cols.state = x;
   }
   const headFont = Math.max(LB_FONT_MIN, Math.min(LB_HEAD_FONT, LB_HEAD_FONT * (w - padL * 2) / hdrW));
-  return { w, h, noteFont, lines, cols, dotR, padL, rowFont: LB_ROW_FONT * kf, headFont };
+  // nameW = 名前の列幅 (描画側がこれを超える名前を列幅へ縮める)・nameFit = 名前が半角 5 文字より広い編成か。
+  return { w, h, noteFont, lines, cols, dotR, padL, rowFont: LB_ROW_FONT * kf, headFont,
+    nameW: P.cw.name * kf, nameFit: P.nameGrow > 0 };
 }
 
 // HUD の配置 (BB3)。hv = { wPx, hPx } は HUD 座標系 (CSS px) での画面の大きさ。
@@ -415,7 +449,7 @@ export function drawFleetHud(ctx, slots, view, activeIdx, top = 12, metrics = nu
   // 約 1.2 倍・box 幅を余裕をもって拡張)。表示内容・並び順・判定ロジックは無変更 (描画のみ)。
   const { rowH, padT, headH } = LB;
   const m = metrics || fleetHudMetrics(ctx, slots, view.wPx);
-  const { w, h, noteFont, lines, cols, dotR, padL, rowFont, headFont } = m;
+  const { w, h, noteFont, lines, cols, dotR, padL, rowFont, headFont, nameW, nameFit } = m;
   const x0 = view.wPx - w - LB_MARGIN, y0 = top;
   ctx.save();
   ctx.fillStyle = 'rgba(10,12,16,0.86)';
@@ -435,7 +469,11 @@ export function drawFleetHud(ctx, slots, view, activeIdx, top = 12, metrics = nu
     ctx.beginPath(); ctx.arc(x0 + cols.dot, y - 5, dotR, 0, Math.PI * 2); ctx.fill();
     // 名前
     ctx.fillStyle = active ? '#fff' : '#cfd6e6';
-    ctx.fillText((s.name || '').slice(0, 5).padEnd(5), x0 + cols.name, y);
+    // BE4: 列幅 (nameW) を超える名前だけ横に縮めて描く (fillText の maxWidth)。全角 5 文字までは列幅がその実幅に
+    // なるので縮まない。半角だけの編成 (nameFit=false) は maxWidth を渡さない＝改修前と同じ呼び出し。
+    const nm = lbName(s.name);
+    if (nameFit && ctx.measureText(nm).width > nameW) ctx.fillText(nm, x0 + cols.name, y, nameW);
+    else ctx.fillText(nm, x0 + cols.name, y);
     // LAP
     ctx.fillStyle = A11Y.cvdSafe ? CVD.lap : '#7fe0a0'; ctx.fillText(String(s.lap?.laps ?? 0).padStart(2), x0 + cols.lap, y);
     // BEST
