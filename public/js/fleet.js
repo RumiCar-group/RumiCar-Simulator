@@ -320,8 +320,14 @@ export function spawnPos(course, slotCount, i) {
 }
 
 // スロット生成。logFor(slot) は Serial 出力の書込先 (UI 側で用意) を返すファクトリ。
+// persist: 練習ベストを読み書きするか (LapTracker へそのまま渡す・既定 true)。**BE2 (2026-09-24)**: 練習ベストの
+//   鍵がコースの形の指紋になり、読むだけでも指紋の計算 (最大 1ms 台/台) がかかる。公式レース・実走プローブ
+//   (race_engine) は直後に persist:false で reset し直すので、その前の読込は丸ごと捨てられていた。race_engine だけが
+//   false を渡す。既定 (undefined) は従来どおり。実測 (2026-09-24・本ホスト node・『ウェットテクニカル (雨)』6 台・
+//   maxSec 0.5 の runRace 15 回の中央値): HEAD 30.8ms・この修正後 28.5ms (＝HEAD と同水準。修正前は台数×2 回の指紋を
+//   余分に計算していた)。verifyHash は HEAD と一致。
 let slotSeq = 0;
-export function makeSlot({ i, lang, src, course, slotCount, logFor }) {
+export function makeSlot({ i, lang, src, course, slotCount, logFor, persist }) {
   const spawn = spawnPos(course, slotCount, i);
   const car = newCar(spawn);
   const slot = {
@@ -332,7 +338,7 @@ export function makeSlot({ i, lang, src, course, slotCount, logFor }) {
     carType: CAR_TYPE_DEFAULT,  // 車種 (CAR_TYPES のキー)
     car, spawn,
     world: null, hostEnv: null, controller: null,
-    lap: new LapTracker(course),
+    lap: new LapTracker(course, { persist }),
     loopTimer: 0, running: false,
     serial: '',   // この車両の Serial 出力バッファ
   };
@@ -385,7 +391,10 @@ export function swapPhysics(slots) {
 // 各車を順に「既に置いた車と重ならない空き」へ配置 → 全コースで初期位置が重ならない。
 // AD1: 任意 grid=[{x,y,theta},…] を渡すとその凍結位置で配置する (公式記録の忠実再現＝配置を
 // データ駆動化)。grid 未指定 (既存の全呼び出し) は従来どおり freeSpawn で算法計算＝byte 完全不変。
-export function rebuildSpawns(slots, course, grid) {
+// lapOpts.persist: 各車の LapTracker.reset へ渡す (既定 true＝練習記録を読む)。race_engine だけが false を渡す (上の makeSlot と同じ理由・BE2)。
+export function rebuildSpawns(slots, course, grid, lapOpts) {
+  const persist = lapOpts ? lapOpts.persist : undefined;
+  const memo = {};   // BE2: 全車が同じ course なので、練習記録の指紋はこの呼び出しで 1 回だけ計算する (lap.js loadBestRec の memo)
   const occupied = [];
   const road = roadFrame(course);   // AP11/AS10: コース適用時に路面フレームを更新 (平坦=null)
   const stMeta = roadMeta(course.start);   // AV1: 路面属性は roadMeta へ集約 (キー順・値とも従来と同一)
@@ -399,7 +408,7 @@ export function rebuildSpawns(slots, course, grid) {
     s.world.start = sp;
     s.world._others = [];
     s.car.reset(sp);
-    s.lap.reset(course, { carType: s.carType, tire: s.world.tire, wear: s.world.wear, gear: s.world.gear });   // 練習記録はコース×車種別 (W2)・装備を記録へ刻む (AP2/AS9)
+    s.lap.reset(course, { carType: s.carType, tire: s.world.tire, wear: s.world.wear, gear: s.world.gear, persist, memo });   // 練習記録はコース×車種別 (W2)・装備を記録へ刻む (AP2/AS9)
     s.running = false; s.loopTimer = 0;
   });
 }

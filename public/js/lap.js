@@ -7,6 +7,8 @@ import { segIntersect } from './geom.js';
 import { APP_VERSION, REGIME_STATE, PHYSICS, SENSOR_NOISE, SENSOR_OPTICS, SCALE_STATE, CAR_TYPE_BY_KEY } from './config.js';
 import { safeSetItem } from './storage.js'; // AP4: 保存失敗を握りつぶさず可視化
 import { fnv1a } from './fnv1a.js'; // v5.2.0: 葉モジュールへ統合 (旧ローカル複製と byte 一致・下記 AP2 注記参照)
+import { courseShapeDigest } from './course_digest.js'; // BE2: 「同じコースか」は BD1 と同じ唯一の場所で決める (葉＝循環なし)
+import { PRESETS } from './course.js';                  // BE2: 旧記録の採否に出荷コースの定義を使う (course.js は config.js だけに依存＝循環なし)
 
 const ARM_DIST = 0.25; // m: 再計上のためにライン正側へ離れるべき距離 (通常コースの既定)
 
@@ -35,7 +37,39 @@ function computeArmDist(course) {
 // ソロ走行のベストラップは「練習（非公式）」記録として **コース×車種別** にこのブラウザへ保存する
 // (公式記録=GitHub races/ とは別経路＝「公式と混入しない」)。車種で速さが変わるため車種別が正。
 // 旧キー `rumicar.best.<course>` (コースのみ) は W2 で per-car へ移行（旧記録は再走で再生成）。
-function bestKey(courseName, carType) { return 'rumicar.practice.' + courseName + '::' + (carType || ''); }
+//
+// 【BE2・2026-09-24】**「どのコースの記録か」を名前でなく形で決める。** W2〜v8.7.0 の鍵は
+//   `rumicar.practice.<コース名>::<車種>` だった。名前は識別子であって形ではないので、**保存コースの壁だけを
+//   編集して同じ名前で ✔適用すると、別レイアウトのベストが自分の記録として出た**（実ブラウザで再現: オーバルの
+//   写しで 1 周 00:13.60 → 隅に壁を 1 本足して ✔適用 → HUD の BEST に 00:13.60）。BD1 が `capacity.js` で
+//   直したのと同じ「名前＝同一性」の欠陥（BD-3(a)）。名前がプリセットと重複する自作コースも同じ鍵を奪い合っていた（BB-4 ⑤）。
+//   新しい鍵は `rumicar.practiceShape.<形の指紋 16 桁>::<車種>`。旧キーの名前空間 `rumicar.practice.` とは
+//   接頭辞が重ならない（`practice.` と `practiceShape.` は 9 文字目で分かれる）ので、どんな名前のコースでも衝突しない。
+//   形の指紋は BD1 の `courseShapeDigest`（コースを丸ごと歩く）に、**名前と説明と格付けだけを抜いた**コースを渡したもの。
+//   抜くのは下の RECORD_LABEL_KEYS だけ（＝名前を変えても・説明文を直しても・星の数を付け替えても同じ記録）。
+//   **抜く側を列挙し、入れる側は列挙しない**: 将来コースに場が増えても自動で形に入る。列挙を誤った場合に
+//   起きるのは「記録が見つからない」側（安全側）で、「別のコースの記録が出る」側ではない。
+//   **数値は 1e-6 の格子へ丸めてから混ぜる**（`capacity.js` の覚え書きは丸めない＝あちらは「答えが変わりうるか」で
+//   1e-12 の差も区別する。こちらは「利用者にとって同じコースか」）。理由: 出荷コースの壁は `buildFromSpec` が
+//   `Math.sin/cos/hypot/atan2` で組み立てる倍精度で、ECMAScript はこれらの精度を実装に任せている（最下位ビットは
+//   エンジン次第）。丸めずに混ぜると、バックアップ（`data_backup.js`）を別系統のブラウザへ移したときに出荷コースの
+//   記録がまとめて見えなくなりうる（層 4 の 2 回目・2026-09-24 の指摘。別エンジンはこの環境に無いので、代わりに
+//   出荷全コースの全数値を最下位ビットで ±1 ずらして測った: 丸めないと 66/66 本の指紋が変わり、1e-6 の格子では 0/132）。
+//   丸め（乗算・`Math.round`・除算）は IEEE で結果が決まっているのでエンジンに依らない。`-0` は `+0` に揃える
+//   （0 の両側に 1 ulp ずれた値が別の指紋になるのを防ぐ）。**残る限界**: 格子の境目から数 ulp 以内にある値は
+//   エンジン差で隣の格子へ落ちうる（座標 数 m の値で 1 値あたりおおむね 1e-9 の桁。出荷コースの全 5.5 万値では境目に
+//   最も近い値でも約 1.2 万 ulp 離れている＝層 4 の 3 回目の実測）。同じ 1e-6 の格子点に丸まる値どうしは同じコースとして
+//   扱う（境目をまたぐ差は 1µm 未満でも別のコースになる。どちらも利用者にとっては同じコースだが、別になる側は安全側）。
+const RECORD_LABEL_KEYS = new Set(['name', 'name_en', 'desc', 'desc_en', 'diff', 'beginner', 'bench']);
+export function practiceCourseId(course) {
+  const shape = {};
+  for (const k of Object.keys(course || {})) if (!RECORD_LABEL_KEYS.has(k)) shape[k] = course[k];
+  return courseShapeDigest(shape, 1e6);   // 1e-6 の格子で丸めて混ぜる（写しは作らない＝丸めは digest の数値の入口 1 箇所）
+}
+function bestKeyById(courseId, carType) { return 'rumicar.practiceShape.' + courseId + '::' + (carType || ''); }
+// 旧キー（v8.7.0 まで）。**読むだけで書かない・消さない**（利用者の記録を失わない＝データ保全・`data_backup.js` の
+// バックアップにもそのまま残る）。新しいベストは常に新しい鍵へ書く。
+function legacyBestKey(courseName, carType) { return 'rumicar.practice.' + courseName + '::' + (carType || ''); }
 
 // ── AP2: 練習ベスト記録の時点記録化（版・条件・定義ハッシュ＋移行）──────────────────
 // FNV-1a 32bit は race_engine.js と共通の葉モジュール fnv1a.js から import する (v5.2.0 統合)。
@@ -49,6 +83,9 @@ function bestKey(courseName, carType) { return 'rumicar.practice.' + courseName 
 // AV1: 常設ゲートが **実関数を呼んで** 「この指紋に何が含まれ、何が含まれないか」を測れるように
 // export する（再実装＝CI-14 違反を避ける。physics_v2 の mfCoeffs/tireForceMF/effGrip と同じ扱い）。
 // 挙動は一切変わらない（純関数・module 内の呼び出しもそのまま）。
+// 【BE2・2026-09-24】**この関数の出力を変えてはならない**: v8.7.0 までの旧記録の採否（下の loadBestRec の (a)）が、
+//   記録が保存時点で持つこの値と今の値を比べる。変えると出荷コースの AP2 以降の旧記録がすべて見えなくなる
+//   （`wf_be2_practicekey` の P) が出荷全コースの値を凍結して測る）。AV1-e1（路面を含まない穴）を塞ぐなら別の関数を足すこと。
 export function courseHashOf(course) {
   if (!course) return '00000000';
   const walls = (course.walls || []).map(w => [w.x1, w.y1, w.x2, w.y2]);
@@ -91,9 +128,9 @@ function captureCond(carType, tire, wear, course, gear) {
 // 記録の読取（3系対応・W2→AP2 移行）: 新スキーマ JSON {t,ver,cond} / 旧スキーマ裸数値 / 破損。
 // 破損・非有限・負値は null（=記録なし扱い＝再樹立を許す）。旧実装は `+v` が JSON 文字列に NaN を
 // 返し、比較 `< NaN` が恒常 false になってベスト更新が永久停止するハザードがあった（AP2 で是正）。
-export function loadBestRec(courseName, carType) {
+function parseRec(key) {
   try {
-    const raw = localStorage.getItem(bestKey(courseName, carType));
+    const raw = localStorage.getItem(key);
     if (raw == null || raw === '') return null;
     const s = raw.trim();
     if (s.charCodeAt(0) === 123) {   // 0x7B '{' = 新スキーマ JSON
@@ -114,9 +151,63 @@ export function loadBestRec(courseName, carType) {
   } catch (e) { return null; }
 }
 
+// 【BE2】コース（オブジェクト）× 車種の練習ベスト。**引数は名前でなくコースそのもの**（名前では形が決まらない）。
+//   ① 新しい鍵（形の指紋）に記録があればそれ。
+//   ② 無ければ旧キー（名前）を読み、**形が同じだと言えるときだけ**採る:
+//      (b) 今のコースが**同名の出荷コースと中身まで同一**（`practiceCourseId` が一致）であること。必須。
+//      (a) 記録に `cond.courseHash`（AP2 以降の記録が保存時点で持つ `courseHashOf`＝壁・フィニッシュ・スタート・
+//          峠フラグの指紋）があるなら、今のコースの `courseHashOf` と一致すること（**別レイアウトの証拠があれば採らない**）。
+//          AP2 以前の記録（裸の数値・スタンプ無し JSON）には証拠が無いので (b) だけで採る — 改修前も表示していた記録で、
+//          チャレンジは従来どおり「版スタンプ無し」と断って数える（`challenge.js` の stale）。層 4（2026-09-24）の指摘:
+//          初版は (a) を必須にしたため、出荷コースの AP2 以前の記録が消え、チャレンジのバッジが後退した。
+//      なぜ (b) が要るか: `courseHashOf` は枠・路面・グリップ・バンク・峠の勾配を含まない（AP2 以来の穴・AV1-e1）ので、
+//      (a) だけでは同名・同じ壁で路面だけ変えた自作コースに旧記録が出る（BE2 の常設ゲート B) が初版で検出）。
+//      自作・投稿コースは**同じ版の中で**中身が変わりうる（本件そのもの）ので、旧記録からは形を証明できない。
+//      出荷コースの中身が版を跨いで変わった分は、記録の版スタンプ（`ver`＝HUD の「(当時 vX)」）が開示する
+//      ＝過去の記録を当時の版の記録として正直に出す方針（CLAUDE.md）の範囲。
+//      **限界（正直に書く）**: 旧版で出荷コースをエディタに開き、壁を変えずに ✔適用したコース（エディタは
+//      `name/bounds/start/finish/walls` しか持たないので、路面・グリップ・バンクが外れる）で出した記録は、
+//      名前も壁も同じなので出荷コースの旧記録と区別できない（雨の出荷コースでは乾いた路面の記録が採られうる）。
+//      旧形式が持つ情報ではこれ以上絞れない。新しい鍵ではこの取り違えは起きない（形を全部含む）。
+//      **採らない旧記録は自分の記録として出さない**（消しもしない＝旧キーは byte 不変で残り、バックアップにも入る）:
+//      自作・投稿コースの旧記録・`courseHash` が今のコースと違う記録。
+//   ①が②より遅いことは通常無い: ②を読んだ走行でベストを出すと、②より速いときだけ①へ書かれる（lap.update）。
+//      例外は (b) の判定が後から変わる場合（出荷コースの定義が変わった・`courses.json` を読めず組込みの既定に落ちた）で、
+//      そのときは①があれば①が出る（②は読まれない）。
+// **memo**（`{}`）を渡すと、そのコースの指紋 `id` と `courseHashOf` の値 `hash` をそこへ覚えて使い回す
+// （同じコースを車種の数・台数ぶん引く呼び出し側用。**1 つの memo は 1 つのコースにだけ使うこと**）。
+export function loadBestRec(course, carType, memo = null) {
+  if (!course || typeof course !== 'object') return null;   // 名前（文字列）を渡す旧呼び出しは記録なし扱い＝取り違えない
+  const m = memo || {};
+  if (m.id == null) m.id = practiceCourseId(course);
+  const rec = parseRec(bestKeyById(m.id, carType));
+  if (rec) return rec;
+  const old = parseRec(legacyBestKey(course.name, carType));
+  if (!old || shippedIdOf(course.name) !== m.id) return null;                        // (b) 同名の出荷コースと同一
+  const h = old.cond && old.cond.courseHash;
+  if (typeof h === 'string') {                                                       // (a) 別レイアウトの証拠
+    if (m.hash == null) m.hash = courseHashOf(course);
+    if (h !== m.hash) return null;
+  }
+  return old;
+}
+
+// 同名の出荷コースの形の指紋（無ければ null）。出荷コースは起動時に `loadPresets` が 1 回だけ組み直す
+// （組み直すと関数が作り直される）ので、**組み立て関数ごと**に覚える＝組み直し後に古い値を返さない。
+// 旧記録がある組み合わせでしか呼ばれない（① に記録があれば・旧キーが空なら呼ばない）。
+const _shipped = new WeakMap();
+function shippedIdOf(name) {
+  for (const f of PRESETS) {
+    let e = _shipped.get(f);
+    if (!e) { const c = f(); e = { name: c.name, id: practiceCourseId(c) }; _shipped.set(f, e); }
+    if (e.name === name) return e.id;
+  }
+  return null;
+}
+
 // 数値シグネチャ維持（既存呼び出し互換・main.js のコースレコード等）。記録タイム t のみ返す。
-export function loadBest(courseName, carType) {
-  const rec = loadBestRec(courseName, carType);
+export function loadBest(course, carType) {
+  const rec = loadBestRec(course, carType);
   return rec ? rec.t : null;
 }
 
@@ -144,7 +235,11 @@ export class LapTracker {
     this.lastLap = null;     // 直近ラップタイム / 峠=ゴールタイム (s)
     // AP2: 記録全体（{t,ver,cond} or null）を読む。persist:false（公式レース）は localStorage を
     // 一切参照せず null＝従来と byte 完全一致（公式非干渉）。bestLap は数値のまま（表示/比較互換）。
-    const rec = this.persist ? loadBestRec(course.name, this.carType) : null;
+    // BE2: 記録の鍵（形の指紋）はここで 1 回だけ決め、_saveBest も同じ値を使う（読んだ鍵と書く鍵を割らない）。
+    //   opts.memo: 同じコースで何台も reset する呼び出し側（rebuildSpawns・startAuto）が 1 つ渡すと指紋の計算が 1 回で済む。
+    const memo = this.persist ? (opts.memo || {}) : null;
+    const rec = this.persist ? loadBestRec(course, this.carType, memo) : null;
+    this._courseId = this.persist ? memo.id : null;
     this.bestLap = rec ? rec.t : null;
     this.bestRec = rec;              // AP2: 当時版注記（(当時 vX)）の元
     this.lastBestLap = this.bestLap; // 走行開始時点の記録 (比較用)
@@ -203,7 +298,7 @@ export class LapTracker {
     const cond = captureCond(this.carType, this._tire, this._wear, this.course, this._gear);
     const rec = { t: this.bestLap, ver: APP_VERSION, cond };
     this.bestRec = rec;
-    safeSetItem(bestKey(this.course.name, this.carType), JSON.stringify(rec), 'best'); // AP4: 失敗は 1 行通知
+    safeSetItem(bestKeyById(this._courseId, this.carType), JSON.stringify(rec), 'best'); // AP4: 失敗は 1 行通知・BE2: 形の鍵
   }
 
   // 移動線分 prev→cur が フィニッシュ線分と交差するか

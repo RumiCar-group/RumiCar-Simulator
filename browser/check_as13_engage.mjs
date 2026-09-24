@@ -30,9 +30,12 @@ console.log(`\n== 実ブラウザ: エンゲージメント機能群 (AS13) ==\n
 const { page, errors, benign } = await newPage(browser, { width: 1440, height: 900 });
 
 // 配信中のモジュールに答えさせる (再実装しない・CI-9 / oracle_inventory.md)。
+// BE2: 練習記録は名前でなくコースの形で引く (loadBestRec はコースそのものを受け取る)。∴ 走行中のコース
+//   (state.js の live binding) を渡し、名前は「選んだコースが本当にそれか」の確認にだけ使う。
 const bestRec = (courseName, carType) => page.evaluate(async ([n, c]) => {
-  const m = await import('./js/lap.js');
-  return m.loadBestRec(n, c);
+  const [m, st] = await Promise.all([import('./js/lap.js'), import('./js/state.js')]);
+  if (st.course.name !== n.replace(/^gh:/, '')) throw new Error(`走行中のコースが「${st.course.name}」で、選んだ「${n}」ではない`);
+  return m.loadBestRec(st.course, c);
 }, [courseName, carType]);
 
 // ── T1: チャレンジの実在・母集団 ─────────────────────────────────────────

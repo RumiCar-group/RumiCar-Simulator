@@ -37,8 +37,9 @@ export const isChallengeCourse = (c) => isCompletable(c) && !c.bench;
 
 // チャレンジ状態を組み立てる。
 //   courses  = 組み立て済みコース配列 (name / diff / finish / beginner / noRace を見る)
-//   carKeys  = 記録を探す車種キー配列 (練習記録は コース×車種 別に保存される・lap.js bestKey)
-//   lookup   = (courseName, carType) => 練習記録 {t, ver, cond} | null   ← localStorage 依存の注入点
+//   carKeys  = 記録を探す車種キー配列 (練習記録は コース×車種 別に保存される・lap.js loadBestRec)
+//   lookup   = (course, carType) => 練習記録 {t, ver, cond} | null   ← localStorage 依存の注入点
+//              **コースそのもの**を渡す (BE2: 練習記録は名前でなく形で引く。名前を渡すと取り違える)
 // 戻り値:
 //   { rows[], byDiff[], total{done,total}, badges[], excluded, next }
 //     rows[]    … コース別 { name, diff, done, cars[], bestSec, ver, stale }
@@ -56,7 +57,7 @@ export function challengeState(courses, carKeys, lookup) {
     const cars = [];
     let bestSec = null, ver = null, stale = false;
     for (const k of (carKeys || [])) {
-      const rec = lookup(c.name, k);
+      const rec = lookup(c, k);
       if (!rec || !(rec.t > 0)) continue;
       cars.push(k);
       if (bestSec == null || rec.t < bestSec) { bestSec = rec.t; ver = rec.ver || null; }

@@ -223,7 +223,13 @@ ok(noFinish.length === 2,
 {
   // C3/C8: ★1 の全コースに記録を入れると clear、1 つ消すと started へ落ちる (検出力)。
   const d1Names = new Set(built.filter((c) => isCompletable(c) && c.diff === 1).map((c) => c.name));
-  const lookupD1 = (name, car) => (d1Names.has(name) && car === 'normal_fr') ? { t: 12.34, ver: 'v7.2.0' } : null;
+  // BE2（2026-09-24）: lookup は**コースそのもの**を受け取る契約に変わった（練習記録は名前でなく形で引く）。
+  //   この注入は記録の置き場を模すだけなので、どのコースに記録を置くかの選別にだけ名前を使う。
+  //   名前（文字列）が渡ってきたら旧契約で呼ばれている＝例外で落とす（黙って null を返すと C3 が空振りする）。
+  const lookupD1 = (c, car) => {
+    if (!c || typeof c !== 'object') throw new Error('challengeState の lookup にコースでなく ' + typeof c + ' が渡った（旧契約）');
+    return (d1Names.has(c.name) && car === 'normal_fr') ? { t: 12.34, ver: 'v7.2.0' } : null;
+  };
   const stA = challengeState(built, CARS, lookupD1);
   const d1 = stA.byDiff.find((d) => d.diff === 1);
   ok(d1.state === 'clear' && d1.done === d1.total, `C3 ★1 の全コース完走で state=clear (${d1.done}/${d1.total})`);
@@ -231,7 +237,7 @@ ok(noFinish.length === 2,
   ok(stA.badges.find((b) => b.key === 'first').got === true, 'C3 1 コース以上で「はじめの一歩」を取得');
   ok(stA.badges.find((b) => b.key === 'all').got === false, 'C3 全コースは未制覇のまま');
   const one = [...d1Names][0];
-  const stB = challengeState(built, CARS, (n, c) => (n === one ? null : lookupD1(n, c)));
+  const stB = challengeState(built, CARS, (c, k) => (c.name === one ? null : lookupD1(c, k)));
   const d1b = stB.byDiff.find((d) => d.diff === 1);
   ok(d1b.state === 'started' && d1b.done === d1.done - 1,
     `C8 検出力: 1 コースの記録を消すと clear→started に落ちる (${d1.done}→${d1b.done})`);

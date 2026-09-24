@@ -290,10 +290,12 @@ console.log('\n  E) 変異試験（鍵を壊して A)/C)/D) が赤くなるか�
 const MUTATIONS = [
   ['鍵の 1 つ目を course.name へ戻す（BD1 以前）', 'capacity.js', 'A',
     (s) => s.replace('const key = `${courseShapeDigest(course)}|', 'const key = `${course.name}|')],
-  ['digest が配列の中身を見ない（壁の座標を無視する）', 'capacity.js', 'A',
+  // 【BE2・2026-09-24】digest 本体は `capacity.js` から葉 `course_digest.js` へそのまま移した（循環 import 回避）ので、
+  //   本体を壊す 2 件はそちらへ注入する（`capacity.js` は再 export だけ＝同じ置換は適用されず「パターン腐り」で赤になる）。
+  ['digest が配列の中身を見ない（壁の座標を無視する）', 'course_digest.js', 'A',
     (s) => s.replace("      if (Array.isArray(x)) { mixU(7); mixU(x.length); for (const e of x) walk(e); return; }",
                      "      if (Array.isArray(x)) { mixU(7); mixU(x.length); return; }")],
-  ['digest を 1e-4 に量子化する（描画用指紋と同じ丸め）', 'capacity.js', 'C',
+  ['digest を 1e-4 に量子化する（描画用指紋と同じ丸め）', 'course_digest.js', 'C',
     (s) => s.replace('const mixN = (n) => { _f64[0] = n; mixU(_u32[0]); mixU(_u32[1]); };',
                      'const mixN = (n) => { mixU((n * 1e4) | 0); };')],
   ['上限の追い出しを外す', 'capacity.js', 'D',
@@ -303,7 +305,7 @@ const MUTATIONS = [
   ['fitguard ⑥ が carScale の掃引でも実走を払う（D-1 が守る約束を破る）', 'fitguard.js', 'D',
     (s) => s.replace("ctx.reason !== 'carScale' && capN > 1 && ctx.slotCount > 1", 'capN > 1 && ctx.slotCount > 1')],
 ];
-const RAW = Object.fromEntries(['capacity.js', 'fitguard.js'].map((f) => [f, fs.readFileSync(path.join(JS_ROOT, f), 'utf8')]));
+const RAW = Object.fromEntries(['capacity.js', 'course_digest.js', 'fitguard.js'].map((f) => [f, fs.readFileSync(path.join(JS_ROOT, f), 'utf8')]));
 const mutMiss = [], mutNoop = [];
 for (const [name, file, chapter, fn] of MUTATIONS) {
   const mutated = fn(RAW[file]);

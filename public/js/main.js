@@ -397,12 +397,13 @@ function startAuto() {
   enforceFitRatio('race');   // Stage AK7: 発走直前に実態容量へ確定 (carScale ドラッグで静的のままだった場合の安全網=楽め込み台数で走り出さない)
   rebuildSpawns(slots, course);
   let ok = 0;
+  const lapMemo = {};   // BE2: 全車が同じ course なのでこのループでは練習記録の指紋を 1 回だけ計算する (lap.js loadBestRec の memo。直前の rebuildSpawns でも別に 1 回計算する＝▶ 1 回で計 2 回・重いコースで 1 回 約 1ms)
   for (const slot of slots) {
     slot.car.reset(slot.spawn);
     slot.serial = '';
     slot.world._pendingDelay = 0; slot.world._others = [];
     slot.hostEnv = buildApi(slot.world);
-    slot.lap.reset(course, { carType: slot.carType, tire: slot.world.tire, wear: slot.world.wear, gear: slot.world.gear });   // 練習記録(非公式)はコース×車種別 (W2)・装備を記録へ刻む (AP2/AS9)
+    slot.lap.reset(course, { carType: slot.carType, tire: slot.world.tire, wear: slot.world.wear, gear: slot.world.gear, memo: lapMemo });   // 練習記録(非公式)はコース×車種別 (W2)・装備を記録へ刻む (AP2/AS9)
     try {
       slot.controller = buildController(slot.src, slot.lang, slot.hostEnv);
       slot.controller.setup();
@@ -1439,7 +1440,14 @@ function challengeName(r) { return (getLang() === 'en' && r.nameEn) ? r.nameEn :
 function renderChallenge() {
   const esc = escapeHtml;
   const built = PRESETS.map((f) => f());
-  const st = challengeState(built, CAR_TYPES.map((c) => c.key), loadBestRec);
+  // BE2: 練習記録は形の指紋で引く。同じコースを車種の数だけ引くので、指紋（と旧記録の採否に使う `courseHashOf`）は
+  //   この 1 回の集計の中でコースごとに 1 回だけ計算する（lap.js loadBestRec の memo。`built` は毎回作り直す新しい
+  //   オブジェクト＝この Map は集計 1 回きりで捨てる）。実測（2026-09-24・本ホスト node・出荷 66 コース × 6 車種・
+  //   9 回の中央値・コースの組み立ては含まない）: 練習記録が空 約 20ms・v8.7.0 までの旧記録を 384 件（全コース×全車種）
+  //   持つ利用者 約 28ms（名前の鍵だった改修前は 0.3ms）。ダイアログを開くクリック 1 回あたり。
+  const memos = new Map();
+  const lookup = (c, k) => { let m = memos.get(c); if (!m) memos.set(c, (m = {})); return loadBestRec(c, k, m); };
+  const st = challengeState(built, CAR_TYPES.map((c) => c.key), lookup);
   let h = '';
   // 総合進捗
   h += `<p class="chal-total"><b>${esc(t('chal.total', { done: st.total.done, total: st.total.total }))}</b></p>`;

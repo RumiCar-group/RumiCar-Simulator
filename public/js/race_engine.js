@@ -250,6 +250,7 @@ export function runRace(spec) {
       const slot = makeSlot({
         i, lang: e.lang, src: e.src, course, slotCount: fitField.length,
         logFor: () => (msg) => logs.push({ i, msg }),
+        persist: false,   // BE2: 公式レース・実走プローブは練習記録を読まない (下の reset と同じ・読むだけでも指紋の計算がかかる)
       });
       const ct = e.carType || (e.carDef && e.carDef.key) || slot.carType;
       slot.carType = ct; slot.car.type = ct;
@@ -278,7 +279,7 @@ export function runRace(spec) {
     });
 
     // --- spawn 配置 (grid 指定なら凍結位置で忠実再現・無ければ freeSpawn 算法) + 走行開始 ---
-    rebuildSpawns(slots, course, gridUsed);   // AZ5: ガードの判断と同じ値で配置する（`[]` は grid 無しと同義）
+    rebuildSpawns(slots, course, gridUsed, { persist: false });   // AZ5: ガードの判断と同じ値で配置する（`[]` は grid 無しと同義）・BE2: 練習記録を読まない
     // AD1: 実際に使った初期位置を配置データとして外部化する (result に刻めば算法非依存に再現可能)。
     const usedGrid = slots.map((s) => ({ x: s.spawn.x, y: s.spawn.y, theta: s.spawn.theta }));
     for (const s of slots) {

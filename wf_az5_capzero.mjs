@@ -302,7 +302,8 @@ function checkStructural(raw) {
   // 凍結グリッドの正規化（空配列を grid 無しと同義にする）＝ガードの判断と配置を同じ値で駆動する。
   if (!/const gridUsed = \(Array\.isArray\(grid\) && grid\.length > 0\) \? grid : null;/.test(eng))
     v.push('race_engine が grid を正規化していない（grid:[] がガードを素通りし、配置は freeSpawn になる）');
-  if (!/rebuildSpawns\(slots, course, gridUsed\);/.test(eng))
+  // BE2（2026-09-24）: 第 4 引数 `{ persist: false }`（練習記録を読まない）が付いたので、第 3 引数が gridUsed であることだけを見る。
+  if (!/rebuildSpawns\(slots, course, gridUsed[,)]/.test(eng))
     v.push('race_engine の配置が gridUsed を使っていない（ガードの判断と配置が別の値で駆動される）');
   if (!/if \(gridUsed == null && spec\.fitGuard !== false\) \{/.test(eng))
     v.push('race_engine の fit ガードの適用条件が変わった（凍結グリッド/capacity 経路の除外が消えると公式記録と AK7 を壊す）');

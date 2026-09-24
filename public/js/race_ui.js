@@ -69,7 +69,7 @@ function renderRaceResult(res, meta) {
     }
     let recordHtml = '';
     if (fastest) {
-      const prevRec = loadBestRec(rc.name, fastest.carType);   // 既存 lap best (読み取り専用)
+      const prevRec = loadBestRec(rc, fastest.carType);        // 既存 lap best (読み取り専用・BE2: 名前でなく形で引く)
       const prev = prevRec ? prevRec.t : null;                 // 記録タイム t (単位=秒。無ければ null)
       const fSec = fastest.bestLapMs / 1000;                   // レース best を秒へ (bestLapMs=ミリ秒)
       const fTime = fmtTime(fSec);
