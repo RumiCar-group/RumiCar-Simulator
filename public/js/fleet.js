@@ -34,6 +34,9 @@ import { buildApi } from './api.js';
 import { LapTracker } from './lap.js';
 import { segIntersect, distToSeg } from './geom.js';
 import { wallGridFor, resolveFleetContacts, vCrashOf } from './contact_v2.js';
+// 【BE7・2026-09-25】見通し判定の候補限定 anyWallNearSeg は BE7 で足した名前なので**名前空間から「あれば使う」**
+//   (上の physicsParts と同じ理由。古い contact_v2.js なら従来の全走査＝答えは同じ)。
+import * as contactParts from './contact_v2.js';
 
 // 許容誤差つき線分交差 (スポーン判定専用)。壁ポリゴンの継ぎ目頂点をちょうど通る線分は、
 // 浮動小数の丸めで両隣の壁とも t/u が僅かに [0,1] を外れ「非交差」になり得る (すり抜け)。
@@ -56,6 +59,17 @@ function segClearOfWalls(ax, ay, bx, by, walls) {
   for (let i = 0; i < walls.length; i++) if (segHitWall(ax, ay, bx, by, walls[i])) return false;
   return true;
 }
+// 【BE7・2026-09-25】見通し判定 (freeSpawn の廊下判定・廊下 BFS の 1 歩) を壁ブロードフェーズで候補限定する。
+//   旧経路は線分ごとに全壁を走査し、壁の本数に比例した (実測・改修前: 櫛形の投稿コース 壁 2,996 本で freeSpawn 1 回
+//   2.4 秒の大半)。**答えは全走査と同じ**: 「1 本でも当たれば偽」は走査順に依らず、候補は当たりうる壁を全部含む
+//   (候補の決め方と余裕の根拠は contact_v2.js anyWallNearSeg の注記)。SEG_TOL は segHitWall の端の許容 1e-7 の 10 倍。
+//   古い contact_v2.js (anyWallNearSeg が無い) のときは従来の全走査。
+const SEG_TOL = 1e-6;
+function segClearNear(ax, ay, bx, by, walls) {
+  const near = contactParts.anyWallNearSeg;
+  if (typeof near !== 'function') return segClearOfWalls(ax, ay, bx, by, walls);
+  return !near(walls, ax, ay, bx, by, SEG_TOL, 2 * CAR.length, segHitWall);
+}
 
 // 廊下伝いの BFS でスタートから到達できる点を近い順に列挙する。
 // 直線グリッド候補が尽きるコース (スタートが鋭角コーナー直上等) の保険。
@@ -67,7 +81,16 @@ function segClearOfWalls(ax, ay, bx, by, walls) {
 //   あわせて、同じ地点で向きを最大 17 通り試すあいだ **壁の候補は 1 回だけ引き、姿勢は 1 個の Car を使い回す**
 //   (旧: 向きごとに `new Car` と `checkCollision` の候補検索をやり直していた)。判定そのものは
 //   checkCollision と同じ部品 (physics.js の collisionCandidates / cornersHitSegs) で、候補の集合は向きに依らない。
-function* corridorCandidates(course, st, maxPts = 600) {
+// 【BE7・2026-09-25】**見つけたノードの総数に上限 maxNodes を置く** (置ける／置けないを問わず数える)。旧実装の上限
+//   maxPts は「置けるノード」しか数えず、車が置けない通路は上限なしに広がった (実測・改修前: 100×6.4 m の櫛形・壁
+//   2,996 本で freeSpawn 1 回 2.4 秒)。上限に達したら探索を終える＝出す候補は上限なしのときの**先頭部分と同じ**
+//   (順序・値とも)。出荷コースでは届かない: 出荷 66 本 × 3 領域 × 車体スケール 0.4〜4.0 (0.1 刻み) × 6 台の全 43,956 回で
+//   見つけたノードの最大は 2,552 (ドリフト広場 fullscale cs0.9)＝上限 6,000 の 43%。∴ 出荷コースの配置は 1 ビットも
+//   変わらない (常設は wf_ba1_fitcore.mjs の凍結ダイジェスト＝出荷×3 領域×4 倍率。全 43,956 回の照合は
+//   `node wf_be7_heavy.mjs --full` が改修前の凍結値と突き合わせる)。上限に届くのは「通路は
+//   広いが車の置けない場所が大半」の形だけで、その形では遠くの置き場所を諦めて freeSpawn の次の段 (最も離れた有効点・
+//   廊下上の実点) へ進む。1 歩の見通し判定も上の segClearNear で候補限定する (答えは全走査と同じ)。
+function* corridorCandidates(course, st, maxPts = 600, maxNodes = 10 * maxPts) {
   const step = 0.07;
   const key = (x, y) => Math.round(x / step) + ',' + Math.round(y / step);
   const probe = new Car({ x: st.x, y: st.y, theta: st.theta });   // corners() を使うためだけの姿勢 (x/y/theta を書き換えて使う)
@@ -84,7 +107,8 @@ function* corridorCandidates(course, st, maxPts = 600) {
       const kk = key(x, y);
       if (seen.has(kk)) continue;
       if (x < 0 || y < 0 || x > course.bounds.w || y > course.bounds.h) continue;
-      if (!segClearOfWalls(c.x, c.y, x, y, course.walls)) continue;
+      if (!segClearNear(c.x, c.y, x, y, course.walls)) continue;
+      if (q.length >= maxNodes) return;   // BE7: 見つけたノード (スタートを含む) が上限に達した＝ここで探索を終える
       seen.add(kk);
       // 車の向き: スタートと同じ → 進行方向 (=局所的な廊下の向き) → 全方位 22.5° 刻み の順に
       // 置ける向きを探す (大きな車は廊下方向にしか収まらず、45°刻みでは曲がり廊下で全滅するため)。
@@ -144,7 +168,7 @@ export function freeSpawn(course, occupied, idx) {
   const ch = Math.cos(st.theta), sh = Math.sin(st.theta);
   // スタート(または既に置いた車)まで壁を横切らずに見通せる = スタートと同じ走行廊下上にある。
   // 「壁に囲まれているか」だけの判定ではリング系コースの内側の島 (全方向が壁) を誤って許してしまう。
-  const losClear = (x, y, tx, ty) => segClearOfWalls(x, y, tx, ty, course.walls);
+  const losClear = (x, y, tx, ty) => segClearNear(x, y, tx, ty, course.walls);   // BE7: 候補限定 (答えは全走査と同じ)
   const onTrack = (x, y) => losClear(x, y, st.x, st.y) || occupied.some(o => losClear(x, y, o.x, o.y));
   const minToOcc = (x, y) => occupied.length ? Math.min(...occupied.map(o => Math.hypot(x - o.x, y - o.y))) : Infinity;
   // 既配置車の車体エッジ (各車の向きで現寸法の矩形を構成)。交差チェックに使う。

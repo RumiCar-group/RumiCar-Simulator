@@ -30,6 +30,11 @@
 //   E) キャッシュ混在の再現: 改修前の export 集合にした physics.js/geom.js の一時ツリーで実際に読み込み、代替経路を
 //      通した答えが凍結値と一致すること（代替経路の実行回数も出す＝空振りでないこと）。
 //
+// 【BE7・2026-09-25】fleet.js の廊下 BFS に「見つけたノードの総数」の上限 (maxNodes = 10×maxPts) を足し、見通し判定を
+//   segClearNear (壁ブロードフェーズで候補限定・判定は同じ segHitWall) に通した。**凍結ダイジェストは変えていない**
+//   (出荷コースでは上限に届かない＝見つけたノードの最大 2,552・候補限定は答えを変えない)。C)/D) の形の検査だけを
+//   BE7 の形へ更新した。上限と候補限定そのものの振る舞いは wf_be7_heavy.mjs が見る。
+//
 // 使い方: node wf_ba1_fitcore.mjs          … 検査
 //         node wf_ba1_fitcore.mjs --pins   … 現在のツリーのダイジェストを印字する（**意図して配置を変えたとき**の再凍結用。
 //                                             凍結値を書き換えるなら理由を決定ログに残すこと）
@@ -259,7 +264,7 @@ function checkStructural(srcs) {
   const v = [];
   for (const [src, canary, who] of [
     [fleet, 'export function freeSpawn(course, occupied, idx) {', 'fleet.js'],
-    [fleet, 'function* corridorCandidates(course, st, maxPts = 600) {', 'fleet.js'],
+    [fleet, 'function* corridorCandidates(course, st, maxPts = 600, maxNodes = 10 * maxPts) {', 'fleet.js'],
     [phys, 'export function checkCollision(car, walls, extra = []) {', 'physics.js'],
     [geom, 'export function segIntersect(a, b, c, d) {', 'geom.js'],
   ]) if (!src.includes(canary)) v.push(`${who} に「${canary}」が無い（改修前の形に戻った、または strip() がソースを食べた）`);
@@ -284,7 +289,7 @@ function checkStructural(srcs) {
   if (!/^import \* as physicsParts from '\.\/physics\.js';$/m.test(fleet)) v.push('fleet.js が physics.js の新しい部品を名前空間 import で受けていない');
 
   // --- fleet.js: 廊下 BFS は 1 個ずつ出し、freeSpawn は決まった時点で打ち切る ---
-  const corr = bodyOf(fleet, 'function* corridorCandidates(course, st, maxPts = 600) {');
+  const corr = bodyOf(fleet, 'function* corridorCandidates(course, st, maxPts = 600, maxNodes = 10 * maxPts) {');
   if (!/\n      yield node;\n/.test(corr)) v.push('corridorCandidates が候補を 1 個ずつ出していない（yield が無い＝全件を作ってから返す形に戻った）');
   if (/return out;/.test(corr)) v.push('corridorCandidates が配列をまとめて返している（打ち切れない）');
   const fs_ = bodyOf(fleet, 'export function freeSpawn(course, occupied, idx) {');
@@ -302,8 +307,18 @@ function checkStructural(srcs) {
     v.push('廊下 BFS の「古い physics.js のとき」の経路が従来の checkCollision になっていない');
   if ((corr.match(/new Car\(/g) || []).length !== 1) v.push(`廊下 BFS の中で Car を ${(corr.match(/new Car\(/g) || []).length} 回作っている（姿勢は 1 個を使い回す）`);
   // --- fleet.js: 見通し判定は壁ごとの割り当てなし・演算と許容誤差は旧 segHit と同じ ---
-  if (!/const losClear = \(x, y, tx, ty\) => segClearOfWalls\(x, y, tx, ty, course\.walls\);/.test(fs_)) v.push('freeSpawn の見通し判定が segClearOfWalls を使っていない');
-  if (!/if \(!segClearOfWalls\(c\.x, c\.y, x, y, course\.walls\)\) continue;/.test(corr)) v.push('廊下 BFS の 1 歩の判定が segClearOfWalls を使っていない');
+  // 【BE7・2026-09-25】見通し判定は segClearNear (候補限定。答えは segClearOfWalls の全走査と同じ) を通る。
+  //   segClearNear は「古い contact_v2.js なら segClearOfWalls の全走査・あれば anyWallNearSeg に segHitWall を渡す」の
+  //   2 経路だけで、どちらも判定は segHitWall (許容誤差 1e-7 を含めて下で行ごとに固定) — ここを別の判定に差し替えると
+  //   ビット同一の根拠が崩れるので形で固定する。候補限定の等価性と速さは wf_be7_heavy.mjs が振る舞いで見る。
+  if (!/const losClear = \(x, y, tx, ty\) => segClearNear\(x, y, tx, ty, course\.walls\);/.test(fs_)) v.push('freeSpawn の見通し判定が segClearNear を使っていない');
+  if (!/if \(!segClearNear\(c\.x, c\.y, x, y, course\.walls\)\) continue;/.test(corr)) v.push('廊下 BFS の 1 歩の判定が segClearNear を使っていない');
+  const scn = bodyOf(fleet, 'function segClearNear(ax, ay, bx, by, walls) {');
+  if (!scn) v.push('fleet.js に segClearNear が無い');
+  else {
+    if (!/const near = contactParts\.anyWallNearSeg;\s*if \(typeof near !== 'function'\) return segClearOfWalls\(ax, ay, bx, by, walls\);\s*return !near\(walls, ax, ay, bx, by, SEG_TOL, 2 \* CAR\.length, segHitWall\);/.test(scn))
+      v.push('segClearNear が「無ければ segClearOfWalls・あれば anyWallNearSeg に segHitWall を渡す」の形でない（判定が segHitWall 以外になりうる）');
+  }
   const shw = bodyOf(fleet, 'function segHitWall(ax, ay, bx, by, w) {');
   const scw = bodyOf(fleet, 'function segClearOfWalls(ax, ay, bx, by, walls) {');
   if (!shw) v.push('fleet.js に segHitWall が無い');
@@ -359,7 +374,10 @@ const MUTATIONS = [
   ['向き探索の候補を向きごとに引き直す', M({ 'fleet.js': s => s.replace('if (!shared.hit(probe.corners(), cand))', 'if (!shared.hit(probe.corners(), shared.candidates(course.walls, x, y)))') })],
   ['新しい部品の有無を確かめずに使う', M({ 'fleet.js': s => s.replace("const shared = (typeof physicsParts.collisionCandidates === 'function' && typeof physicsParts.cornersHitSegs === 'function')", "const shared = (true)") })],
   ['古い physics.js 側の経路だけ姿勢の y を書かない（層 4 レビューの反例）', M({ 'fleet.js': s => s.replace('      probe.x = x; probe.y = y;\n      if (shared) {', '      probe.x = x; if (shared) probe.y = y;\n      if (shared) {') })],
-  ['見通し判定を壁ごとにオブジェクトを作る形に戻す', M({ 'fleet.js': s => s.replace('const losClear = (x, y, tx, ty) => segClearOfWalls(x, y, tx, ty, course.walls);', 'const losClear = (x, y, tx, ty) => !course.walls.some(w => segHitWall(x, y, tx, ty, { x1: w.x1, y1: w.y1, x2: w.x2, y2: w.y2 }));') })],
+  ['見通し判定を壁ごとにオブジェクトを作る形に戻す', M({ 'fleet.js': s => s.replace('const losClear = (x, y, tx, ty) => segClearNear(x, y, tx, ty, course.walls);', 'const losClear = (x, y, tx, ty) => !course.walls.some(w => segHitWall(x, y, tx, ty, { x1: w.x1, y1: w.y1, x2: w.x2, y2: w.y2 }));') })],
+  ['【BE7】候補限定の見通し判定に segHitWall 以外の判定を渡す', M({ 'fleet.js': s => s.replace('return !near(walls, ax, ay, bx, by, SEG_TOL, 2 * CAR.length, segHitWall);', 'return !near(walls, ax, ay, bx, by, SEG_TOL, 2 * CAR.length, (a, b, c, d, w) => segIntersect({ x: a, y: b }, { x: c, y: d }, { x: w.x1, y: w.y1 }, { x: w.x2, y: w.y2 }));') })],
+  ['【BE7】古い contact_v2.js のときの全走査を外す', M({ 'fleet.js': s => s.replace("  if (typeof near !== 'function') return segClearOfWalls(ax, ay, bx, by, walls);\n", '') })],
+  ['【BE7】廊下 BFS の 1 歩を全走査の segClearOfWalls 以外の関数にする', M({ 'fleet.js': s => s.replace('if (!segClearNear(c.x, c.y, x, y, course.walls)) continue;', 'if (!segClearFast(c.x, c.y, x, y, course.walls)) continue;') })],
   ['segClearOfWalls を some とクロージャにする', M({ 'fleet.js': s => s.replace('  for (let i = 0; i < walls.length; i++) if (segHitWall(ax, ay, bx, by, walls[i])) return false;\n  return true;', '  return !walls.some(w => segHitWall(ax, ay, bx, by, w));') })],
   ['segHitWall の許容誤差を 1e-7→1e-6 にする（層 4 レビューの反例）', M({ 'fleet.js': s => s.replace('  const e = 1e-7;\n  return t >= -e', '  const e = 1e-6;\n  return t >= -e') })],
   ['segHitWall の t を分配して書き直す（ビット同一の根拠が崩れる形）', M({ 'fleet.js': s => s.replace('const t = ((w.x1 - ax) * sy - (w.y1 - ay) * sx) / den;', 'const t = (w.x1 * sy - ax * sy - (w.y1 - ay) * sx) / den;') })],

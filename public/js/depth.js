@@ -4,10 +4,18 @@
 import { VIEW, CAR } from './config.js';
 import { raySeg } from './geom.js';
 import { hexRgb, shade } from './color.js';
+// BE7: レイ照会 rayNearestWall は BE7 で足した名前なので**名前空間から「あれば使う」** (古い contact_v2.js が
+// キャッシュに残るブラウザでも起動する・fleet.js 冒頭の BA1 の注記と同じ理由)。
+import * as contactParts from './contact_v2.js';
 
 const FOV = 72 * Math.PI / 180;  // 視野角
 const MAXD = 2.8;                // 描画する最大距離 (m)
 const CELL = 0.25;               // 世界グリッド間隔 (m)
+// 【BE7・2026-09-25】壁の縦ストリップのレイを引く距離の上限。列は `perp = best·cos(off) < MAXD` のときだけ描くので、
+// best が MAXD/cos(FOV/2) 以上の列は |off| ≤ FOV/2 のどの列でも描かれない (そのとき best の値そのものは使わない:
+// 世界グリッド縦線の判定も「隣の列が描かれるとき」だけ)。∴ この距離までの最近交差だけ引けば絵は旧経路と同じ。
+// 1e-6 は cos の丸めに負けない余裕。
+const RAY_MAX = MAXD / Math.cos(FOV / 2) * (1 + 1e-6);
 
 function rrect(ctx, x, y, w, h, r) {
   r = Math.min(r, w / 2, h / 2);
@@ -74,13 +82,23 @@ export function drawDepthView(ctx, W, H, car, walls, cars) {
   }
 
   // 壁の縦ストリップ + 世界グリッド縦線
+  // 【BE7】壁の最近交差はレイ照会 (contact_v2.js rayNearestWall・細セル=2×車長のグリッドをレイが通る順に辿る) で引く。
+  //   旧経路は 240 列それぞれで全壁へ raySeg を回し、壁の本数に比例した (壁 20,000 本の投稿コースで 1 フレームの大半)。
+  //   RAY_MAX より先の交差は Infinity で返る (上の注記のとおり描かれない)。古い contact_v2.js のときは従来の全走査。
+  //   レイ照会が割に合わないコース (壁が少ない・セルが粗い) は、判定を 1 フレームに 1 回だけして従来の全走査のまま
+  //   (contact_v2.js rayGridWorth)。列ごとに呼ぶと、壁の少ない出荷コースで固定費のぶん遅くなる (層 4 レビューで実測)。
+  const nearFn = typeof contactParts.rayNearestWall === 'function' ? contactParts.rayNearestWall : null;
+  const worthFn = typeof contactParts.rayGridWorth === 'function' ? contactParts.rayGridWorth : null;
+  const cellM = 2 * CAR.length;
+  const near = nearFn && worthFn && worthFn(walls, RAY_MAX, cellM) ? nearFn : null;
   const cols = Math.min(W, 240), cw = W / cols;
   const cells = new Array(cols);
   for (let c = 0; c < cols; c++) {
     const off = -FOV / 2 + FOV * (c / (cols - 1));
     const ang = th + off, dx = Math.cos(ang), dy = Math.sin(ang);
     let best = Infinity;
-    for (const w of walls) { const t = raySeg(ox, oy, dx, dy, w.x1, w.y1, w.x2, w.y2); if (t < best) best = t; }
+    if (near) best = near(walls, ox, oy, dx, dy, RAY_MAX, cellM);
+    else for (const w of walls) { const t = raySeg(ox, oy, dx, dy, w.x1, w.y1, w.x2, w.y2); if (t < best) best = t; }
     cells[c] = { off, perp: best * Math.cos(off), hx: ox + dx * best, hy: oy + dy * best };
   }
   for (let c = 0; c < cols; c++) {
@@ -108,9 +126,11 @@ export function drawDepthView(ctx, W, H, car, walls, cars) {
     let rel = Math.atan2(rx * (-sh) + ry * ch, rx * ch + ry * sh); // 視線基準の左右角
     if (Math.abs(rel) > FOV / 2 + 0.12) continue;
     // 遮蔽判定: 車中心方向の最近接壁が車より手前なら隠れている
+    // (BE7: dist ≤ MAXD なので MAXD までの最近交差だけ引けば判定は旧経路と同じ。それより先は Infinity＝隠さない)
     const dx = Math.cos(th + rel), dy = Math.sin(th + rel);
     let wd = Infinity;
-    for (const w of walls) { const t = raySeg(ox, oy, dx, dy, w.x1, w.y1, w.x2, w.y2); if (t < wd) wd = t; }
+    if (near) wd = near(walls, ox, oy, dx, dy, MAXD, cellM);
+    else for (const w of walls) { const t = raySeg(ox, oy, dx, dy, w.x1, w.y1, w.x2, w.y2); if (t < wd) wd = t; }
     if (wd < dist - 0.03) continue;
     list.push({ rel, dist, rgb: hexRgb(o.color) });
   }

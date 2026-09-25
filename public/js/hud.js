@@ -4,6 +4,9 @@ import { spriteFor, spriteBBox, fitToFootprint } from './car_sprite.js';
 import { worldToScreen } from './course.js';
 import { fanDepths } from './geom.js';
 import { wallsNear } from './contact_v2.js';
+// BE7: 扇の方向別終端をレイ照会で引く fanDepthsNear は BE7 で足した名前なので**名前空間から「あれば使う」**
+// (古い contact_v2.js がキャッシュに残るブラウザでも起動する・fleet.js 冒頭の BA1 の注記と同じ理由)。
+import * as contactParts from './contact_v2.js';
 import { fmtTime } from './lap.js';
 import { darkenHex, hexRgb } from './color.js';
 import { t } from './i18n.js';
@@ -106,9 +109,15 @@ export function drawSensors(ctx, sensors, view, opts = {}) {
     // 測距値 (s.mm・ヒット点・ラベル) は従来どおり sensors.js の扇内最近=単一真実源で不変。
     // ノイズ注入 (SENSOR_NOISE)・保持値 (AP18) の mm は現在幾何と乖離し得るが、扇=現在の FoV 幾何・
     // 点/ラベル=計測値 の役割分担で描く (既定 OFF・非保持では min(プロファイル)≈mm で一致)。
+    // 【BE7・2026-09-25】壁はレイ照会 (contact_v2.js fanDepthsNear・細セル=2×車長のグリッドをレイが通る順に辿る) で引く。
+    //   値は fanDepths に全壁を渡したときと同じ (wf_fan_render.mjs (C))。旧経路は方向ごとに到達範囲の全壁を走査しており、
+    //   卓上ではレンジ 2 m がコースの大半を覆うので壁の本数に比例した (壁 20,000 本の投稿コースで 1 フレームの大半)。
+    //   古い contact_v2.js (fanDepthsNear が無い) のときは従来の経路 (粗セル候補＋fanDepths)。
     const prof = opts.walls
-      ? fanDepths(s.origin.x, s.origin.y, d.x, d.y, half, FAN_DEPTH_N, maxM,
-          wallsNear(opts.walls, s.origin.x, s.origin.y, maxM + 1e-6, maxM), opts.extra, _fanProf)
+      ? (typeof contactParts.fanDepthsNear === 'function'
+          ? contactParts.fanDepthsNear(opts.walls, s.origin.x, s.origin.y, d.x, d.y, half, FAN_DEPTH_N, maxM, opts.extra, _fanProf, 2 * CAR.length)
+          : fanDepths(s.origin.x, s.origin.y, d.x, d.y, half, FAN_DEPTH_N, maxM,
+              wallsNear(opts.walls, s.origin.x, s.origin.y, maxM + 1e-6, maxM), opts.extra, _fanProf))
       : null;
     // 距離2乗減衰の放射グラデーション: 外半径=レンジ上限の screen px。扇 (半径 R≤maxM) は必ずこの内側。
     const far = worldToScreen({ x: s.origin.x + d.x * maxM, y: s.origin.y + d.y * maxM }, view);

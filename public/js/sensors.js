@@ -71,9 +71,38 @@ function opticsRead(ox, oy, ux, uy, maxM, walls, extra) {
   return { best: d, hx: ox + dx * d, hy: oy + dy * d, hitCar: carSum * 2 > sSum };
 }
 
+// 【BE7・2026-09-25】扇 (頂点 O・中心方向 u・半角 half) を半径 r で切った扇形を包む軸平行矩形を box へ書く。
+// 扇形は半角 < 90° なので凸で、外接矩形は「O・両辺の端・扇の中にある軸方向 (±x/±y) の弧上の点」で決まる。
+// pad は丸めに負けない余裕 (座標 1000 m でも double の丸めは 1e-13 m 程度)。
+function coneBox(ox, oy, ux, uy, cosH, sinH, r, box) {
+  const px = cosH * ux - sinH * uy, py = sinH * ux + cosH * uy;   // +half 方向 (coneNearest と同じ式)
+  const mx = cosH * ux + sinH * uy, my = -sinH * ux + cosH * uy;  // -half 方向
+  let x0 = Math.min(ox, ox + r * px, ox + r * mx), x1 = Math.max(ox, ox + r * px, ox + r * mx);
+  let y0 = Math.min(oy, oy + r * py, oy + r * my), y1 = Math.max(oy, oy + r * py, oy + r * my);
+  if (ux >= cosH) x1 = Math.max(x1, ox + r);    // +x 方向が扇の中 → 弧の右端
+  if (-ux >= cosH) x0 = Math.min(x0, ox - r);
+  if (uy >= cosH) y1 = Math.max(y1, oy + r);
+  if (-uy >= cosH) y0 = Math.min(y0, oy - r);
+  const pad = 1e-9 + 1e-9 * r;
+  box[0] = x0 - pad; box[1] = x1 + pad; box[2] = y0 - pad; box[3] = y1 + pad;
+}
+const _cbox = new Float64Array(4);
+// 候補がこれより少ないときは飛ばし判定をしない (矩形の計算の固定費が coneNearest を省く得より大きい。出荷の実測で、
+// 壁 4 本のコースや卓上で候補が数本の広いコースだけが遅くなった)。飛ばしてもしなくても結果は同じ。
+const SENSE_PRUNE_MIN = 16;
+
 // 1 センサーの計測。戻り値 {mm, hit:{x,y}, origin:{x,y}}。返り形は不変 (描画・API 互換)。
 // extra: 追加線分 (他車の車体エッジ等)。壁と同様にコーン測距の対象に含める。
 // 中心1本の直線レイでなく 25° 視野コーン (SENSOR_FOV) の「扇内最近反射面」までの距離を返す。
+// 【BE7・2026-09-25】壁の走査で、**扇を半径 R=min(その時点の最近距離, レンジ上限) で切った扇形の外接矩形に
+//   外接矩形が掛からない壁は coneNearest を呼ばずに飛ばす**。旧経路は候補壁を全部 coneNearest に通しており、卓上では
+//   候補がコースの全壁になる (レンジ 2 m がコースを覆う) ので壁の本数に比例した (実測・改修前: 卓上楕円を壁 20,000 本で
+//   描いた投稿コースで、追従カメラ ON の 1 フレームの約 3 割が測距)。**結果は旧経路と 1 ビットも変わらない**:
+//   走査順はそのまま。飛ばす壁は扇内最近点 Q (coneNearest が返す距離 d の点) を持つとしても Q は外接矩形の外＝
+//   d > R。d > best の壁は `d < best` を満たさず状態を変えない。best がレンジ上限を超えている間の d > maxM の壁は
+//   best を動かしうるが、そのとき最終的に best > maxM のまま (範囲内の壁は飛ばさないので必ず拾う) なら mm=-3・hit は
+//   既定点で旧経路と同じ、範囲内の壁があればその壁で上書きされる (hitCar は mm<0 のとき使われない)。
+//   光学モデル (opticsRead) は従来どおり候補壁の全部を渡す (飛ばしは扇内最近の走査だけ)。
 function readSensor(car, walls, sensorDef, extra = []) {
   const c = Math.cos(car.theta), s = Math.sin(car.theta);
   const ox = car.x + sensorDef.dx * c - sensorDef.dy * s;
@@ -84,9 +113,23 @@ function readSensor(car, walls, sensorDef, extra = []) {
   const pt = [0, 0];                                   // coneNearest の最近点出力 (呼び出しごとに1個)
   let best = Infinity, hx = 0, hy = 0;                 // 扇内最近点 (world)
   let hitCar = false;                                  // AP19: 扇内最近反射面が他車エッジ(extra)か壁か。反射率で σ を変える(carSigmaMul)ためだけに使う=測距値(mm)/hit は不変(byte 不変)。
+  const prune = walls.length >= SENSE_PRUNE_MIN;       // BE7: 候補が少なければ飛ばさない (上の注記)
+  const box = _cbox;
+  let R = SENSOR_RANGE.maxMm / 1000;                    // BE7: 飛ばし判定の矩形の半径 (常に best 以上か、レンジ上限)
+  if (prune) coneBox(ox, oy, ux, uy, cosH, sinH, R, box);
   for (const w of walls) {
+    if (prune) {
+      const wx0 = w.x1 < w.x2 ? w.x1 : w.x2, wx1 = w.x1 < w.x2 ? w.x2 : w.x1;
+      const wy0 = w.y1 < w.y2 ? w.y1 : w.y2, wy1 = w.y1 < w.y2 ? w.y2 : w.y1;
+      if (wx1 < box[0] || wx0 > box[1] || wy1 < box[2] || wy0 > box[3]) continue;   // BE7: 扇形に届かない壁
+    }
     const d = coneNearest(ox, oy, ux, uy, cosH, sinH, w.x1, w.y1, w.x2, w.y2, pt);
-    if (d < best) { best = d; hx = pt[0]; hy = pt[1]; hitCar = false; }
+    if (d < best) {
+      best = d; hx = pt[0]; hy = pt[1]; hitCar = false;
+      // BE7: 残りはこれより近い壁だけが意味を持つ。矩形は大きく縮んだとき (3/4 未満) だけ作り直す — 大きめの矩形の
+      //   ままでも飛ばすのは届かない壁だけ (保守側) で、最近距離が少しずつ縮む並びで毎回作り直す固定費を払わない。
+      if (prune && best < 0.75 * R) { R = best; coneBox(ox, oy, ux, uy, cosH, sinH, R, box); }
+    }
   }
   for (const w of extra) {
     const d = coneNearest(ox, oy, ux, uy, cosH, sinH, w.x1, w.y1, w.x2, w.y2, pt);

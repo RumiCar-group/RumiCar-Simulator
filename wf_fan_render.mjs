@@ -5,7 +5,9 @@
 //       mm=-3 (扇内反射なし) は全方向 depth=maxM。全41コース×3台発走ポーズ×回転ポーズ×3センサー。
 //   (B) #30 シナリオ根治: ナローシケイン 卓上3台 normal_fr 発走の中央方向描画長 = 実壁上 (事前計測の凍結値
 //       1699/1809/1421mm)。従来の一定半径 (=mm: 1223/770/578) の空中終端が消えたことの機械証明。
-//   (C) broadphase 等価: hud.js が使う wallsNear 候補での fanDepths == 全壁での fanDepths (byte 一致)。
+//   (C) broadphase 等価: hud.js の経路での扇 == 全壁での fanDepths (byte 一致)。BE7 (2026-09-25) から hud.js は
+//       contact_v2.js の fanDepthsNear (レイが通るセルだけを見るレイ照会) を使い、古い contact_v2.js のときだけ
+//       wallsNear 候補＋fanDepths に落ちる。**両方の経路**を全壁と突き合わせる。
 // 失敗時は非0終了。測距値そのものの不変は f0_regime / wf_ab8_bench が別途担保。
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -18,7 +20,8 @@ const { makeSlot, rebuildSpawns, othersFor } = await import(P('./public/js/fleet
 const { readAll } = await import(P('./public/js/sensors.js'));
 const { fanDepths, raySeg } = await import(P('./public/js/geom.js'));
 const { carEdges } = await import(P('./public/js/physics.js'));
-const { wallsNear } = await import(P('./public/js/contact_v2.js'));
+const { wallsNear, fanDepthsNear } = await import(P('./public/js/contact_v2.js'));
+const { CAR } = await import(P('./public/js/config.js'));
 const { setCarScale, setRegimeScale, SENSOR_RANGE, SENSOR_FOV, SENSOR_NOISE } = await import(P('./public/js/config.js'));
 const { applyRegime } = await import(P('./public/js/physics_dyn.js'));
 const { PROGRAM_BY_KEY } = await import(P('./public/js/programs.js'));
@@ -102,7 +105,7 @@ console.log('B) GitHub #30 シナリオ (ナローシケイン・レイアウト
 }
 
 // (C) broadphase 等価: hud.js が渡す wallsNear 候補での fanDepths == 全壁での fanDepths (byte 一致)。
-console.log('C) wallsNear 候補 ⇔ 全壁 の fanDepths byte 等価 (hud.js の実呼び出し形)');
+console.log('C) hud.js の 2 経路 (fanDepthsNear のレイ照会／古い contact_v2.js 時の wallsNear 候補) ⇔ 全壁 の fanDepths byte 等価');
 {
   const half = SENSOR_FOV.halfRad;
   let diff = 0, checks = 0;
@@ -118,6 +121,9 @@ console.log('C) wallsNear 候補 ⇔ 全壁 の fanDepths byte 等価 (hud.js �
         const cand = wallsNear(crs.walls, sen.origin.x, sen.origin.y, maxM + 1e-6, maxM);
         fanDepths(sen.origin.x, sen.origin.y, sen.dir.x, sen.dir.y, half, N_RENDER, maxM, cand, null, a);
         fanDepths(sen.origin.x, sen.origin.y, sen.dir.x, sen.dir.y, half, N_RENDER, maxM, crs.walls, null, b);
+        for (let k = 0; k <= N_RENDER; k++) if (a[k] !== b[k]) { diff++; break; }
+        checks++;   // BE7: hud.js が今使う経路 (レイ照会・細セル＝2×車長・他車エッジ無し)
+        fanDepthsNear(crs.walls, sen.origin.x, sen.origin.y, sen.dir.x, sen.dir.y, half, N_RENDER, maxM, null, a, 2 * CAR.length);
         for (let k = 0; k <= N_RENDER; k++) if (a[k] !== b[k]) { diff++; break; }
       }
     });

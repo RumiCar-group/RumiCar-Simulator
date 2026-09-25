@@ -703,6 +703,21 @@ export function drawCourse(ctx, course, view, opts = {}) {
   ctx.drawImage(LAYERS[0].cv, 0, 0);
 }
 
+// 【BE7・2026-09-25】壁の線がキャンバスに 1 画素も掛からない範囲 (view の座標＝worldToScreen の出力の座標) を返す。
+// 拡大・追従カメラ (main.js render が zoom/pan を ctx へ乗せる) では drawCourse が毎フレーム drawCourseLayer で
+// 全壁を引き直し、壁の本数に比例した (実測・改修前: 壁 20,000 本の投稿コースで追従 ON の 1 フレーム 152 ms)。
+// 画面の外の線は描いても画素を 1 つも変えないので、描かなくても絵は同じ (線の太さ・丸い端・アンチエイリアスの
+// 1〜2 画素ぶん外側まで余裕を取る)。変換が拡大と平行移動だけでない (回転・傾き) とき・キャンバスが分からない
+// とき (node のスタブ等) は null＝従来どおり全部描く。
+function visibleViewRect(ctx) {
+  const m = ctx.getTransform ? ctx.getTransform() : null;
+  const cv = ctx.canvas;
+  if (!m || !cv || !(cv.width > 0) || !(cv.height > 0)) return null;
+  if (m.b !== 0 || m.c !== 0 || !(m.a > 0) || !(m.d > 0)) return null;
+  const pad = VIEW.wallWidth + 2 / Math.min(m.a, m.d);   // 線幅の半分＋丸い端 (≦ 線幅) と AA 2 画素ぶん
+  return { x0: (0 - m.e) / m.a - pad, x1: (cv.width - m.e) / m.a + pad, y0: (0 - m.f) / m.d - pad, y1: (cv.height - m.f) / m.d + pad };
+}
+
 /** 静的コース層をその場で描く (キャッシュを通さない正の経路)。画素一致ゲートの比較対象でもある。 */
 export function drawCourseLayer(ctx, course, view, opts = {}) {
   ctx.save();
@@ -713,12 +728,16 @@ export function drawCourseLayer(ctx, course, view, opts = {}) {
   ctx.strokeStyle = VIEW.wall;
   ctx.lineWidth = VIEW.wallWidth;
   ctx.lineCap = 'round';
+  const vr = visibleViewRect(ctx);   // BE7: 画面に掛からない壁は描かない (null=全部描く)
+  // BE7: 画面座標は worldToScreen と**同じ式・同じ順** (x·s と (hM−y)·s) でその場に計算する (壁 1 本ごとに座標オブジェクトを
+  //   2 つ作らない＝同じ double なので画素は同じ。追従中は毎フレーム全壁を回すので、壁 20,000 本で毎フレーム約 4 万個の確保だった)。
+  const s = (view && view.pxPerM) || VIEW.pxPerM, hM = view.hM;
   for (const w of course.walls) {
-    const a = worldToScreen({ x: w.x1, y: w.y1 }, view);
-    const b = worldToScreen({ x: w.x2, y: w.y2 }, view);
+    const ax = w.x1 * s, ay = (hM - w.y1) * s, bx = w.x2 * s, by = (hM - w.y2) * s;
+    if (vr && ((ax < vr.x0 && bx < vr.x0) || (ax > vr.x1 && bx > vr.x1) || (ay < vr.y0 && by < vr.y0) || (ay > vr.y1 && by > vr.y1))) continue;
     ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    ctx.lineTo(b.x, b.y);
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
     ctx.stroke();
   }
   ctx.restore();
