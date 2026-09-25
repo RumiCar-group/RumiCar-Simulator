@@ -85,6 +85,14 @@ export const SHAPES = [
     start: { x: 1020, y: 500, theta: 0 }, walls: box(1000, 1000) }), 'keep', 'keep'],
   ['big-frame-finish.json', JSON.stringify({ name: 'BC3 大枠 1000 m・finish が枠の外 49 m', bounds: { w: 1000, h: 1000 },
     start: { x: 500, y: 50, theta: 0 }, finish: { x1: 500, y1: -49, x2: 500, y2: 1049 }, walls: box(1000, 1000) }), 'keep', 'keep'],
+  // ── BE6 (2026-09-25): 名前・説明の長さの上限 (std だけ・COURSE_LIMITS.nameMax=120 / descMax=3300) ─────────
+  // 上限を超える形は投稿としては通さず (std=drop)、自分のデータとしては開ける (own=keep＝長い名前を付けた保存コースを
+  // 失わない)。上限ちょうどの形は両方 keep (境目を 1 文字ずらす変異を捕まえる)。ファイル全体の大きさ (jsonMax=4e6)
+  // は 4MB の本文をここへ置くと実ブラウザゲートが 2 言語 × 数経路で運ぶことになるので、wf_be6_intake が組み立てて測る。
+  ['bad-name-long.json', JSON.stringify({ name: 'N'.repeat(121), walls: ring(24, 1.5, 1, 1.2, 0.8), bounds: { w: 3, h: 2 } }), 'drop', 'keep'],
+  ['bad-desc-en-long.json', JSON.stringify({ name: 'BE6 desc_en が 3301 字', desc_en: 'D'.repeat(3301), walls: ring(24, 1.5, 1, 1.2, 0.8), bounds: { w: 3, h: 2 } }), 'drop', 'keep'],
+  ['edge-name-en-120.json', JSON.stringify({ name: 'BE6 name_en が 120 字', name_en: 'E'.repeat(120), walls: ring(24, 1.5, 1, 1.2, 0.8), bounds: { w: 3, h: 2 } }), 'keep'],
+  ['edge-desc-3300.json', JSON.stringify({ name: 'BE6 desc が 3300 字 (区切り無し)', desc: 'D'.repeat(3300), walls: ring(24, 1.5, 1, 1.2, 0.8), bounds: { w: 3, h: 2 } }), 'keep'],
 ];
 
 // **std が通すのに own が落とす形は 1 つも無い** (own ⊇ std) ことを、母集団が空振りせずに突けるように、

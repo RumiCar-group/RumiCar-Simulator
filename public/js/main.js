@@ -36,6 +36,15 @@ function acceptCourse(data, own) {
 function courseBadLine(name, why) {
   return hasKey('log.courseBad') ? t('log.courseBad', { name, why }) : `⚠ ${name} (${why})`;
 }
+// BE6 (⑥): 枠の外に端点がある壁を 1 行知らせる。枠を縮めても壁は動かさない (applyEditDims) ので、自分のコース
+// としては開けるが、枠の外は画面に描かれず、投稿すると他人の一覧から除外される。数え方は投稿基準の窓
+// (course.js wallsOutsideFrame)。古い course.js がキャッシュに残るブラウザでは関数が無いので黙る (従来どおり)。
+function noteWallsOutside(data) {
+  const f = courseParts.wallsOutsideFrame;
+  const n = typeof f === 'function' ? f(data) : 0;
+  if (n > 0 && hasKey('log.edWallsOutside')) logLine(t('log.edWallsOutside', { n }));
+  return n;
+}
 import { carEdges } from './physics.js';
 import { applyRegime } from './physics_dyn.js';
 import { readAll, readRear } from './sensors.js';
@@ -78,6 +87,9 @@ import { drawTrail, drawReferenceLine, drawSensors, drawCar, drawMeters, drawFle
 import { drawDepthView } from './depth.js';
 import { drawTougeElevation } from './elev3d.js';
 import { fmtTime, loadBestRec } from './lap.js';
+// BE6: 公式開催で「その参照で引くと同じ形のコースに当たるか」を比べる指紋 (練習記録の鍵と同じ関数＝名前・説明を抜いた形)。
+// BE2 で足した名前なので名前空間で受ける (古い lap.js がキャッシュに残るブラウザでグラフ全体を落とさない・BA1)。
+import * as lapParts from './lap.js';
 import {
   CourseEditor, loadSavedCourses, saveCourse, deleteCourse,
 } from './course_editor.js';
@@ -281,6 +293,7 @@ let editor = null;
 // そのまま添字に使う場所があり (resolveCourseKey)、素の {} だと 'constructor'・'__proto__'・
 // 'toString' 等が継承プロパティとして truthy になり「在る」と誤判定する (実測で確認)。
 // 参照はすべて添字引きで、Object.keys/for-in は 1 箇所も無い (public/js 全体を確認済み)。
+// 【BE6】例外は savedKeyOf の for-in 1 箇所 (保存名から option value を探す)。素の辞書なので継承キーは列挙されない。
 let courseSources = Object.create(null);
 let _loaderHidden = false;   // 起動ローダー(案C)を初回コース描画で一度だけ隠すフラグ
 
@@ -1024,8 +1037,16 @@ function hostOfficialEvent() {
   // 200 文字上限が無かったため、コース名が 300 文字だと event.json の id は 300 文字のまま、
   // 置くディレクトリは 200 文字に切られて食い違った (`#edName` に maxlength は無い)。
   const id = slugify(course.name, 'race');
+  // BE6 (⑤): 名前で引くと別のコースに当たる参照は書かない (officialCourseRef の注記)。
+  const cref = officialCourseRef(course);
+  if (cref.ref == null) {
+    const k = cref.unknown ? 'event.share.courseUnknown' : 'event.share.courseClash';
+    $('evMsg').textContent = hasKey(k) ? t(k, { name: cref.clash != null ? cref.clash : course.name })
+                                       : `⚠ ${cref.clash != null ? cref.clash : course.name}`;
+    return;
+  }
   const event = {
-    id, title: course.name, course: course.name, regime,
+    id, title: course.name, course: cref.ref, regime,
     laps: raceEvent.laps,
     // AB2: 有効 timeout を spec に同梱凍結する。result.json 生成 (pinned Node) と再検証
     // (verifyOfficialLocally) が同じ maxSec で走り verifyHash が一致する (RC-RACE-001・CI-5)。
@@ -1063,7 +1084,18 @@ const RU = initRaceUI({ $, escapeHtml, logLine, activeSlot, exitEdit, courseDisp
 const { renderRaceResult, loadOfficialRaces, loadAllOfficialData, checkBeaten, openOfficialDlg, reloadOfficial, selectOfficialRace, submitOfficialEntry, toggleProgSrc, forkOfficialEntry, openRankingsDlg, reloadRankings, renderRankings, saveMe, ghostVsWorld, openGhostReplay } = RU;
 // イベントの course (名前 or 同梱 courseDef) → 走行可能なコースに解決。組込名→プリセット、
 // community 名→投稿コース、object→正規化。見つからなければ null (再実行不可)。
-function resolveRaceCourse(courseRef) {
+// ── 投稿コースを名前で引く規則 (BE6・2026-09-25) ─────────────────────────────────────
+// 名前で投稿コースを引く場所は 2 つ (公式レースの resolveRaceCourse・旧形式の共有 URL の resolveCourseKey) で、
+// どちらも「JSON の name か ファイル名が一致する**最初の** 1 件」を返していた。name は投稿者が自由に付けるので
+// 重複しうる (改修前の実測: name が同じ 2 本では黙って先頭が選ばれた)。∴ **ちょうど 1 件に当たるときだけ**解決し、
+// 複数に当たれば解決しない (n で件数を返し、呼び出し側が理由を出す)。取り違えるより「決められない」と言う。
+// ファイル名は一覧の中で一意だが、別の投稿の name と一致しうるので、同じ土俵で数える (どちらの鍵で当たっても 1 件)。
+function communityByRef(ref) {
+  const hits = communityCourses.filter((c) => (c.data && c.data.name) === ref || c.name === ref);
+  return { cc: hits.length === 1 ? hits[0] : null, n: hits.length };
+}
+function resolveRaceCourse(courseRef, opts) {
+  const quiet = !!(opts && opts.quiet);   // BE6: 公式開催の参照選び (officialCourseRef) が試しに引くときはログを出さない
   // BC3 (④): 同梱 def も投稿コースも**他人が書いたもの**なので acceptCourse (own=false) を通す。
   // 壊れていれば null を返し、既存の「コース解決不可」経路 (race_ui の official.verify.noCourse) へ合流する。
   // そのままだと利用者には「解決できない」しか届かないので、理由 (検査が返した箇所) を 1 行添える。
@@ -1071,15 +1103,59 @@ function resolveRaceCourse(courseRef) {
   // (verifyHash・順位・グリッド) は不変 (wf_bc3_intake A) が出荷全コースで byte 一致を機械確認)。
   const accept = (data, name) => {
     const r = acceptCourse(data, false);
-    if (!r.ok) { logLine(courseBadLine(name, r.why)); return null; }
+    if (!r.ok) { if (!quiet) logLine(courseBadLine(name, r.why)); return null; }
     return r.course;
   };
   if (courseRef && typeof courseRef === 'object') return accept(courseRef, courseRef.name || '(courseDef)');  // 同梱 def
   if (!courseRef) return null;
   const p = presetByName(courseRef);                                                    // 組込コース名
   if (p) return p;
-  const cc = communityCourses.find((c) => (c.data && c.data.name) === courseRef || c.name === courseRef);
+  const { cc, n } = communityByRef(courseRef);                                          // 投稿コース (BE6: 1 件だけ)
+  if (n > 1 && !quiet && hasKey('log.courseAmbiguous')) logLine(t('log.courseAmbiguous', { name: courseRef, n }));
   return cc ? accept(cc.data, courseRef) : null;
+}
+
+// ── 公式開催の event.json に書くコース参照 (BE6・2026-09-25) ───────────────────────────────
+// 旧実装は常に course.name を書いていた。名前はコースの同一性ではないので、**名前で引くと別のコースに当たる**
+// とき (名前がプリセットと同じ投稿コース・同名の投稿が複数・出荷コースを編集して名前を変えずに ✔適用した状態・
+// プリセットと同名の保存コース)、他の人の再検証 (race_ui の verifyOfficialLocally) は別のコースを走らせていた
+// (改修前の実測: name『オーバル』の投稿コースから開催すると course は "オーバル" → プリセットに解決)。
+// ここでは「その参照を resolveRaceCourse で引くと、いま走っているコースと**同じ形**に当たる」ものだけを書く:
+//   ① course.name (出荷コース・一意な名前の投稿コースはこれ＝**従来と byte 同一の event.json**)
+//   ② 投稿コースならファイル名 (一覧の中で一意。名前が別コースに当たるときの逃げ道)
+// どれも同じ形に当たらず、**どれかが別のコースに当たる**ときは { ref: null, clash } を返し、開催を止める
+// (取り違えた定義を配らない)。どれも引けない (保存コース等＝他の人には元々解決できない) なら従来どおり ①。
+// 形の比較は練習記録の鍵と同じ lapParts.practiceCourseId (名前・説明を抜いた形)。古い lap.js がキャッシュに
+// 残るブラウザでは比べられないので従来どおり ① を返す。
+function officialCourseRef(c) {
+  const id = typeof lapParts.practiceCourseId === 'function' ? lapParts.practiceCourseId : null;
+  if (!id || !c) return { ref: c ? c.name : null, clash: null };
+  const mine = id(c);
+  const cands = [c.name];
+  if (currentCourseKey.startsWith('gh:')) cands.push(currentCourseKey.slice(3));
+  // 同名の投稿コースのファイル名も候補にする (層 4 の 2 回目: 投稿コースを無変更で ✔適用すると currentCourseKey が
+  // '' になり、同じ形なのにファイル名の候補が消えて止まっていた＝安全側の過剰)。形が一致したものだけが選ばれる。
+  for (const cc of communityCourses) if (cc.data && cc.data.name === c.name && !cands.includes(cc.name)) cands.push(cc.name);
+  let clash = null;
+  for (const r of cands) {
+    if (!r) continue;
+    const rc = resolveRaceCourse(r, { quiet: true });
+    // 「どれにも当たらない」と「複数に当たって決められない」を分ける。後者は他の人の resolveRaceCourse が
+    // 必ず解決しない参照なので、書き出してはならない (層 4 レビュー 2026-09-25 の実測: 同名の投稿コースを
+    // ✔適用すると currentCourseKey が '' になってファイル名の候補が消え、名前を黙って書き出していた)。
+    if (!rc) { if (clash == null && communityByRef(r).n > 1) clash = r; continue; }
+    if (id(rc) === mine) return { ref: r, clash: null };
+    if (clash == null) clash = r;
+  }
+  if (clash != null) return { ref: null, clash };
+  // どれも引けない (保存コース等) とき、名前を書いてよいのは**投稿コースの一覧を読めているときだけ**。読めていない
+  // (起動直後・取得失敗・レート制限) と、他の人の一覧でその名前が別のコースに当たるかを判定できない (層 4 の 2 回目の
+  // 実測: 一覧の取得を 500 にすると、同名の投稿コースがある保存コースの名前を書き出した)。
+  // (書き出す参照が、選んだ投稿ではなく「同じ形の別の投稿」のファイル名になることがある — 選んだ投稿のファイル名が
+  //  他の投稿の name と重なって 1 件に決まらないとき。書く参照はそれ自体が 1 件に解決して同じ形になることを確かめて
+  //  いるので走行は同じだが、その投稿が消されると再検証できなくなる。層 4 の 3 回目の観察・未決へ送った。)
+  if (communityListState !== 'ok') return { ref: null, clash: null, unknown: true };
+  return { ref: c.name, clash: null };
 }
 
 // ---- 車両カラム UI (色・測距・プログラム・シリアルを縦に、列を横並びで同時表示) ----
@@ -1388,6 +1464,10 @@ function setActiveProgram(code, lang) {
 // ---- コース選択 UI ----
 // GitHub から取得した投稿コース [{name, data}]。起動後に非同期で埋まる。
 let communityCourses = [];
+// 投稿コースの一覧を読めたか (BE6)。'pending'＝起動直後の読込前 / 'ok'＝目録の全件を読めた (0 件を含む) /
+// 'partial'＝目録は読めたが本体の取得に失敗したものがある (通信・HTTP の失敗は黙って読み飛ばすので) / 'failed'＝目録の取得失敗。
+// 公式開催 (officialCourseRef) が「その名前が他の人の一覧で別のコースに当たらないか」を判定できるのは 'ok' のときだけ。
+let communityListState = 'pending';
 
 // コースの表示名/説明 (AB4・RC-I18N-001)。en モードで *_en があれば訳す。
 // 識別子 c.name (ja) は不変=公式記録の course 識別子・courseSel option value・presetByName
@@ -1510,11 +1590,13 @@ let courseSelValue = '';
 // こちらは「いま **走っている** コースが一覧のどの項目か」で、一覧に無い状態 (未保存の編集結果を
 // ✔適用した直後) では '' になる。
 // **なぜ course.name ではいけないか**: option value は 3 種で書式が違う —
-//   プリセット = c.name / 保存コース = 保存名 / **投稿コース = 'gh:<ファイル名>'**。
+//   プリセット = c.name / 保存コース = 保存名 (BE6: プリセット名・gh:・★ で始まる保存名は ★＋保存名) /
+//   **投稿コース = 'gh:<ファイル名>'**。
 // 投稿コースの course.name は JSON の name であって option value ではないので、course.name で
 // 一覧を作り直すと courseSources にキーが無く、選択が先頭の出荷コースへ落ちる (言語切替で選択が飛ぶ)。
 // 共有 hash も同じ理由で投稿コースを復元できなかった。**プリセットと保存コースでは
-// course.name が option value と一致する**ので、この置き換えで挙動が変わるのは投稿コースだけである。
+// course.name が option value と一致する**ので、この置き換えで挙動が変わるのは投稿コースだけである
+// (BE6 以後は、衝突を逃がした保存コースも option value が保存名と違う＝同じ理由でこちらを使う)。
 let currentCourseKey = '';
 // 利用者が自分で走行中のコースを決めたか (BC4)。**一方向フラグ**。
 // ⚠ 「今の値が起動時の値と等しいか」で代用してはならない (層 4 レビュー 2026-09-18 で検出):
@@ -1538,8 +1620,18 @@ function rebuildCourseList(selectName) {
   }
   const saved = loadSavedCourses();
   for (const n of Object.keys(saved)) {
-    courseSources[n] = { type: 'saved', data: saved[n] };
-    addOpt(sel, '★ ' + n, n);
+    // BE6 (⑤): 保存名がプリセット名と同じだと courseSources[n] を**上書き**し、プリセットの項目を選んでも
+    // 保存コースが開いていた (改修前の実測: 『オーバル』を選ぶと壁 160 本のはずが保存の 8 本)。`gh:` で始まる
+    // 保存名も、後から入る投稿コースに上書きされる。∴ 衝突しうる保存名は先頭に ★ を**1 つだけ**足した値へ逃がす
+    // (保存データは書き換えない)。保存名は savedName に持つ (削除・保存が引く)。
+    // **値は保存名だけで決まる (保存した順番に依らない)**: 逃がす対象は「プリセット名・`gh:` で始まる・★ で始まる」
+    // 保存名。★ で始まる保存名も逃がすので、逃がした値 (★＋名前) と逃がさない値 (★ で始まらない) は重ならず、
+    // 逃がした値どうしも名前が違えば違う (単射)。出荷コースの名前が ★ で始まらないことは wf_be6_intake A) が測る。
+    // ⚠ 「空くまで ★ を足す」にしてはならない (層 4 レビュー 2026-09-25 で実測): 『オーバル』と『★オーバル』を
+    //   保存すると値が保存順で入れ替わり、🗑 と再保存の後に走行中のコースの値・共有 URL が別の保存コースを指した。
+    const key = (courseSources[n] || n.startsWith('gh:') || n.startsWith('★')) ? '★' + n : n;
+    courseSources[key] = { type: 'saved', data: saved[n], savedName: n };
+    addOpt(sel, '★ ' + n, key);
   }
   // GitHub 投稿コース (プリセット名との衝突を避けるため value を 'gh:' で前置)
   for (const c of communityCourses) {
@@ -1562,6 +1654,11 @@ function addOpt(sel, label, value) {
   const o = document.createElement('option');
   o.textContent = label; o.value = value; sel.appendChild(o);
 }
+// 保存名 → courseSel の option value (BE6)。衝突を逃がした保存コースは値が保存名と違うので、名前で直接引かない。
+function savedKeyOf(name) {
+  for (const k in courseSources) if (courseSources[k].type === 'saved' && courseSources[k].savedName === name) return k;
+  return null;
+}
 // コースを選ぶ。取り込みを断ったときは **false** を返し、走行中のコースも courseSel の表示も動かさない。
 function selectCourse(name) {
   const src = courseSources[name];
@@ -1574,7 +1671,7 @@ function selectCourse(name) {
   else {
     const r = acceptCourse(src.data, src.type === 'saved');
     if (!r.ok) {
-      logLine(courseBadLine(name, r.why));
+      logLine(courseBadLine(src.type === 'saved' ? src.savedName : name, r.why));   // BE6: 値でなく保存名を出す
       // 選択操作を取り消す: courseSel を直前に表示されていた option へ戻す (拒否したコースを指したままにしない)。
       if (courseSelValue && courseSources[courseSelValue]) $('courseSel').value = courseSelValue;
       return false;
@@ -1594,12 +1691,13 @@ function selectCourse(name) {
 // (option value 'gh:<ファイル名>' とは別物なので直接は引けない)。直接引けなかったときだけ
 // 投稿コースを名前で引き直す — 照合は resolveRaceCourse (公式レースの courseRef 解決) と
 // **同じ 2 つの手掛かり** (JSON の name / ファイル名) にする＝同じ値の解決規則を 2 つ作らない。
-// プリセット名・保存名との衝突時は courseSources の直接一致が先に当たる (従来の解決が優先)。
+// プリセット名・保存名との衝突時は courseSources の直接一致が先に当たる (従来の解決が優先。BE6 以後は保存名が
+// プリセット名と衝突してもプリセットのキーを奪わないので、プリセット名はプリセットに当たる)。
 // 解決できなければ null。
 function resolveCourseKey(ref) {
   if (ref == null) return null;
   if (courseSources[ref]) return ref;
-  const cc = communityCourses.find((c) => (c.data && c.data.name) === ref || c.name === ref);
+  const { cc } = communityByRef(ref);   // BE6: resolveRaceCourse と同じ規則 (ちょうど 1 件のときだけ)
   const key = cc ? 'gh:' + cc.name : null;
   return (key && courseSources[key]) ? key : null;
 }
@@ -1619,7 +1717,13 @@ function finishPendingShareCourse() {
   if (want == null) return;
   // **解決可否の判定と通知は、利用者が触ったかに依らず先に行う** (無言失敗にしない=AF2 の受け入れ基準)。
   const key = resolveCourseKey(want);
-  if (!key) { logLine(t('log.share.course.missing', { name: want })); updateShareHash(); return; }
+  if (!key) {
+    // BE6: 名前が複数の投稿コースに当たるなら「見つからない」でなく「決められない」と言う (実際には在る)。
+    const n = communityByRef(want).n;
+    logLine(n > 1 && hasKey('log.courseAmbiguous') ? t('log.courseAmbiguous', { name: want, n })
+                                                   : t('log.share.course.missing', { name: want }));
+    updateShareHash(); return;
+  }
   // 見つかったが利用者が既に自分でコースを決めているなら、**黙って何もしない** (上書きしない)。
   // ここで「見つかりません」と言わないのは、実際には見つかっており異常ではないから。
   if (courseUserPicked) { updateShareHash(); return; }
@@ -1751,17 +1855,18 @@ async function loadCommunityCourses() {
   try { list = await listCommunityCourses(); } catch (e) { list = null; }
   // Q1[B]: 取得失敗 (null) は無言にせず 1 行通知する (「コースが消えた」誤解を防ぐ)。
   // 正常に 0 件 ([]) のときは従来どおり静か。失敗しても本体は止めない (プリセット/保存で動く)。
-  if (list === null) { logLine(t('log.ghCoursesFail')); return; }
+  if (list === null) { communityListState = 'failed'; logLine(t('log.ghCoursesFail')); return; }
   // v5.2.0: 逐次 await を並列取得へ (1 件失敗はスキップ=従来同値)。メニュー順は list 一覧順を維持。
   // BB2: 上流は投稿の中身を検査しないので、形式の正しくない投稿は一覧に載せず、理由を 1 行で知らせる。
   //   JSON として読めない (SyntaxError) も形式の問題として数える。通信失敗・HTTP エラーは従来どおり黙ってスキップ。
   const check = typeof courseParts.checkCourseData === 'function' ? courseParts.checkCourseData : () => null;
   const bad = [];
+  let missed = 0;   // BE6: 通信・HTTP の失敗で読み飛ばした件数 (これがあると「他の人の一覧」を判定できない)
   const fetched = await Promise.all(list.map(async (e) => {
     let data;
     try { data = await fetchCommunityCourse(e.download_url); }
     catch (err) {
-      if (err instanceof SyntaxError) bad.push({ e, why: 'JSON' });
+      if (err instanceof SyntaxError) bad.push({ e, why: 'JSON' }); else missed++;
       return null; /* 1 件失敗はスキップ */
     }
     const why = check(data);
@@ -1780,6 +1885,9 @@ async function loadCommunityCourses() {
   }
   const loaded = fetched.filter(Boolean);
   communityCourses = loaded;
+  // 層 4 の 3 回目 (2026-09-25) の実測: 本体 1 件の取得を 500 にしても 'ok' になり、その投稿と同じ名前の保存コースで
+  // 開催すると名前を書き出した (取得できた人の環境ではその名前は投稿コースに当たる)。欠けがあれば 'partial'。
+  communityListState = missed ? 'partial' : 'ok';
   if (loaded.length) {
     const cur = $('courseSel').value;
     rebuildCourseList(cur);
@@ -1876,6 +1984,7 @@ function applyEditDims() {
   syncEdDimInputs();        // クランプ/丸め後の確定値を入力へ反映
   updateEdDims();           // 読み出し表示も追従
   logLine(t('log.edDims', { w: w.toFixed(2), h: h.toFixed(2) }));
+  noteWallsOutside(editor.toJSON());   // BE6 (⑥): 縮めた瞬間に、枠の外へ出た壁を知らせる
 }
 function enterEdit() {
   stopAuto();
@@ -1915,10 +2024,13 @@ function applyEdit() {
   courseUserPicked = true;
   // 一覧に無い結果 (保存していない編集結果) は '' = 「一覧のどれでもない」。共有 hash はこのとき
   // currentShareState が course.name へ落ちるので、**URL に載る識別子は置き換え前と同じ**。
-  currentCourseKey = courseSources[c.name] ? c.name : '';
+  // BE6: 保存コースの値は保存名と限らない (rebuildCourseList で逃がした値)。同じ名前の保存コースがあればその値を
+  // 先に引く＝改修前と同じ「保存コースを指す」識別子 (改修前は保存コースがプリセットのキーを上書きしていた)。
+  currentCourseKey = savedKeyOf(c.name) || (courseSources[c.name] ? c.name : '');
   rebuildCourseList();
   syncButtons();
   logLine(t('log.courseApplied', { name: c.name }));
+  noteWallsOutside(c);   // BE6 (⑥): ✔適用も黙って通さない (走るコースに見えない壁が残る)
 }
 
 // クライアント座標 → 内部キャンバス px (CSS 表示スケール sx/sy を補正)。
@@ -2599,11 +2711,20 @@ $('edW').addEventListener('change', applyEditDims);
 $('edH').addEventListener('change', applyEditDims);
 $('edSave').addEventListener('click', () => {
   if (!editor) return;
-  const name = ($('edName').value || t('ed.name.default')).trim();
+  // BE6 (⑤): trim を既定名の**前**に置く。旧式 `(value || 既定).trim()` は空白だけの名前を '' にして保存し、
+  // 保存名 '' のコースは option value も '' になり、選べても normalizeCourse が名前を『カスタム』に畳んでいた。
+  const name = ($('edName').value.trim() || t('ed.name.default'));
   editor.course.name = name;
   saveCourse(name, editor.toJSON());
-  rebuildCourseList(name);
+  // 衝突を逃がした保存コースは option value が保存名と違うので、**一覧を作り直してから**値を引いて選ぶ。
+  // ⚠ `rebuildCourseList(savedKeyOf(name) || name)` にしてはならない (層 4 の 2 回目・2026-09-25 に実測): 引数は
+  //   作り直す前に評価されるので、初めて保存する名前では null → name に落ち、name が逃がし対象 (プリセット名・
+  //   gh:・★ で始まる) だと**別の項目**が選ばれ、続けて 🗑 を押すと別の保存コースが消えた。
+  rebuildCourseList();
+  const savedKey = savedKeyOf(name);
+  if (savedKey != null) { $('courseSel').value = savedKey; courseSelValue = savedKey; }
   logLine(t('log.courseSaved', { name }));
+  noteWallsOutside(editor.toJSON());
 });
 $('edExport').addEventListener('click', () => {
   if (!editor) return;
@@ -2633,12 +2754,13 @@ $('edImport').addEventListener('change', async (ev) => {
     updateEdDims();
     syncEdDimInputs();
     logLine(t('log.courseJsonLoaded', { name: editor.course.name || '' }));
+    noteWallsOutside(editor.toJSON());   // BE6 (⑥): own で通した枠の外の壁を知らせる
   } catch (e) { logLine(t('log.err.json', { e: e.message })); }
 });
 $('edShare').addEventListener('click', () => {
   if (!editor) return;
   const json = editor.toJSON();
-  json.name = ($('edName').value || json.name || t('ed.name.default')).trim();
+  json.name = ($('edName').value.trim() || (json.name || '').trim() || t('ed.name.default'));   // BE6: 空白だけの名前を既定名へ (#edSave と同じ)
   // BC3 (⑦): 投稿しても、各利用者のアプリは loadCommunityCourses の検査 (BB2・通常基準) で落とすので
   // 一覧に載らない。それを**投稿する前に**知らせる。書き出し自体は止めない (手元のファイルは利用者のもの
   // なので人質にしない)。ここは own ではなく通常基準で見る — 配る先は他人の一覧だから。
@@ -2658,8 +2780,11 @@ $('edShare').addEventListener('click', () => {
   }
 });
 $('edDelete').addEventListener('click', () => {
-  const n = $('courseSel').value;
-  if (loadSavedCourses()[n]) { deleteCourse(n); rebuildCourseList(); logLine(t('log.savedCourseDeleted', { name: n })); }
+  // BE6: option value は保存名と限らない (衝突を逃がした保存コース)。courseSources が持つ保存名で消す。
+  // 旧式 `loadSavedCourses()[value]` のままだと、プリセット『オーバル』を選んで 🗑 を押すと同名の保存コースが消えた。
+  const src = courseSources[$('courseSel').value];
+  const n = src && src.type === 'saved' ? src.savedName : null;
+  if (n != null && loadSavedCourses()[n]) { deleteCourse(n); rebuildCourseList(); logLine(t('log.savedCourseDeleted', { name: n })); }
   else logLine(t('log.presetNoDelete'));
 });
 $('edApply').addEventListener('click', applyEdit);
@@ -3127,6 +3252,7 @@ function currentShareState() {
   return {
     // BC4: 共有するのは **option value** (受信側が courseSel から解決できる識別子)。プリセット/保存
     // コースでは course.name と同値、投稿コースだけが 'gh:<ファイル名>' になる。
+    // (BE6: プリセット名・gh:・★ で始まる保存コースは '★'＋保存名＝保存コースを指したまま、プリセットを奪わない。)
     // 一覧に無いコース (保存していない編集結果・空文字名の保存コース等) では従来どおり **course.name**
     // へ落とす。**null にして hash から落としてはならない**: AF1/AF2 の受け入れ基準は「自作物は
     // 名前参照 + フォールバック + 通知 (無言失敗にしない)」であり (share.js 冒頭・下の復元経路)、

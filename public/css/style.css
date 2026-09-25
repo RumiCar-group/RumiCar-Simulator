@@ -381,6 +381,8 @@ input[type=range]:focus-visible { outline: none; box-shadow: var(--ring); }
   padding: 9px 12px; min-height: 16px;
   background: var(--surface); border: 1px solid var(--border);
   border-left: 3px solid var(--cyan); border-radius: var(--radius-xs);
+  /* BE6: 区切りの無い説明文 (投稿コースの desc) でページが横にはみ出していた (改修前の実測: 300 字で 1,199px)。 */
+  overflow-wrap: anywhere;
 }
 .course-desc:empty { display: none; }
 

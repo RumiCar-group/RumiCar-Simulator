@@ -212,10 +212,11 @@ const INTAKE = [
            // `return false;` だけを探すと、関数冒頭の `if (!src) return false;` に当たってしまい、
            // 拒否側の return を消しても緑のまま通る (層 4 レビュー 2026-09-18 の指摘。実害は
            // c が undefined のまま applyCourse へ落ちて TypeError)。
-           [/if \(!r\.ok\) \{\s*logLine\(courseBadLine\(name, r\.why\)\);[\s\S]*?\$\('courseSel'\)\.value = courseSelValue;\s*return false;\s*\}/,
+           // BE6: 表示する名前は保存コースなら保存名 (option value は逃がした値になりうる)。
+           [/if \(!r\.ok\) \{\s*logLine\(courseBadLine\(src\.type === 'saved' \? src\.savedName : name, r\.why\)\);[\s\S]*?\$\('courseSel'\)\.value = courseSelValue;\s*return false;\s*\}/,
             '拒否の分岐が「理由を知らせる → courseSel を戻す → false を返す」になっていない'],
            [/src\.type === 'preset'/, '出荷コース (preset) と外から来たコースを分けていない']] },
-  { id: '④ 公式レースのコース解決 (resolveRaceCourse)', from: 'function resolveRaceCourse(courseRef) {', to: '\n}\n',
+  { id: '④ 公式レースのコース解決 (resolveRaceCourse)', from: 'function resolveRaceCourse(courseRef, opts) {', to: '\n}\n',
     must: [[/const r = acceptCourse\(data, false\);/, '通常基準の acceptCourse を通していない'],
            [/logLine\(courseBadLine\(name, r\.why\)\);/, '解決できない理由を知らせていない'],
            [/return accept\(courseRef, /, '同梱 def を入口に通していない'],
@@ -237,7 +238,8 @@ const INTAKE = [
   // BC4: 投稿コースは起動時の復元より後に一覧へ載るので、復元経路が 2 本になった。後追いの側も
   // 同じ不変条件を持つ (断られたら復元は不成立) ほか、**利用者の操作を上書きしない**ことが要る。
   { id: '投稿コース読込後の遅延復元 (finishPendingShareCourse)', from: 'function finishPendingShareCourse() {', to: '\n}\n',
-    must: [[/if \(!key\) \{ logLine\(t\('log\.share\.course\.missing'[^\n]*\n/, '解決できない共有コースの理由を知らせていない (無言失敗)'],
+    // BE6: 名前が複数の投稿コースに当たるときは「決められない」、それ以外は「見つからない」を出す 1 文になった。
+    must: [[/if \(!key\) \{[^}]*?logLine\(n > 1 && hasKey\('log\.courseAmbiguous'\)[^;]*t\('log\.share\.course\.missing'/, '解決できない共有コースの理由を知らせていない (無言失敗)'],
            [/if \(courseUserPicked\) \{[^\n]*return; \}/, '利用者が自分でコースを決めていても上書きしてしまう (✔適用の結果を破棄しうる)'],
            [/if \(!selectCourse\(key\)\) \{[^\n]*return; \}/, '取り込みを断られたのに後続へ進んでいる']] },
   { id: '一覧の再構築 (rebuildCourseList)', from: 'function rebuildCourseList(selectName) {', to: '\n}\n',
@@ -326,7 +328,7 @@ const MUTATIONS = [
   ['②が拒否しても courseSel を戻さない', (m, r, b) => [m.replace("if (courseSelValue && courseSources[courseSelValue]) $('courseSel').value = courseSelValue;", ''), r, b]],
   ['④の同梱 def を素通しに戻す', (m, r, b) => [m.replace('return accept(courseRef, courseRef.name', 'return normalizeCourse(courseRef); // (courseRef.name'), r, b]],
   ['④の投稿コースを素通しに戻す', (m, r, b) => [m.replace('return cc ? accept(cc.data, courseRef) : null;', 'return cc ? normalizeCourse(cc.data) : null;'), r, b]],
-  ['④が理由を知らせない', (m, r, b) => [m.replace('if (!r.ok) { logLine(courseBadLine(name, r.why)); return null; }', 'if (!r.ok) { return null; }'), r, b]],
+  ['④が理由を知らせない', (m, r, b) => [m.replace('if (!r.ok) { if (!quiet) logLine(courseBadLine(name, r.why)); return null; }', 'if (!r.ok) { return null; }'), r, b]],
   ['⑦の投稿前の告知を消す', (m, r, b) => [m.replace(/if \(!chk\.ok\) logLine\(hasKey\('log\.courseSubmitBad'\)[^\n]*\n/, ''), r, b]],
   ['⑦の hasKey ガードを外す', (m, r, b) => [m.replace("hasKey('log.courseSubmitBad') ? t('log.courseSubmitBad', { why: chk.why })", "t('log.courseSubmitBad', { why: chk.why })"), r, b]],
   ['⑥の告知を消す', (m, r, b) => [m.replace(/hasKey\('log\.ghCarsBad'\)/, 'false'), r, b]],
@@ -334,7 +336,7 @@ const MUTATIONS = [
   ['⑧が ② と違う基準を使う (割れが戻る)', (m, r, b) => [m.replace('acceptCourse(editor.toJSON(), true)', 'acceptCourse(editor.toJSON(), false)'), r, b]],
   ['起動時の共有復元が拒否を無視する', (m, r, b) => [m.replace('restoredCourse = selectCourse(key);', 'selectCourse(key);\n      restoredCourse = true;'), r, b]],
   ['遅延復元が利用者の操作を上書きする (BC4)', (m, r, b) => [m.replace(/if \(courseUserPicked\) \{[^\n]*return; \}\n/, ''), r, b]],
-  ['遅延復元が解決できない共有コースを黙って捨てる (BC4)', (m, r, b) => [m.replace(/if \(!key\) \{ logLine\(t\('log\.share\.course\.missing'[^\n]*\n/, '  if (!key) { updateShareHash(); return; }\n'), r, b]],
+  ['遅延復元が解決できない共有コースを黙って捨てる (BC4)', (m, r, b) => [m.replace(/    logLine\(n > 1 && hasKey\('log\.courseAmbiguous'\)[^;]*;\n/, ''), r, b]],
   ['rebuildCourseList が現在の選択を控えない', (m, r, b) => [m.replace('  courseSelValue = sel.value;\n', ''), r, b]],
   ['名前空間 import をやめて名前付きにする', (m, r, b) => [
     m.replace('  PRESETS, presetByName, normalizeCourse, loadPresets,', '  PRESETS, presetByName, normalizeCourse, loadPresets, acceptCourseData,')

@@ -432,7 +432,19 @@ export function defaultCourse() { return buildFromSpec(FALLBACK_SPECS[0]); }
 //   ・壁が占めるグリッドのセル数 (セル cell m・壁グリッドと同じ数え方) の合計が maxCells 以下 (出荷の最大 685,643)
 //   ・壁の本数が maxWalls 以下 (出荷の最大 960。セル数だけだと短い壁を 150 万本並べた数十 MB の投稿が通る)
 // 検査しないもの: diff・bench・beginner 等の表示用メタ (壊れていても normalizeCourse が無害に扱う)。
-const COURSE_LIMITS = { bMin: 0.5, bMax: 1000, margin: 0.05, cell: 0.1, maxCells: 1500000, maxWalls: 20000 };
+// ── 文字列と全体の大きさ (BE6・2026-09-25・**std だけ**) ─────────────────────────────
+// 上の上限が守るのは座標と壁の事故までで、名前・説明・ファイルの大きさは無制限だった。実測 (改修前): 名前 20 万字・
+// 説明 500 万字の投稿コースは検査を通って一覧に載り、選ぶと 1.9 秒かかった。上限は「出荷 66 本と上流の投稿の
+// 実測最大の 2 倍を切り上げ」(internal 決定ログ BE6):
+//   ・name / name_en ≤ nameMax (出荷の最大 60・UTF-16 単位) ・desc / desc_en ≤ descMax (出荷の最大 1,635)
+//   ・詰めた JSON (JSON.stringify) の文字数 ≤ jsonMax。**壁本数の上限 maxWalls を実質的に下げない値**にしてある
+//     (出荷コースごとの壁 1 本あたりの平均文字数の最大 99 × maxWalls × 2 ≒ 396 万。有効桁いっぱいの座標の壁
+//     20,000 本でも約 190 万字で通ることを wf_be6_intake B) が測る)。知らない項目に大きな塊を入れた投稿は、normalizeCourse
+//     が捨てるのに一覧 (communityCourses) が生の data を持ち続けるので、ここで止める。
+// **own には足さない**: 利用者が自分で付けた長い名前の保存コースが開けなくなる (BC3 と同じ事故)。std にだけ
+//   検査を足す限り own ⊇ std は構成上崩れない (wf_bc3_intake B1)。
+const COURSE_LIMITS = { bMin: 0.5, bMax: 1000, margin: 0.05, cell: 0.1, maxCells: 1500000, maxWalls: 20000,
+  nameMax: 120, descMax: 3300, jsonMax: 4000000 };
 // ── 取り込み元でわける 2 つの基準 (BC3・2026-09-18) ──────────────────────────────
 // 上の基準は「上流の投稿＝第三者のデータ」向けで、**拒否しても利用者は何も失わない**ことが前提だった。
 // BC3 で同じ検査を全経路へ広げたとき、これをそのまま**利用者自身の保存コース**へ当てると、正規の操作で
@@ -455,6 +467,16 @@ const COURSE_LIMITS = { bMin: 0.5, bMax: 1000, margin: 0.05, cell: 0.1, maxCells
 //   ∴ 遠い壁は「自分のデータ」でも受け取れない。上限 1000 m (=bMax) は正規データを 1 本も落とさない
 //   (出荷 66 本の座標の絶対値は最大 748.18 m=競技サーキット (フルスケール)・実測 2026-09-18)。
 // 構造の検査・壁の本数・bounds の 0.5〜1000 m・セル数の上限は**両者で同一**。
+// 座標が収まるべき窓 (checkCourse と wallsOutsideFrame が同じ 1 つを使う＝窓の写しを作らない・BE6)。
+// 常設ゲート wf_bb2_course_check D) は COURSE_LIMITS から checkCourse の終わりまでを切り出して変異に掛けるので、
+// **この関数はその範囲の中 (checkCourseData の前) に置く** (外へ出すと切り出しが壊れ、窓の変異が当たらなくなる)。
+function frameWindow(bw, bh, own) {
+  const L = COURSE_LIMITS;
+  const m = L.margin * Math.max(bw, bh);
+  const loX = own ? Math.min(-m, -L.bMax) : -m, hiX = own ? Math.max(bw + m, L.bMax) : bw + m;
+  const loY = own ? Math.min(-m, -L.bMax) : -m, hiY = own ? Math.max(bh + m, L.bMax) : bh + m;
+  return { outX: (v) => v < loX || v > hiX, outY: (v) => v < loY || v > hiY };
+}
 export function checkCourseData(data) { return checkCourse(data, false); }
 export function checkOwnCourseData(data) { return checkCourse(data, true); }
 function checkCourse(data, own) {
@@ -489,6 +511,13 @@ function checkCourse(data, own) {
   }
   // ── 大きさ (形の検査を全部通ったものだけ・normalizeCourse と同じ既定を使う) ──
   const L = COURSE_LIMITS;
+  if (!own) {   // BE6: 文字列と全体の大きさは他人へ配るものにだけ (上の COURSE_LIMITS の注記)
+    for (const k of ['name', 'name_en']) if (!absent(data[k]) && data[k].length > L.nameMax) return `${k}:size`;
+    for (const k of ['desc', 'desc_en']) if (!absent(data[k]) && data[k].length > L.descMax) return `${k}:size`;
+    let n;
+    try { n = JSON.stringify(data).length; } catch (e) { return '$:size'; }
+    if (!(n <= L.jsonMax)) return '$:size';
+  }
   if (data.walls.length > L.maxWalls) return 'walls:size';
   const bw = absent(data.bounds) ? 3.0 : data.bounds.w, bh = absent(data.bounds) ? 2.0 : data.bounds.h;
   if (!(bw >= L.bMin && bw <= L.bMax)) return 'bounds.w';
@@ -500,11 +529,7 @@ function checkCourse(data, own) {
   //   厳しくなる**帯ができる (実測: bounds 960 m に x=1005 m の壁 → std 合格・own 拒否)。そこへ落ちた
   //   保存コースは二度と開けない＝BC3 が直したはずの事故が上端で再現する。和集合にすれば
   //   **own ⊇ std が構成上の性質**になり、母集団の中身に依らず成り立つ (wf_bc3_intake B1)。
-  const m = L.margin * Math.max(bw, bh);
-  const loX = own ? Math.min(-m, -L.bMax) : -m, hiX = own ? Math.max(bw + m, L.bMax) : bw + m;
-  const loY = own ? Math.min(-m, -L.bMax) : -m, hiY = own ? Math.max(bh + m, L.bMax) : bh + m;
-  const outX = (v) => v < loX || v > hiX;
-  const outY = (v) => v < loY || v > hiY;
+  const { outX, outY } = frameWindow(bw, bh, own);
   for (let i = 0; i < data.walls.length; i++) {
     const w = data.walls[i];
     if (outX(w.x1)) return `walls[${i}].x1`;
@@ -526,6 +551,30 @@ function checkCourse(data, own) {
     if (cells > L.maxCells) return 'walls:size';
   }
   return null;
+}
+
+// ===== 枠の外に残った壁の本数 (BE6・2026-09-25) =====
+// コースエディタは枠 bounds を 1 m まで縮められ、縮めても壁は動かさない (main.js applyEditDims)。自分のコース
+// としては正規の中間状態 (own で開ける・BC3) だが、**枠の外は画面に描かれず、投稿すると他人の一覧から
+// 除外される** (std の窓の外)。改修前はそれを知らせるのが投稿 (#edShare) のときだけで、寸法を縮めた瞬間も
+// ✔適用・保存も黙って通っていた。ここで数え、呼び出し側 (main.js) が 1 行知らせる。
+// 数え方は **checkCourseData (std) と同じ窓** (frameWindow＝枠 ± 長辺の 5%): 端点のどちらかが窓の外なら 1 本
+// (余白の内側にある端点は数えない)。∴ own を通り、かつ std が座標の窓より前の検査 (名前・説明・全体の大きさ・
+// bounds の 0.5〜1000 m) で落とさないコースでは「この値 > 0 ⇔ std が walls[i].* を理由に拒否する」
+// (wf_be6_intake C) がその範囲の母集団で照合する)。
+// 壁以外 (start/finish) は数えない (告知は壁の話に絞る)。data が壊れていれば 0 (検査は acceptCourseData の役目)。
+// DOM に触れない純関数。
+export function wallsOutsideFrame(data) {
+  if (!data || typeof data !== 'object' || !Array.isArray(data.walls)) return 0;
+  const b = data.bounds;
+  const bw = (b && typeof b.w === 'number') ? b.w : 3.0, bh = (b && typeof b.h === 'number') ? b.h : 2.0;
+  const { outX, outY } = frameWindow(bw, bh, false);
+  let n = 0;
+  for (const w of data.walls) {
+    if (!w || typeof w !== 'object') continue;
+    if (outX(w.x1) || outY(w.y1) || outX(w.x2) || outY(w.y2)) n++;
+  }
+  return n;
 }
 
 // ===== 取り込み経路の単一入口 (BC3・2026-09-18) =====
