@@ -11,6 +11,7 @@
 //     B2 帯が展開され、3 部品すべてが**帯に**描かれる (欠けが無い＝HUD を失っていない)
 //     B3 帯に描かれた文字の箱が帯の上・右・下からはみ出さない (0) ／ B3b 左も 0 (BD2 で 0 になった軸)
 //     B3c 順位表の**枠そのもの**も表示域の中 / B3d 枠幅 ≤ hud.js の LB.wMin (独立上界・母集団は ja 既定)
+//     ※ B3・B3d は母集団 (測った文字・順位表の枠) が欠けたセルがあれば赤 (空集合の「違反 0」で緑にしない・BE5)
 //     B17 順位表の**行の中で隣り合う文字が重ならない** (BD2 で列位置が定数から計算値になったため)
 //     B4 帯の文字の表示高さの最小 ≥ 10 CSS px (BB3 H1 と同じ基準・帯でも守る)
 //     B5 帯の中で 3 部品が互いに重ならない
@@ -176,7 +177,7 @@ try {
       // 順位表の**文字**の最左 (枠の左端ではない)。枠の内側の余白を実測で導くために持つ。
       lbTextX0: (() => { const t2 = txt.filter((r) => r.who === 'drawFleetHud'); return t2.length ? Math.min(...t2.map((r) => r.x0 * sc(r).kx)) : null; })(),
       lbRowGap, lbPairN,
-      bandTxtN: bandTxt.length, bandMinH: bandTxt.length ? Math.min(...bandTxt.map(hOf)) : null,
+      bandTxtN: bandTxt.length, bandTxtWho: [...new Set(bandTxt.map((r) => r.who))].filter((w) => HUD.includes(w)).sort(), bandMinH: bandTxt.length ? Math.min(...bandTxt.map(hOf)) : null,
       bandMinText: bandTxt.length ? bandTxt.reduce((a, r) => (!a || hOf(r) < hOf(a) ? r : a)).text : null,
       miniN: mini.length, miniBox: mini.length ? { x: mini[0].x0 * SC.course.kx, y: mini[0].y0 * SC.course.ky, x1: mini[0].x1 * SC.course.kx, y1: mini[0].y1 * SC.course.ky } : null,
       spyErr: all.filter((r) => r.kind === 'spyErr').length,
@@ -215,9 +216,15 @@ try {
   ok(notBand.length === 0,
     `B2 狭い画面の全セルで帯が展開され、メーター・タイヤ・順位表の 3 部品が揃って帯に描かれる (欠け ${notBand.length}: ${JSON.stringify(notBand.slice(0, 3).map((c) => [c.opt, c.W, c.bandOn, c.hudCv, c.parts]))})`);
   // B3: 上・右・下 は 1 px も出ない。**下**が BC6 が直した軸 (改修前は 390 幅で 20/68・320 幅で 37/68 のセルが切れていた)。
+  //   ⚠ 母集団ガード (BE5・BD-6(b)): 違反の数だけを見ると、文字が描かれない退行は空集合の「違反 0」で緑になる。
+  //     狭い画面の**全セル**で 3 部品それぞれの文字が帯に描かれたことを同じ述語の中で要求する (B12・B15 と同じ作法)。
+  //     右の辺に寄るのは右詰めの順位表 (と、hud.js の layoutHud の分岐 ① で右上へ置かれるタイヤ) なので、その文字が母集団に無いと
+  //     「右」の判定は空振りする。
+  const HUD_PARTS = ['drawFleetHud', 'drawMeters', 'drawTireHud'];
+  const b3Missing = narrow.filter((c) => HUD_PARTS.some((w) => !c.bandTxtWho.includes(w)));
   const outTRB = narrow.filter((c) => c.outSide.t > 0.5 || c.outSide.r > 0.5 || c.outSide.b > 0.5);
-  ok(outTRB.length === 0,
-    `B3 帯に描かれた文字が帯の上・右・下からはみ出さない (違反 ${outTRB.length}/${narrow.length}・最大 上 ${Math.max(...narrow.map((c) => c.outSide.t)).toFixed(1)} / 右 ${Math.max(...narrow.map((c) => c.outSide.r)).toFixed(1)} / 下 ${Math.max(...narrow.map((c) => c.outSide.b)).toFixed(1)} px: ${JSON.stringify(outTRB.slice(0, 3).map((c) => [c.opt, c.W, c.outSide, c.outTxt]))})`);
+  ok(narrow.length > 0 && b3Missing.length === 0 && outTRB.length === 0,
+    `B3 帯に描かれた文字が帯の上・右・下からはみ出さない (母集団: 3 部品の文字が帯に揃うセル ${narrow.length - b3Missing.length}/${narrow.length}${b3Missing.length ? ` ・欠け ${JSON.stringify(b3Missing.slice(0, 3).map((c) => [c.opt, c.W, c.bandTxtWho]))}` : ''}・違反 ${outTRB.length}/${narrow.length}・最大 上 ${Math.max(...narrow.map((c) => c.outSide.t)).toFixed(1)} / 右 ${Math.max(...narrow.map((c) => c.outSide.r)).toFixed(1)} / 下 ${Math.max(...narrow.map((c) => c.outSide.b)).toFixed(1)} px: ${JSON.stringify(outTRB.slice(0, 3).map((c) => [c.opt, c.W, c.outSide, c.outTxt]))})`);
   // B3b 左のはみ出しも 0 (BD2)。BC6 の時点では「順位表の最小枠 (hud.js LB.wMin=268) > 帯の表示幅」で
   //   構造的にはみ出しており (320 幅で 68/68 セル・文字が 12px 外)、**導出した上界との一致**で縛るに
   //   とどめていた (BC-9 ③)。BD2 が狭い画面で枠を詰めるようにしたので、述語を「0」へ引き上げる。
@@ -230,10 +237,14 @@ try {
   //   枠が太る退行は B3b/B3c だけでは緑のまま通る (層 4 レビュー指摘)。上界は product の hud.js が持つ
   //   最小枠 LB.wMin ＝この母集団 (ja・1 台・既定装備) で順位表が取る幅そのもの。注記がこれを超えて
   //   広がったら赤になる。
+  //   ⚠ 母集団ガード (BE5・BD-6(b)): 順位表の無いセルを読み飛ばすと、順位表が描かれない退行は空集合で緑になる。
+  //     この母集団 (既定の表示) では狭い画面も広い画面も順位表を描く (B2・B8) ので、**全セル**に枠を要求する。
   const LBW = await appModule(page, 'js/hud.js', (m) => (m.LB ? m.LB.wMin : null));
+  const lbW = cells.filter((c) => c.lbBox).map((c) => c.lbBox.w);
+  const noLb = cells.filter((c) => !c.lbBox);
   const fatLb = LBW == null ? cells.filter(() => true) : cells.filter((c) => c.lbBox && c.lbBox.w > LBW + 0.5);
-  ok(LBW != null && fatLb.length === 0,
-    `B3d 順位表の枠幅が hud.js の LB.wMin (${LBW}px) 以下 (実測 ${Math.min(...cells.filter((c) => c.lbBox).map((c) => c.lbBox.w)).toFixed(1)}〜${Math.max(...cells.filter((c) => c.lbBox).map((c) => c.lbBox.w)).toFixed(1)}px・超過 ${fatLb.length}${LBW == null ? '・LB が hud.js から引けない' : ''}: ${JSON.stringify(fatLb.slice(0, 3).map((c) => [c.opt, c.W, c.lbBox?.w.toFixed(1)]))})`);
+  ok(LBW != null && cells.length > 0 && noLb.length === 0 && fatLb.length === 0,
+    `B3d 順位表の枠幅が hud.js の LB.wMin (${LBW}px) 以下 (母集団: 順位表を描いたセル ${lbW.length}/${cells.length}${noLb.length ? ` ・欠け ${JSON.stringify(noLb.slice(0, 3).map((c) => [c.opt, c.W]))}` : ''}・実測 ${lbW.length ? `${Math.min(...lbW).toFixed(1)}〜${Math.max(...lbW).toFixed(1)}px` : '—'}・超過 ${fatLb.length}${LBW == null ? '・LB が hud.js から引けない' : ''}: ${JSON.stringify(fatLb.slice(0, 3).map((c) => [c.opt, c.W, c.lbBox?.w.toFixed(1)]))})`);
   // B3c 文字ではなく**順位表の枠そのもの**が、描かれたキャンバスの中に収まる。文字だけを見る B3b は、
   //   枠が外へ出ていても中の文字がたまたま内側なら緑になりうる (枠の退行を文字では捕まえきれない)。
   const lbCells = cells.filter((c) => c.lbBox && c.partBox && c.partBox.drawFleetHud);
@@ -243,7 +254,9 @@ try {
     `B3c 順位表の枠が描かれたキャンバスの中に収まる (対象 ${lbCells.length} セル・違反 ${lbFrameBad.length}・枠の左端の最小 ${Math.min(...lbCells.map((c) => c.lbBox.x0)).toFixed(2)}px: ${JSON.stringify(lbFrameBad.slice(0, 3).map((c) => [c.opt, c.W, c.lbBox.x0.toFixed(1), c.lbBox.x1.toFixed(1), lbCanvasW(c).toFixed(1)]))})`);
   for (const [W] of NARROW) {
     const cs = narrow.filter((c) => c.W === W);
-    console.log(`  ℹ ${W} 幅: 表示幅 ${cs[0].cssW.toFixed(0)}px・順位表の枠 ${cs[0].lbBox.w.toFixed(0)}px (左端 ${cs[0].lbBox.x0.toFixed(0)}px) → 左のはみ出し ${cs.length ? Math.max(...cs.map((c) => c.outSide.l)).toFixed(2) : 0}px`);
+    // 記録行は例外で止めない (順位表が描かれない退行でも、後続の検査が名指しで赤を出せるように・BD-11 ⑤)。
+    const lb0 = cs[0]?.lbBox;
+    console.log(`  ℹ ${W} 幅: 表示幅 ${cs[0] ? cs[0].cssW.toFixed(0) : '—'}px・順位表の枠 ${lb0 ? lb0.w.toFixed(0) : '—'}px (左端 ${lb0 ? lb0.x0.toFixed(0) : '—'}px) → 左のはみ出し ${cs.length ? Math.max(...cs.map((c) => c.outSide.l)).toFixed(2) : 0}px`);
   }
   // B17 (BD2) 順位表の**行の中**で隣り合う文字が重ならない。枠が収まっていても中が潰れていたら読めない。
   //   改修前は列が定数 (LB_COL) だったので構造的に起きなかったが、BD2 で列は s/kf からの計算値になった。

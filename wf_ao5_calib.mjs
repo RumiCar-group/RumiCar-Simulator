@@ -25,7 +25,7 @@ import { DynCar, DYN, applyRegime } from './public/js/physics_dyn.js';
 import { buildFromSpec } from './public/js/course.js';
 import { runRace, engineFingerprint } from './public/js/race_engine.js';
 import { PROGRAMS } from './public/js/programs.js';
-import { CAR, CONST, PHYSICS, setPhysicsMode } from './public/js/config.js';
+import { CAR, CONST, PHYSICS } from './public/js/config.js';
 import { FROZEN } from './wf_frozen.mjs';   // AP3: 凍結値は中央マニフェスト経由
 
 let pass = 0, fail = 0; const fails = [];

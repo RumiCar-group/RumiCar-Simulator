@@ -15,16 +15,17 @@
 //    (その章だけ skip・他の章は走る)。BD5 (2026-09-21) で wf_ao5_calib の J 章を撤去するまでは 2 本あった。
 //    **これで全部ではない**: wf_az2_fitguard は PERF_BUDGET_MS=50ms の壁時計判定を持ち
 //    WF_SKIP_TIMING の対象外 (BC7 で確認)。
-//  ・沈黙截断の禁止 (CI-14): 意図的に非実行にした probe / library / 変異ツールを EXCLUDED として明示表示する。
+//  ・沈黙截断の禁止 (CI-14): 意図的に非実行にした probe / library / 変異ツール / 生成ツール / ランナー自身を EXCLUDED として明示表示し、
+//    ROOT 直下の wf_*.mjs 実ファイルと GATES＋EXCLUDED を突合する (BE5。食い違えばゲートを回さず exit 1)。
 //
 // 使い方:
 //   node wf_run_all.mjs                # 全ゲート実行 (壁時計の章を含む)
 //   WF_SKIP_TIMING=1 node wf_run_all.mjs   # 壁時計に依存する章 (bc7 C/D) を隔離した安定実行
 //   node wf_run_all.mjs --list         # 実行対象/除外の一覧だけ表示 (実行しない)
-// exit: 0=全緑かつ guard 不変 / 1=いずれかのゲート失敗 or guard 変化。
+// exit: 0=全緑かつ guard 不変 / 1=いずれかのゲート失敗 or guard 変化 or 一覧の不整合 (--list でも 1)。
 // ════════════════════════════════════════════════════════════════════════════
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -152,7 +153,25 @@ const EXCLUDED = {
   // wf_roomfixture.mjs = 「閉じた部屋」治具の寸法と枠の導出 (BD4・卓上 2 本と browser/check_az2_fitguard.mjs が共有)。
   'library (単体実行不可・ゲートが import)': ['wf_i18n_hash.mjs', 'wf_frozen.mjs', 'wf_touge_driver.mjs', 'wf_drift_opt.mjs', 'wf_course_corpus.mjs', 'wf_roomfixture.mjs'],
   '変異ツール (product/manifest を書換＝non-変異証明のため除外)': ['wf_i18n_rehash.mjs', 'wf_refreeze.mjs'],
+  // wf_release_notes.mjs = changelog.js から Release 本文を出力する (内容の品質は wf_i18n_check の ⑤ が見る)。
+  '生成ツール (Release 本文を出力する＝ゲートではない・引数の誤りでだけ非 0)': ['wf_release_notes.mjs'],
+  'ランナー自身': ['wf_run_all.mjs'],
 };
+
+// ── 一覧の突合 (BE5・BD-12(a)) ─────────────────────────────────────────────────
+//   EXCLUDED を表示するだけでは「足し忘れ」が何も赤くならない (沈黙截断の禁止が表示上の誠実さに留まる)。
+//   ROOT 直下の wf_*.mjs の実ファイルと GATES＋EXCLUDED を突合し、①どちらにも無いファイル
+//   ②実在しないエントリ ③二重に載ったエントリ のどれかがあれば、ゲートを回す前に非 0 で止める
+//   (--list・--only でも同じ＝一覧の数を読む経路も同じ根拠に立つ)。
+const onDisk = readdirSync(ROOT, { withFileTypes: true })
+  .filter((e) => e.isFile() && /^wf_.*\.mjs$/.test(e.name)).map((e) => e.name).sort();
+const listed = [...GATES.map((g) => g.name), ...Object.values(EXCLUDED).flat()];
+const inventory = {
+  'どちらにも無いファイル (GATES か EXCLUDED に理由つきで足す)': onDisk.filter((f) => !listed.includes(f)),
+  '実在しないエントリ (名前の誤り・削除漏れ)': [...new Set(listed.filter((f) => !onDisk.includes(f)))],
+  '二重に載ったエントリ': [...new Set(listed.filter((f, i) => listed.indexOf(f) !== i))],
+};
+const inventoryBad = Object.values(inventory).some((v) => v.length > 0);
 
 const listOnly = process.argv.includes('--list');
 // --only <substr>: 名前に部分一致するゲートだけ実行 (運用: 失敗ゲートの再実行・pytest -k 相当)。
@@ -171,6 +190,14 @@ console.log(`WF_SKIP_TIMING = ${process.env.WF_SKIP_TIMING === '1'
   ? '1 (wf_bc7_budget C/D をスキップ)' : '(未設定=すべて実行)'}`);
 console.log('除外(明示・非実行):');
 for (const [why, files] of Object.entries(EXCLUDED)) console.log(`  - ${why}: ${files.join(', ')}`);
+console.log(`一覧の突合: wf_*.mjs 実ファイル ${onDisk.length} ／ GATES ${GATES.length} ＋ EXCLUDED ${listed.length - GATES.length} = ${listed.length}`
+  + (inventoryBad ? '' : ' → 一致'));
+if (inventoryBad) {
+  for (const [why, files] of Object.entries(inventory)) if (files.length) console.log(`  ✗ ${why}: ${files.join(', ')}`);
+  console.log(line);
+  console.log('結果: FAIL (一覧の不整合・ゲートは実行していない)');
+  process.exit(1);
+}
 
 if (listOnly) { console.log(line); console.log('--list: 実行はしない。'); process.exit(0); }
 if (onlySub && activeGates.length === 0) { console.log(line); console.log(`✗ --only "${onlySub}" に一致するゲートが無い。`); process.exit(1); }
@@ -230,5 +257,7 @@ if (failed.length) {
 }
 console.log(line);
 const overallOk = failed.length === 0 && shaChanged.length === 0;
-console.log(`結果: ${overallOk ? 'PASS (全常設ゲート緑・guard 不変)' : 'FAIL'}`);
+// --only のときは「全常設ゲート」と名乗らない (回したのは一部だけ・BE5 の層 4 指摘)。
+const scope = onlySub ? `--only "${onlySub}" の ${activeGates.length}/${GATES.length} 本だけ緑＝全ゲートではない` : '全常設ゲート緑';
+console.log(`結果: ${overallOk ? `PASS (${scope}・guard 不変)` : 'FAIL'}`);
 process.exit(overallOk ? 0 : 1);
