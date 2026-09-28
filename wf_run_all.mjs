@@ -11,8 +11,9 @@
 //  ・非変異の機械証明: 実行前後で product ソース (messages.js / config.js) の sha256 を照合し、
 //    **ランナーが product を書換えない**ことを証明する。ゆえに変異ツール (wf_i18n_rehash / wf_refreeze) と
 //    書込を伴う maintenance は集合外。official_result の副作用 (result.json 書込) は --out を tmp へ隔離。
-//  ・timing 隔離: WF_SKIP_TIMING=1 を子へ透過 (env 継承)。対応しているのは **wf_bc7_budget の C/D 章だけ**
-//    (その章だけ skip・他の章は走る)。BD5 (2026-09-21) で wf_ao5_calib の J 章を撤去するまでは 2 本あった。
+//  ・timing 隔離: WF_SKIP_TIMING=1 を子へ透過 (env 継承)。対応しているのは **wf_bc7_budget の C/D 章と F2/F3 だけ**
+//    (その検査だけ skip・他の章は走る)。BD5 (2026-09-21) で wf_ao5_calib の J 章を撤去するまでは 2 本あった
+//    (BE8 で 60 秒の帯を wf_bc7_budget の F 章として戻した)。
 //    **これで全部ではない**: wf_az2_fitguard は PERF_BUDGET_MS=50ms の壁時計判定を持ち
 //    WF_SKIP_TIMING の対象外 (BC7 で確認)。
 //  ・沈黙截断の禁止 (CI-14): 意図的に非実行にした probe / library / 変異ツール / 生成ツール / ランナー自身を EXCLUDED として明示表示し、
@@ -20,7 +21,7 @@
 //
 // 使い方:
 //   node wf_run_all.mjs                # 全ゲート実行 (壁時計の章を含む)
-//   WF_SKIP_TIMING=1 node wf_run_all.mjs   # 壁時計に依存する章 (bc7 C/D) を隔離した安定実行
+//   WF_SKIP_TIMING=1 node wf_run_all.mjs   # 壁時計に依存する章 (bc7 C/D/F2/F3) を隔離した安定実行
 //   node wf_run_all.mjs --list         # 実行対象/除外の一覧だけ表示 (実行しない)
 // exit: 0=全緑かつ guard 不変 / 1=いずれかのゲート失敗 or guard 変化 or 一覧の不整合 (--list でも 1)。
 // ════════════════════════════════════════════════════════════════════════════
@@ -113,10 +114,11 @@ const GATES = [
   // BC7: 性能予算。旧 AP13「µs/tick/台 ≤60」(絶対時間の代理量・当時のホストの実測値を丸めたもの) を
   //   「FLEET.maxCars 台を UI が出せる最大の速度倍率で走らせてシム時刻が遅れないこと」という実態へ
   //   置き換え、下限を product (index.html の #speed の max / config の FLEET.maxCars) から導出する。
-  //   壁時計アサートを含むので WF_SKIP_TIMING=1 では C/D だけを skip する (AP21 の運用)。
+  //   壁時計アサートを含むので WF_SKIP_TIMING=1 では C/D と F2/F3 だけを skip する (AP21 の運用)。
   //   BD5 で wf_ao5_calib J を撤去し、その床 10× を本ゲートの E3 へ backstop として移設した。
   //   ライブ経路 (requestAnimationFrame) の実測は実ブラウザゲート browser/check_bc7_frame.mjs。
-  //   所要は本ホスト実測 9.1s（wf_run_all 内・2026-09-19）。
+  //   BE8 で F 章（6 台×60 秒の帯・30〜60 秒区間）を足した。所要は本ホスト実測 15.1s（wf_run_all 内・2026-09-28。
+  //   BE8 前は 9.1s）。
   'wf_bc7_budget.mjs',
   // BD1: 実走容量 driveableCapN の覚え書きが「同じコース」を**形状**で判定すること。鍵が course.name だった
   //   ため、保存コースの壁だけを編集して同じ名前で ✔適用すると古い実走判定が返っていた（BC-12 ③(a)）。
@@ -198,7 +200,7 @@ console.log(`ROOT      : ${ROOT}`);
 console.log(`cwd(起動) : ${process.cwd()}`);
 console.log(`ゲート数  : 全 ${GATES.length} (アサーションゲート ${GATES.length - 1} ＋ official_result[--out 隔離])${onlySub ? ` / --only "${onlySub}" → ${activeGates.length} 本に絞込` : ''}`);
 console.log(`WF_SKIP_TIMING = ${process.env.WF_SKIP_TIMING === '1'
-  ? '1 (wf_bc7_budget C/D をスキップ)' : '(未設定=すべて実行)'}`);
+  ? '1 (wf_bc7_budget C/D/F2/F3 をスキップ)' : '(未設定=すべて実行)'}`);
 console.log('除外(明示・非実行):');
 for (const [why, files] of Object.entries(EXCLUDED)) console.log(`  - ${why}: ${files.join(', ')}`);
 console.log(`一覧の突合: wf_*.mjs 実ファイル ${onDisk.length} ／ GATES ${GATES.length} ＋ EXCLUDED ${listed.length - GATES.length} = ${listed.length}`

@@ -45,18 +45,22 @@
 //       旧 J med 52.9×/min 52.1×（一様退行 min 5.21 倍で赤）／[v2f] med 46.7×/**min 46.3×**（min 3.86 倍で赤）。
 //       **C は min で判定する**ので min 同士を比べて **本ゲートが先に赤くなる**（走行が短いほど 1 回あたりの
 //       固定費が効くため）。
-//   **包含しきれないもの**: 「シム 30〜60 秒の区間だけが重くなる退行」は本ゲートからは見えない
-//   （旧 J の壁時計を分解すると前半 30s 0.648s・後半 30s 0.486s ＝ 後半だけ 11.0 倍の退行が要る。実務上は
-//   一様退行が先に C で捕まる）。∴ **AO_spec §11 較正目標表:191 の帯「6台×60s ヘッダレス ≥10倍速」を
-//   60 秒の形のまま機械検査するゲートは BD5 以降存在しない**（本ゲートは 30 秒 × 12×）。AO_spec は時点仕様
-//   なので書き換えていない。旧 J が持っていた絶対下限 10× は E3 へ backstop として移設した。
+//   **包含しきれなかったもの**: 「シム 30〜60 秒の区間だけが重くなる退行」は C からは見えない
+//   （旧 J の壁時計を分解すると前半 30s 0.648s・後半 30s 0.486s ＝ 後半だけ 11.0 倍の退行が要る）。
+//   BD5〜BE7 の間は AO_spec §11 較正目標表:191 の帯「6台×60s ヘッドレス ≥10倍速」を 60 秒の形で測る
+//   ゲートが無かった。**BE8（2026-09-28・利用者裁定「区間比で測る」）で F 章として戻した**: [v2f] と同じ
+//   治具を 60 秒走らせ、全 60 秒の R ≥ 10× に加えて **30〜60 秒区間だけの R = 30 / (壁60 − 壁30) ≥ 10×** を
+//   判定する。区間で割る理由は変異で実測した（BE8・本ホスト・後半 1800 tick だけ 1 tick あたり +1.75 ms
+//   の空回し＝後半が約 8 倍）: F3 は 7.91× で赤、全 60 秒の F2 は 13.63× で緑、C[v2f] は 43.74× で緑
+//   ＝**F3 が無ければ誰も赤くならない**。AO_spec は時点仕様なので書き換えていない。
+//   旧 J が持っていた絶対下限 10× は E3 の backstop と F 章の床を兼ねる。
 //
 // 【旧基準との換算】R と µs/tick/台 は `µs = 1e6 / (RACE_HZ × nCars × R)` で 1 対 1 に対応する。
 //   本ゲートはこの換算値も印字するので、旧記録（AP13 44.1・AW-3 60.6）と同じ土俵で読める。
 //
-// 【壁時計ゲートの扱い】WF_SKIP_TIMING=1 のとき**時間に依存する検査だけ**（C/D 章）を skip する（AP21 の運用）。
+// 【壁時計ゲートの扱い】WF_SKIP_TIMING=1 のとき**時間に依存する検査だけ**（C/D 章と F2/F3）を skip する（AP21 の運用）。
 //   決定論と構造の検査は常に走る。BD5 で wf_ao5_calib J を撤去したので、**WF_SKIP_TIMING に応答する常設
-//   ゲートは本ゲートだけ**になった（wf_az2_fitguard の PERF_BUDGET_MS は対象外・wf_run_all.mjs:16）。
+//   ゲートは本ゲートだけ**になった（wf_az2_fitguard の PERF_BUDGET_MS は対象外・wf_run_all.mjs 冒頭の「timing 隔離」の項）。
 //
 // 使い方: node wf_bc7_budget.mjs [--n <試行数>]     exit 0=PASS / 1=FAIL
 // ════════════════════════════════════════════════════════════════════════════
@@ -151,15 +155,15 @@ for (const c of CASES) {
   applyRegime(c.regime);
   let warm = null;
   { const r = runRace({ ...c.spec, report: true }); warm = r; }      // ウォームアップ 1 回（JIT・計測から捨てる）
-  const ratios = [], hashes = [], tickList = [], fitCut = [], ranCars = [];
+  const ratios = [], walls = [], hashes = [], tickList = [], fitCut = [], ranCars = [], reps = [];
   for (let i = 0; i < N; i++) {
     const t0 = process.hrtime.bigint();
     const r = runRace({ ...c.spec, report: true });
     const wall = Number(process.hrtime.bigint() - t0) / 1e9;
-    ratios.push(r.simSec / wall); hashes.push(r.verifyHash); tickList.push(r.ticks);
-    fitCut.push(r.fitReduced | 0); ranCars.push(r.report.length);
+    ratios.push(r.simSec / wall); walls.push(wall); hashes.push(r.verifyHash); tickList.push(r.ticks);
+    fitCut.push(r.fitReduced | 0); ranCars.push(r.report.length); reps.push(JSON.stringify(r.report));
   }
-  res[c.key] = { ...c, ratios, hashes, ticks: tickList, fitCut, ranCars, warm };
+  res[c.key] = { ...c, ratios, walls, hashes, ticks: tickList, fitCut, ranCars, reps, warm };
   const uniqH = [...new Set([...hashes, warm.verifyHash])];
   const uniqT = [...new Set([...tickList, warm.ticks])];
   ok(uniqH.length === 1, `B1[${c.key}] ${N + 1} 回とも同じ走行（verifyHash=${uniqH.join(',')}）`);
@@ -236,6 +240,72 @@ ok(R_MIN >= ABS_FLOOR,
    `E3: 要件由来の下限 ${R_MIN.toFixed(1)}× は絶対下限 ${ABS_FLOOR}× 以上`
    + `（speedMax=${speedMax}・φ=${PHYS_SHARE}。φ 据え置きなら speedMax が`
    + ` ${(ABS_FLOOR * PHYS_SHARE).toFixed(2)} を下回ると赤＝AO_spec §11 の受け入れ水準を割る）`);
+
+// ── F. AO_spec §11 の帯を 60 秒の形で測る（BE8）───────────────────────────────
+// 帯「6台×60s ヘッドレス 実時間の ≥10倍速」（`docs/stage_ao/AO_spec.md:191`）。C[v2f] は 30 秒 × 12× なので、
+// シム 30〜60 秒の区間だけが重くなる退行は C からは見えない（冒頭【既存ゲートとの関係】）。
+// [v2f] と同じ治具を maxSec だけ 60 にして走らせ、区間 30〜60 秒の壁時計を **壁60 − 壁30** で取り出す。
+// 引き算が「後半 30 秒の仕事」を表す**必要条件**は、60 秒走の前半 1800 tick が 30 秒走と同じ軌跡であること。
+// それを F0 で trace の tickChecksum 列から固定する（verifyHash は終了時点の結果の要約で tick ごとの状態を
+// 含まない＝race_engine.js の canonObj。fullscale の 60 秒では全車 0 周なので軌跡の同一性を表さない）。
+// 十分条件の側（コストが maxSec に依存しないこと）は、現行の race_engine.js で maxSec が効くのが
+// 打ち切り tick 数（effMaxSec→maxTicks）だけであることに依る（BE8 のレビューで確認・コードでは固定していない）。
+// 時間を測った各回が trace 付きの回と同じ走行であることは、report（各車の最終位置 finalX/finalY を含む）の
+// 一致で F1 が固定する（trace を本測に付けると測るコストが変わるため）。
+// 区間 R は **悲観側の組**（壁60 の最大 − 壁30 の最小）で判定する＝別々の試行の両極端を組むので、
+// C の「最悪試行」よりさらに悲観的（安全側）。
+console.log('\nF) AO_spec §11 の帯を 60 秒の形で（全 60 秒 R ≥ 10× と 30〜60 秒区間 R ≥ 10×）');
+const SEC60 = 60;
+const base = res.v2f;
+if (!base) {
+  ok(false, `F 60 秒走の基にする [v2f] が母集団に無い＝B0 を見よ`);
+} else {
+  const spec60 = { ...base.spec, maxSec: SEC60 };
+  applyRegime(base.regime);
+  // F0: 前半の同一性（1 回ずつ trace 付きで走らせる。trace は観測だけで slots を変えない＝race_engine.js の
+  //     `if (trace) traceArr.push(tickChecksum(slots))` と ghost の注記「report/trace と同様に … 不変」）
+  const tr60 = runRace({ ...spec60, report: true, trace: true });
+  const tr30 = runRace({ ...base.spec, report: true, trace: true });
+  const half = SEC * RACE_HZ;
+  const samePrefix = Array.isArray(tr60.trace) && Array.isArray(tr30.trace) && tr30.trace.length === half
+    && tr60.trace.length === SEC60 * RACE_HZ && tr30.trace.every((v, i) => v === tr60.trace[i]);
+  ok(samePrefix, `F0 60 秒走の前半 ${half} tick が 30 秒走 [v2f] と同じ軌跡（tickChecksum 列が一致）`
+     + `＝壁60 − 壁30 が後半 30 秒の仕事を表す`);
+  const walls60 = [], ticks60 = [], cut60 = [], ran60 = [], sim60 = [], reps60 = [];
+  for (let i = 0; i < N; i++) {
+    const t0 = process.hrtime.bigint();
+    const r = runRace({ ...spec60, report: true });
+    walls60.push(Number(process.hrtime.bigint() - t0) / 1e9);
+    ticks60.push(r.ticks); cut60.push(r.fitReduced | 0); ran60.push(r.report.length); sim60.push(r.simSec);
+    reps60.push(JSON.stringify(r.report));
+  }
+  applyRegime('tabletop');
+  const u = (a) => [...new Set(a)];
+  ok(u([...ticks60, tr60.ticks]).length === 1 && ticks60[0] === SEC60 * RACE_HZ
+     && u([...cut60, tr60.fitReduced | 0]).join() === '0' && u([...ran60, tr60.report.length]).join() === String(maxCars)
+     && u(sim60).length === 1 && sim60[0] === SEC60,
+     `F1 60 秒走が打ち切りまで ${maxCars} 台で走り切った（ticks=${u(ticks60).join(',')}・simSec=${u(sim60).join(',')}`
+     + `・実走 ${u(ran60).join(',')} 台・削られた台数 ${u(cut60).join(',')}）`);
+  // F1b: 時間を測った回が、F0 で軌跡を確かめた trace 付きの回と同じ走行であること（C/B1 の「同じ仕事を測る」を F にも）
+  ok(u([...reps60, JSON.stringify(tr60.report)]).length === 1 && u([...base.reps, JSON.stringify(tr30.report)]).length === 1,
+     `F1b 時間を測った 60 秒走 ${N} 回・30 秒走 [v2f] ${N} 回が、それぞれ trace 付きの回と同じ走行`
+     + `（report＝各車の最終位置等の一致。種類 60 秒 ${u([...reps60, JSON.stringify(tr60.report)]).length}・30 秒 ${u([...base.reps, JSON.stringify(tr30.report)]).length}）`);
+  if (SKIP_TIMING) {
+    skip('F2/F3 壁時計アサートを WF_SKIP_TIMING=1 でスキップ（timing 隔離・AP21）');
+  } else {
+    const w60max = Math.max(...walls60), w30min = Math.min(...base.walls);
+    const r60 = SEC60 / w60max;
+    console.log(`   壁時計 60 秒走 med ${q(walls60, .5).toFixed(3)} s / max ${w60max.toFixed(3)}`
+              + `・30 秒走 [v2f] med ${q(base.walls, .5).toFixed(3)} s / min ${w30min.toFixed(3)}`);
+    ok(r60 >= ABS_FLOOR, `F2 全 60 秒の最悪試行 ${r60.toFixed(2)}× ≥ ${ABS_FLOOR}×  マージン ${(r60 / ABS_FLOOR).toFixed(2)}倍`);
+    const seg = w60max - w30min, medSeg = q(walls60, .5) - q(base.walls, .5);
+    const rSeg = seg > 0 ? (SEC60 - SEC) / seg : NaN;
+    ok(seg > 0 && rSeg >= ABS_FLOOR,
+       `F3 30〜60 秒区間の悲観側 R = ${SEC60 - SEC}/(${w60max.toFixed(3)} − ${w30min.toFixed(3)}) = `
+       + `${Number.isFinite(rSeg) ? rSeg.toFixed(2) + '×' : '測定不能（差が 0 以下）'} ≥ ${ABS_FLOOR}×`
+       + `${Number.isFinite(rSeg) ? `  マージン ${(rSeg / ABS_FLOOR).toFixed(2)}倍${medSeg > 0 ? `（中央値の組なら ${((SEC60 - SEC) / medSeg / ABS_FLOOR).toFixed(2)}倍）` : ''}` : ''}`);
+  }
+}
 
 console.log(line);
 console.log(`検査: ${pass + fail} 件 / PASS ${pass} / FAIL ${fail}${skipped ? ` / SKIP ${skipped} (WF_SKIP_TIMING)` : ''}`);

@@ -28,7 +28,8 @@
 // 途中で書き換えていないかは既定では測れないので、必要なら明示して撃つ:
 //   RC_URL=https://www.rumicar.com/simulator/ bash run.sh check_bc1_cache.mjs
 // （エッジ側 `location ^~ /simulator/` の `^~` が消えると WP 用の `expires max` に捕まる。
-//   その設定は本リポジトリの外にあるため、ここからは押さえられない＝既知の限界。）
+//   その設定は本リポジトリの外にあるが、エッジ越しの応答は check_be8_edge.mjs が本ゲートの述語を
+//   エッジへ向けて毎回測る＝BE8 で塞いだ。本ゲート自身は配信コンテナ直の担当のまま。）
 
 const APP_URL = process.env.RC_URL || 'https://www.rumicar.com/simulator/';
 const base = APP_URL.endsWith('/') ? APP_URL : APP_URL + '/';
