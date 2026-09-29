@@ -14,8 +14,14 @@ import { ghostProgressModel, ghostStandingsAt, ghostPasses } from './ghost_gap.j
 import { sectorAnalysis, SECTORS_DEFAULT } from './sector.js';   // AS13: 区間別テレメトリ比較 (観測のみ)
 import { PROGRAM_BY_KEY } from './programs.js';                  // AS13: progKey 参照エントリーの言語解決
 import { fmtTime, loadBestRec } from './lap.js';
+// BF3: `practiceCourseId` は BE2 (v8.8.0) で足した名前なので**名前付き import しない**（古い lap.js がキャッシュに残る
+//   ブラウザでモジュールグラフ全体が読み込めなくなる＝BA1 の規則）。無ければ同梱コースの照合をしない（従来どおり）。
+import * as lapNS from './lap.js';
 import * as SFX from './sfx.js';
 import { drawCourse, worldToScreen } from './course.js';
+// BF3: 出荷コースの一覧と、同梱 def と同じ取り込み (acceptCourseData＝BC3 で足した名前) は名前空間から引く
+//   (BA1 の規則。無ければ同梱コースの照合をしない＝従来どおり)。
+import * as courseNS from './course.js';
 import { fetchRace, listOfficialRaces, entrySubmission, clearListCache } from './loader.js';
 import { t, applyI18n } from './i18n.js';
 import { course } from './state.js';
@@ -86,7 +92,8 @@ function renderRaceResult(res, meta) {
     }
     let recordHtml = '';
     if (fastest) {
-      const prevRec = loadBestRec(rc, fastest.carType);        // 既存 lap best (読み取り専用・BE2: 名前でなく形で引く)
+      // BF3: 同梱コースの大会で、出荷コースと同じ走りになると確かめられたときは出荷コースの記録で引く (meta.recordCourse)。
+      const prevRec = loadBestRec(meta.recordCourse || rc, fastest.carType);   // 既存 lap best (読み取り専用・BE2: 名前でなく形で引く)
       const prev = prevRec ? prevRec.t : null;                 // 記録タイム t (単位=秒。無ければ null)
       const fSec = fastest.bestLapMs / 1000;                   // レース best を秒へ (bestLapMs=ミリ秒)
       const fTime = fmtTime(fSec);
@@ -425,11 +432,12 @@ function verifyOfficialLocally(race) {
   // 旧記録 (grid 未刻) は null=従来の freeSpawn 算法フォールバック (作成時と同条件＝hash 不変)。
   const grid = (result && Array.isArray(result.grid)) ? result.grid : null;
   let res;
+  const spec = { course: rcourse, regime, laps, field, crashRule, interact: ix, maxSec, grid,
+    physics: event.physicsMode || 'dynamic',   // AO5: 記録のエンジンで再走 (旧記録=dynamic フォールバック=作成時と同条件)
+    recon: event.recon > 0 ? { laps: event.recon } : null,   // AO9: 記録の試走周回数で再走 (旧記録=未刻=0=従来)
+    wear: !!event.wear };   // AO12: 記録のタイヤ摩耗設定で再走 (旧記録=未刻=false=従来)
   try {
-    res = runRace({ course: rcourse, regime, laps, field, crashRule, interact: ix, maxSec, grid, report: true, ghost: true,
-      physics: event.physicsMode || 'dynamic',   // AO5: 記録のエンジンで再走 (旧記録=dynamic フォールバック=作成時と同条件)
-      recon: event.recon > 0 ? { laps: event.recon } : null,   // AO9: 記録の試走周回数で再走 (旧記録=未刻=0=従来)
-      wear: !!event.wear });   // AO12: 記録のタイヤ摩耗設定で再走 (旧記録=未刻=false=従来)
+    res = runRace({ ...spec, report: true, ghost: true });
   } catch (e) {
     // AZ5: 収容 0 台 (NO_ROOM) は技術メッセージで濁さず専用文言で出す。ここは**凍結グリッドが無い
     //   旧記録**の再走でだけ起きうる (grid があれば fitGuard は発火しない ＝ 公式記録の再現性に影響しない)。
@@ -457,10 +465,11 @@ function verifyOfficialLocally(race) {
     noteHtml += `<p class="official-verify-note">${escapeHtml(t('official.verify.refOnly', { hash: res.verifyHash }))}</p>`;
   }
   if (note) note.innerHTML = noteHtml;
+  const recordCourse = bundledRecordCourse(event, spec, res);   // BF3
   // 結果ダイアログ (参考) を開く (イベントのコース・クラス注記つき)。
   const crashTxt = crashRule.rejoin ? t('race.crashRule.rejoin', { s: crashRule.penaltySec || 3 }) : t('race.crashRule.dnf');
   renderRaceResult(res, {
-    laps, regime, crashTxt, course: rcourse, verifyHtml: noteHtml,
+    laps, regime, crashTxt, course: rcourse, verifyHtml: noteHtml, recordCourse,
     carLabel: fieldCarLabeler(field),   // BE3: 持ち込み車種はレース後に車種表に無い
     replay: { kind: 'rerun', recVer: event.engineVer || '' },   // AK6: 公式記録の再実行=最新エンジン再走 (記録とは別物になり得る)
     eventInfo: {
@@ -469,6 +478,52 @@ function verifyOfficialLocally(race) {
       fillerCount: field.filter((f) => f.filler).length,
     },
   });
+}
+
+// ── BF3・2026-09-29: コース定義を同梱した大会のコースレコード照合 ──────────────────────────────
+// 外部の公式イベントは `course` にコース定義を同梱できる (W_spec §1「<コース名 or courseDef>」)。同梱 def は
+// `resolveRaceCourse` → `normalizeCourse` を通るので、出荷コースを同梱しても中心線・bank・峠の勾配・路面などが落ち、
+// 練習記録の鍵 (`practiceCourseId`＝名前・説明を抜いた形) が出荷コースと一致しない＝練習ベストがあっても「新記録」と出た
+// (BE-2 (a))。**落ちた鍵が走りに効くかはコース・領域・エンジンで違う**（実測 2026-09-29・出荷 66 本 × 3 領域 × 3 エンジン:
+// 卓上では中心線・bank だけが落ちる 40 本は traceHash まで一致し、峠 24 本・路面 2 本は一致しない。v2/midscale には
+// verifyHash は一致して traceHash が違う回もある）。∴ 効く鍵を列挙せず、**同じ条件で出荷コースのまま走らせて確かめる**:
+//   ① 同梱 def の形 (正規化後・名前等を抜いた練習記録の鍵) が、出荷コースを同じ正規化に通した形と**ちょうど 1 本**一致し、
+//   ② その出荷コースのまま（名前だけ大会のコース名にして・名前は走りに効かない）同じ spec で走らせた verifyHash が
+//      同梱 def の結果と一致する（＝順位・タイム・ベストラップが同じ＝祝祭文の入力が同じ）
+//   ときだけ、出荷コースの練習ベストで照合する。それ以外は従来どおり同梱 def の形で引く（＝記録なし）。
+// 追加の 1 走は「同梱 def が出荷コースと同じ形の大会」で「完走ラップがある」ときだけ。結果・verifyHash・記録には触れない
+//   （祝祭文は presentation のみ・書き込みもしない）。
+function bundledRecordCourse(event, spec, res) {
+  if (!event || !event.course || typeof event.course !== 'object') return null;       // 文字列参照の大会は従来どおり
+  // 祝祭文が引くのは最速ラップの車の記録だけ (renderRaceResult と同じ選び方)。完走ラップが無ければ照合自体が無い。
+  let fastest = null;
+  for (const f of (res && res.finishers) || []) if (f.bestLapMs != null && (!fastest || f.bestLapMs < fastest.bestLapMs)) fastest = f;
+  if (!fastest) return null;
+  const id = typeof lapNS.practiceCourseId === 'function' ? lapNS.practiceCourseId : null;
+  const accept = typeof courseNS.acceptCourseData === 'function' ? courseNS.acceptCourseData : null;
+  if (!id || !accept || !Array.isArray(courseNS.PRESETS)) return null;
+  // 表示のためだけの補助なので、ここで何が投げても結果ダイアログを止めない (層 4: 走査が try の外だと開かなかった)。
+  try {
+    const want = id(spec.course);
+    const twins = [];
+    for (const f of courseNS.PRESETS) {
+      const p = f();
+      const r = accept(JSON.parse(JSON.stringify(p)), { own: false });   // resolveRaceCourse の同梱 def と同じ取り込み
+      if (r && r.ok && id(r.course) === want) twins.push(p);
+    }
+    if (twins.length !== 1) return null;                                                 // 無い・決められない
+    // その出荷コースに最速車の練習記録が無ければ、どちらで引いても「新記録」＝確かめる 1 走は要らない (層 4)。
+    if (!loadBestRec(twins[0], fastest.carType)) return null;
+    let twin;
+    try { twin = runRace({ ...spec, course: { ...twins[0], name: spec.course.name } }); }
+    catch (e) {
+      // 収容 0 台 (NO_ROOM) を含め、確かめられなければ出荷コースの記録では引かない。利用者への告知は 1 走目の経路が
+      //   既に出している (この 1 走は照合のための裏の走行で、結果も表示しない) ので、ここでは黙って従来どおりにする。
+      if (e && e.code === 'NO_ROOM') return null;
+      return null;
+    }
+    return twin.verifyHash === res.verifyHash ? twins[0] : null;
+  } catch (e) { return null; }
 }
 
 // 現在のアクティブ車をこの大会にエントリー (PR)。車種 def を同梱 (独自車種も参加可・W_spec §1)。
