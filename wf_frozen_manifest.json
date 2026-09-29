@@ -20,11 +20,11 @@
   "canonicalNode": {
     "node": "22.22.1",
     "v8": "12.4.254.21-node.35",
-    "resultSha256": "a799de2b816eed41bcc2156b52b43e37862c5b7410d5442d1902a1e8c15a2a8a",
-    "pinnedAt": "2026-09-28",
+    "resultSha256": "d87afbf9d5be73c3ea83b0f49fd870968a4f7e8944144e519efb8af7811b1b0a",
+    "pinnedAt": "2026-09-29",
     "eventId": "official-sample-circuit",
-    "appVersion": "v8.8.0",
-    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: BE9: Stage BE 結了で APP_VERSION v8.7.0 → v8.8.0 (MINOR/AQ-4・利用者裁定 2026-09-28)。engineFingerprint 経由で resultSha256 が変わるため再ピン (AQ-1)。verifyHash は不変 = BE7 の fleet.js/contact_v2.js/sensors.js は計算量の改修で出荷コースの走行は不変。"
+    "appVersion": "v8.9.0",
+    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: BF5: Stage BF 結了 v8.9.0（APP_VERSION が engineFingerprint 経由で resultSha256 を変える・AQ-1）"
   },
   "history": [
     {
