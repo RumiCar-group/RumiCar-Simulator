@@ -515,6 +515,7 @@ export const MESSAGES = {
   'rank.loading':        { ja: '公式記録を読み込んでいます…', en: 'Loading official records…' },
   'rank.empty':          { ja: 'まだ検証済の公式記録がありません。「📋 開催」→「🌐 GitHubで公式開催」で大会を開き、締切後に確定結果 (result.json) が PR されると、ここにランキングが表示されます。', en: 'No verified official records yet. Host a race via "📋 Event" → "🌐 Host officially on GitHub"; once a finalized result (result.json) is PR-ed after the deadline, rankings will appear here.' },
   'rank.boards.h':       { ja: 'クラス別ラダー', en: 'Class ladders' },
+  'rank.course.bundled': { ja: '{name}（大会に同梱のコース定義）', en: '{name} (course definition bundled with the race)' },
   'rank.drivers.h':      { ja: 'ドライバー', en: 'Drivers' },
   'rank.beaten.h':       { ja: '⚔ あなたの記録 vs 世界ベスト', en: '⚔ Your records vs world best' },
   'rank.beaten.row':     { ja: '{course} ({cls}): 世界ベスト {who} / あなた {mine} / 差 +{gap}s', en: '{course} ({cls}): world best {who} / you {mine} / gap +{gap}s' },

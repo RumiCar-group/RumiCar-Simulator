@@ -11,6 +11,12 @@
 // 1 bit も動かない**。schema を足さないことが互換の保証そのものである。
 
 import { realAuthor } from './race_ladder.js';
+// BF4: コースの枠の鍵・見出し (courseKeyOf/courseLabelOf/joinLabels) は BF4 で足した名前なので名前空間で受ける
+//   (古い race_ladder.js がキャッシュに残るブラウザでモジュールグラフ全体を落とさない＝BA1 の規則)。無ければ従来どおり
+//   参照の文字列 (古い race_ladder の枠と、race_ui の同じ落とし方に揃う)。
+import * as ladderNS from './race_ladder.js';
+const courseKeyOf = (r) => (typeof ladderNS.courseKeyOf === 'function' ? ladderNS.courseKeyOf(r) : String(r.course));
+const joinLabels = (rows) => (typeof ladderNS.joinLabels === 'function' ? ladderNS.joinLabels(rows) : String(rows[0] && rows[0].course));
 
 // ── 配点 (規定) ─────────────────────────────────────────────────────────────
 // AS9〜AS12 の物理ブロックは「新しい絶対定数ゼロ」を設計目標にできたが、**選手権の配点は物理法則では
@@ -97,13 +103,16 @@ export function championships(records, dnfs = []) {
 // 「C で書いている学習者は C の中で、Python なら Python の中で速さを競える」= 言語の壁で不利にならない。
 // 言語が引けない記録 (補充車・entries が消えた古い記録) は**黙って混ぜず**除外し、件数を unknown で返す
 // (沈黙截断の禁止・呼出側が「言語不明 N 件は除外」と表示できる)。
+// BF4: コースの単位はクラス別ラダーと同じ枠の鍵 (race_ladder の courseKey＝再検証が走らせるコースの形)。
+//   鍵は区切り文字を使わない配列の JSON (クラス名・参照に '::' が入っても別の枠が混ざらない)。
 export function langBoards(records) {
   const byKey = new Map();
   let unknown = 0;
   for (const r of (records || [])) {
     if (!r.lang) { unknown++; continue; }
-    const k = String(r.cls) + '::' + String(r.course) + '::' + String(r.lang);
-    if (!byKey.has(k)) byKey.set(k, { key: k, cls: r.cls, course: r.course, lang: r.lang, rows: [] });
+    const ck = courseKeyOf(r);
+    const k = JSON.stringify([String(r.cls), ck, String(r.lang)]);
+    if (!byKey.has(k)) byKey.set(k, { key: k, cls: r.cls, course: r.course, courseKey: ck, lang: r.lang, rows: [] });
     byKey.get(k).rows.push(r);
   }
   const boards = [...byKey.values()];
@@ -113,15 +122,17 @@ export function langBoards(records) {
       ((a.bestLapMs == null ? Infinity : a.bestLapMs) - (c.bestLapMs == null ? Infinity : c.bestLapMs)) ||
       String(a.name).localeCompare(String(c.name)));
     b.record = b.rows[0] || null;      // 👑 その言語×クラス×コースの最速
+    b.courseLabel = joinLabels(b.rows);
   }
   boards.sort((a, b) => a.key.localeCompare(b.key));
   return { boards, unknown };
 }
 
 // あるクラス×コースの「言語ごとの最速」だけを取り出す (ラダー表の脇に添える帯用)。lang 昇順。
-export function langRecordsAt(langBoardList, cls, course) {
+// BF4: course は**枠の鍵** (クラス別ラダーの board.courseKey)。参照の文字列ではない。
+export function langRecordsAt(langBoardList, cls, courseKey) {
   return langBoardList
-    .filter((b) => b.cls === cls && b.course === course && b.record)
+    .filter((b) => String(b.cls) === String(cls) && b.courseKey === courseKey && b.record)
     .map((b) => ({ lang: b.lang, rec: b.record, n: b.rows.length }))
     .sort((a, b) => String(a.lang).localeCompare(String(b.lang)));
 }

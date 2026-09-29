@@ -23,7 +23,8 @@ import { fileURLToPath } from 'url';
 import { buildFromSpec } from './public/js/course.js';
 import { runRace } from './public/js/race_engine.js';
 import { PROGRAMS, PROGRAM_BY_KEY } from './public/js/programs.js';
-import { recordsFrom, dnfsFrom, aggregate, leaderboards, profiles, beatenChecks, realAuthor } from './public/js/race_ladder.js';
+import { recordsFrom, dnfsFrom, aggregate, leaderboards, profiles, beatenChecks, realAuthor, worldBest } from './public/js/race_ladder.js';
+import { courseShapeDigest } from './public/js/course_digest.js';
 import { championships, langBoards, langRecordsAt, langProfiles, pointsFor, POINTS_DEFAULT } from './public/js/race_season.js';
 import { challengeState, isCompletable, DIFF_LEVELS } from './public/js/challenge.js';
 import { sectorAnalysis, crossIndex, sectorDeltas, SECTORS_DEFAULT } from './public/js/sector.js';
@@ -177,7 +178,9 @@ console.log('\n=== B: 言語別ラダー (race_season.langBoards) ===');
   ok(noPy.boards.every((b) => b.lang !== 'py') && noPy.boards.length < lb.boards.length,
     `B8 検出力: py の記録を除くと py ボードが消える (${lb.boards.length}→${noPy.boards.length})`);
   // 言語別のコースレコード帯・言語プロフィール
-  const strip = langRecordsAt(lb.boards, 'open', real.course);
+  // BF4: 帯は「クラス別ラダーの枠の鍵」で引く (参照の文字列は同一性ではない)。鍵は product の枠から取る。
+  const realBoard = agg.boards.find((b) => b.rows.some((r) => r.eventId === real.eventId));
+  const strip = langRecordsAt(lb.boards, 'open', realBoard && realBoard.courseKey);
   ok(strip.length >= 1 && strip.every((x) => x.rec && x.n >= 1), `B6 クラス×コースの言語別ベスト帯が引ける (${strip.length} 言語)`);
   const lp = langProfiles(agg.records);
   ok(lp.every((p) => p.entries > 0 && p.authors >= 0) && lp.every((p, i, a) => i === 0 || a[i - 1].lang <= p.lang),
@@ -388,6 +391,146 @@ console.log('\n=== E: 既存エンゲージメント層 (W6) の非退行 ===');
   ok(agg.dnfs.every((d) => !('rank' in d)), 'E3 dnfs は順位を持たない (ラダーに混ざり得ない)');
   const beaten = beatenChecks(agg.records, 'alice');
   ok(Array.isArray(beaten) && beaten.every((b) => b.gapMs >= 0), 'E3 打破通知は従来どおり (gap は非負)');
+}
+
+// ============================================================================
+console.log('\n=== F: コースの枠 (BF4・race_ladder の courseKey／courseLabel) ===');
+// 旧実装は枠の鍵が `String(result.course || event.course)` で、同梱 def は '[object Object]' の 1 枠に束ねられ、
+// 同じコースを名前とファイル名で開催した大会は別の枠だった (BE-6 ② (a))。アプリの解決規則 (main.js raceCourseUnit) は
+// ブラウザでしか動かないので、ここでは race_ladder / race_season の**契約**を測る: courseUnit(ref) → {id,label}|null を注入し、
+// 「同じ id は 1 枠・違う id と解決できない参照は決して混ざらない・世界ベスト/抜かれている/言語別の帯が枠に従う」。
+// 注入する courseUnit は規則の写しではなく、参照→id の表 (どの参照を同じコースとみなすかは入力として与える)。
+{
+  const defA = { name: 'F 同梱A', bounds: { w: 4, h: 3 }, walls: [{ x1: 0, y1: 0, x2: 4, y2: 0 }] };
+  const defA2 = Object.fromEntries(Object.entries(clone(defA)).reverse());      // 同じ def・鍵の並びだけ違う
+  const defB = { name: 'F 同梱B', bounds: { w: 5, h: 3 }, walls: [{ x1: 0, y1: 0, x2: 5, y2: 0 }] };
+  const defNoName = { bounds: { w: 6, h: 3 }, walls: [] };
+  const defObjName = { name: { ja: 'X' }, bounds: { w: 7, h: 3 }, walls: [] };   // 検査で断られる形 (name が文字列でない)
+  const mkF = (id, course, order, langs = {}) => {
+    const r = mkRace(id, '', 'open', order, [], langs);
+    r.event.course = course; r.result.course = course;   // 正準ツールと同じく result.course = event.course
+    return r;
+  };
+  // --- F1 既定 (courseUnit 無し): 同梱 def は def ごとの枠・見出しは name ---
+  const d = aggregate([mkF('fa', defA, ['alice']), mkF('fa2', defA2, ['bob']), mkF('fb', defB, ['carol']), mkF('fn', defNoName, ['dave']),
+    mkF('fo', defObjName, ['erin'])]);
+  const bad = d.boards.filter((b) => String(b.courseKey).includes('[object Object]') || String(b.courseLabel).includes('[object Object]'));
+  ok(bad.length === 0, `F1 同梱 def の枠の鍵・見出しに [object Object] が出ない (${J(d.boards.map((b) => b.courseLabel))})`);
+  ok(d.boards.length === 4, `F1 同じ def (鍵の並び違いを含む) は 1 枠・別の def は別の枠 (A+A'・B・名前なし・name が文字列でない = 4・実測 ${d.boards.length})`);
+  const bA = d.boards.find((b) => b.rows.some((r) => r.author === 'alice'));
+  ok(bA && bA.rows.length === 2 && bA.rows.some((r) => r.author === 'bob') && bA.courseLabel === 'F 同梱A',
+    `F1 def A と A' の記録が同じ枠・見出しは def の name (${bA && J([bA.courseLabel, bA.rows.map((r) => r.author)])})`);
+  ok(bA && bA.courseKey === 'def:' + courseShapeDigest(defA), 'F1 解決できない同梱 def の鍵は def: ＋素の def の指紋');
+  ok(d.boards.filter((b) => b.courseLabel === '(courseDef)').length === 2, 'F1 名前が無い・文字列でない def の見出しは (courseDef) ([object Object] にしない)');
+
+  // --- F2 注入した courseUnit: 同じ id は 1 枠 (見出しは符号単位の昇順で ' / ')・null は文字列の枠・例外でも落ちない ---
+  const table = { 'F コース': ['S1', '🌐 F コース'], 'f-course': ['S1', '🌐 F コース'], 'F コピー': ['S1', '🌐 F コピー'],
+    'F 別形': ['S2', '🌐 F コース'] };
+  const unit = (ref) => {
+    if (ref === 'F 爆発') throw new Error('boom');
+    if (ref === defB) return { id: 'SB', label: 'F 同梱B (同梱)' };
+    if (ref === defNoName) return { label: '(courseDef) (同梱・断られた)' };   // id 無し＝鍵は既定・見出しだけ
+    if (ref === 'F 同名X') return { id: 'SX1', label: 'F 同名' };
+    if (ref === 'F 同名Y') return { id: 'SX2', label: 'F 同名' };
+    const e = typeof ref === 'string' ? table[ref] : null;
+    return e ? { id: e[0], label: e[1] } : null;
+  };
+  const fr = [
+    mkF('f1', 'F コース', ['alice', 'bob'], { alice: 'c', bob: 'py' }),
+    mkF('f2', 'f-course', ['bob', 'carol'], { bob: 'py', carol: 'c' }),
+    mkF('f3', 'F コピー', ['hana'], { hana: 'py' }),
+    mkF('f4', 'F 別形', ['erin']),                 // 見出しは同じだが id が違う → 別の枠
+    mkF('f5', 'F 未解決', ['frank']),               // null → ref: の枠
+    mkF('f6', 'shape:S1', ['gina']),                // 解決できない文字列が 'shape:S1' でも解決済みの枠と混ざらない
+    mkF('f7', 'F 爆発', ['ivan']),                   // courseUnit が投げても落ちない (ref: の枠)
+    mkF('f8', 'def:' + courseShapeDigest(defA), ['jo']),   // 文字列が def の鍵と同じ形でも同梱 def の枠と混ざらない
+    mkF('f9', defA, ['ken']),
+    mkF('f10', defB, ['lee']),
+    mkF('f11', defNoName, ['max']),
+    mkF('f12', 'F 同名X', ['ned']),                  // 見出しが同じで id が違う 2 枠 (並びは鍵で決まる)
+    mkF('f13', 'F 同名Y', ['ola']),
+  ];
+  // f1: alice 10.0 s / bob 11.0 s、f2: bob 10.0 s / carol 11.0 s (mkRace の時刻は順位で決まる)。
+  fr[1].result.finishers[0].totalTimeMs = 9500;    // f2 の bob を 9.5 s に (同じ形の枠の世界ベスト)
+  const g = aggregate(fr, { courseUnit: unit, progLang });
+  const byA = (a) => g.boards.find((b) => b.rows.some((r) => r.author === a));
+  const m = byA('alice');
+  ok(m && m.courseKey === 'shape:S1' && ['alice', 'bob', 'carol', 'hana'].every((a) => m.rows.some((r) => r.author === a)) && m.rows.length === 5,
+    `F2 同じ id に解決する参照 (名前・ファイル名・別名) は 1 枠 (${m && J(m.rows.map((r) => r.author))})`);
+  ok(m && m.courseLabel === ['🌐 F コース', '🌐 F コピー'].sort().join(' / '), `F2 見出しは違う見出しを符号単位の昇順で ' / ' に並べる (${m && J(m.courseLabel)})`);
+  ok(byA('erin') && byA('erin') !== m && byA('erin').courseKey === 'shape:S2', 'F2 見出しが同じでも id が違えば別の枠 (見出しで束ねない)');
+  ok(byA('frank') && byA('frank').courseKey === 'ref:F 未解決' && byA('frank').courseLabel === 'F 未解決', 'F2 courseUnit が null の参照は従来どおり文字列の枠');
+  ok(byA('gina') && byA('gina') !== m && byA('gina').courseKey === 'ref:shape:S1', 'F3 解決できない文字列 "shape:S1" は解決済みの枠と混ざらない (型の接頭辞)');
+  ok(byA('ivan') && byA('ivan').courseKey === 'ref:F 爆発', 'F3 courseUnit が投げても落ちず、既定 (文字列) の枠');
+  ok(byA('jo') && byA('jo') !== byA('ken') && byA('ken').courseKey === 'def:' + courseShapeDigest(defA), 'F3 文字列が def の鍵と同じ形でも同梱 def の枠と混ざらない');
+  ok(byA('lee') && byA('lee').courseKey === 'shape:SB' && byA('lee').courseLabel === 'F 同梱B (同梱)', 'F2 courseUnit が解決した同梱 def は shape: の枠・見出しは courseUnit の表示');
+  ok(byA('max') && byA('max').courseKey === 'def:' + courseShapeDigest(defNoName) && byA('max').courseLabel === '(courseDef) (同梱・断られた)',
+    'F2 courseUnit が label だけを返したら、鍵は既定 (def の指紋)・見出しは courseUnit の表示');
+  ok(byA('ned') && byA('ola') && byA('ned') !== byA('ola') && byA('ned').courseLabel === byA('ola').courseLabel,
+    'F2 見出しが同じでも id が違う参照は別の枠 (F 同名X/Y)');
+  {
+    const L = g.boards.filter((b) => b.cls === 'open').map((b) => b.courseLabel);
+    ok(L.every((x, i) => i === 0 || L[i - 1].localeCompare(x) <= 0), `F5 枠の並びはクラスの中で見出しの順 (${J(L.slice(0, 4))}…)`);
+  }
+  // --- F4 世界ベスト・抜かれている・言語別の帯が枠に従う ---
+  const wb = worldBest(g.boards, 'open', 'shape:S1');
+  ok(wb && wb.author === 'bob' && wb.classifiedMs === 9500, `F4 worldBest は枠の鍵で引き、同じ形の枠の最速 (bob 9.5 s・ファイル名参照の大会) (${wb && wb.author})`);
+  ok(worldBest(g.boards, 'open', 'F コース') === null, 'F4 worldBest に参照の文字列を渡しても当たらない (鍵は同一性・参照ではない)');
+  const bt = beatenChecks(g.records, 'alice');
+  ok(bt.length === 1 && bt[0].courseKey === 'shape:S1' && bt[0].courseLabel === m.courseLabel && bt[0].world.author === 'bob' && bt[0].gapMs === 500,
+    `F4 抜かれている記録は同じ形の枠で判定 (alice 10.0 s vs bob 9.5 s・${J(bt.map((x) => [x.courseLabel, x.world.author, x.gapMs]))})`);
+  ok(beatenChecks(aggregate(fr, { progLang }).records, 'alice').length === 0, 'F4 対照: courseUnit 無し (文字列の枠) では alice はその枠の世界ベスト＝抜かれていない');
+  const lbg = langBoards(g.records);
+  const lr = langRecordsAt(lbg.boards, 'open', 'shape:S1');
+  const lrC = lr.find((x) => x.lang === 'c'), lrP = lr.find((x) => x.lang === 'py');
+  ok(lrC && lrC.rec.author === 'alice' && lrC.n === 2 && lrP && lrP.rec.author === 'bob' && lrP.n === 3,
+    `F4 言語別の帯は同じ形の枠で数える (C: alice n=2・Python: bob n=3・${J(lr.map((x) => [x.lang, x.rec.author, x.n]))})`);
+  ok(langRecordsAt(lbg.boards, 'open', 'F コース').length === 0, 'F4 言語別の帯も参照の文字列では引かない');
+  ok(g.drivers.find((x) => x.author === 'bob').recordsHeld >= 1 && !(g.drivers.find((x) => x.author === 'alice') || {}).recordsHeld,
+    'F4 コースレコード保持数も枠に従う (同じ形の枠の 👑 は bob・alice は保持しない)');
+  // --- F5 決定論: 入力の順序に依らない / F7 入力を書き換えない ---
+  const before = J(fr.map((r) => [r.event, r.result]));
+  const g2 = aggregate([...fr].reverse(), { courseUnit: unit, progLang });
+  ok(J(g2.boards.map((b) => [b.courseKey, b.courseLabel, b.rows.map((r) => r.author)])) === J(g.boards.map((b) => [b.courseKey, b.courseLabel, b.rows.map((r) => r.author)])),
+    'F5 入力レースの順序を変えても枠・見出し・並びは完全同一');
+  ok(J(fr.map((r) => [r.event, r.result])) === before, 'F7 集計は event/result を書き換えない (読み取り専用)');
+  // --- F6 異常な参照でも落ちない ---
+  let deep = []; for (let i = 0; i < 200000; i++) deep = [deep];
+  const deep2 = { name: 'F 深い', walls: deep };
+  let threw = null, h = null;
+  try { h = aggregate([mkF('x1', deep2, ['alice']), mkF('x2', { name: 'F 深い', walls: [[deep]] }, ['bob']), mkF('x3', 7, ['carol']),
+    mkF('x4', [1, 2], ['dave']), mkF('x5', null, ['erin'])], { courseUnit: unit }); } catch (e) { threw = e; }
+  ok(!threw && h && h.boards.length === 5, `F6 歩けない深さの def・数値・配列・空 (null→'') の参照でも集計は落ちない (${threw ? threw.message : h.boards.length + ' 枠'})`);
+  ok(!threw && h.boards.filter((b) => b.courseKey.startsWith('race:')).length === 2 && new Set(h.boards.map((b) => b.courseKey)).size === 5,
+    `F6 歩けない def は大会ごとの枠 (混ぜない・${!threw && J(h.boards.map((b) => b.courseKey.slice(0, 12)))})`);
+  {
+    const xs = [mkF('x1', deep2, ['alice']), mkF('x2', { name: 'F 深い', walls: [[deep]] }, ['bob'])];
+    const k1 = aggregate(xs).boards.map((b) => [b.courseKey, b.rows[0].author]).sort();
+    const k2 = aggregate([...xs].reverse()).boards.map((b) => [b.courseKey, b.rows[0].author]).sort();
+    ok(J(k1) === J(k2), `F6 歩けない def の枠の鍵は入力の並びに依らない (大会の eventId＋verifyHash・${J(k1.map((x) => x[0].slice(0, 20)))})`);
+    const hand = leaderboards([{ cls: 'open', course: deep2, eventId: 'h1', verifyHash: 'v1', classifiedMs: 1, name: 'a', author: 'a' },
+      { cls: 'open', course: deep2, eventId: 'h2', verifyHash: 'v2', classifiedMs: 2, name: 'b', author: 'b' }]);
+    ok(hand.length === 2, `F10 手で組んだレコード (courseKey 無し) でも歩けない def は大会ごとの枠 (${hand.length} 枠)`);
+  }
+  // --- F8 注入無しの文字列参照は従来どおり (参照ごとの枠・見出しは参照そのもの) ---
+  const plain = aggregate([mkF('p1', 'P コース', ['alice']), mkF('p2', 'p-course', ['bob']), mkF('p3', 'P コース', ['carol'])]);
+  ok(J(plain.boards.map((b) => [b.courseKey, b.courseLabel, b.rows.length])) === J([['ref:P コース', 'P コース', 2], ['ref:p-course', 'p-course', 1]]),
+    `F8 注入無し: 文字列参照は参照ごとの枠 (従来どおり・${J(plain.boards.map((b) => b.courseLabel))})`);
+  // --- F9 枠の鍵は区切り文字に依らない (クラス名・参照に '::' が入っても別の枠が混ざらない) ---
+  {
+    const a = mkF('s1', 'B', ['alice'], { alice: 'c' }); a.result.class = 'open::ref:A';
+    const b = mkF('s2', 'A::ref:B', ['bob'], { bob: 'c' });
+    const sep = aggregate([a, b], { progLang });
+    ok(sep.boards.length === 2, `F9 クラス 'open::ref:A'×'B' と 'open'×'A::ref:B' は別の枠 (${sep.boards.length})`);
+    ok(langBoards(sep.records).boards.length === 2, 'F9 言語別の枠も区切り文字で混ざらない');
+  }
+  // --- F10 手で組んだレコード (courseKey 無し) は既定の規則で枠を作る ---
+  {
+    const hb = leaderboards([{ cls: 'open', course: defA, classifiedMs: 1, name: 'a', author: 'a' },
+      { cls: 'open', course: defB, classifiedMs: 2, name: 'b', author: 'b' }]);
+    ok(hb.length === 2 && hb[0].courseKey.startsWith('def:') && hb.every((x) => !x.courseLabel.includes('[object Object]')),
+      `F10 courseKey の無いレコードでも同梱 def は def の指紋の枠 (${J(hb.map((x) => x.courseLabel))})`);
+  }
 }
 
 // ============================================================================

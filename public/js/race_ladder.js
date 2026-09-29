@@ -10,6 +10,7 @@
 //
 // 二層モデル (W_spec §0): 練習 (非公式・localStorage・lap.js) はここに混ざらない。本モジュールは
 // 公式記録だけを扱う。
+import { courseShapeDigest } from './course_digest.js';
 
 // 検証済 (= ラダー/プロフィール/称号に反映してよい) か。result + 非空 verifyHash を要件にする。
 export function isVerified(race) {
@@ -17,7 +18,74 @@ export function isVerified(race) {
 }
 
 const classifiedMs = (f) => Math.round((f.totalTimeMs || 0) + (f.penaltiesSec || 0) * 1000);
-const groupKey = (cls, course) => String(cls) + '::' + String(course);
+
+// ── BF4・2026-09-29: リーダーボードの「コース」の単位 (枠の鍵と見出し) ───────────────────────────────
+// 旧実装は `String(result.course || event.course)` を枠の鍵にしていた。course は event.json の**参照**
+// (出荷コース名・投稿コースの名前かファイル名・同梱 courseDef) で、参照はコースの同一性ではない:
+//   同じ投稿コースを名前で開催した大会とファイル名で開催した大会が別の枠になり (見出しにファイル名が出る)、
+//   同梱 def は `String()` で '[object Object]' の 1 枠に束ねられていた (別々の同梱コースの記録が同じ表に並び、
+//   worldBest の `===` が当たらず 👻 は「ゴースト無し」になった) — BE-6 ② (a)。
+// 枠の鍵 (courseKey) は**型の接頭辞つき**の文字列で、接頭辞は型で決まる＝型が違う鍵は決して一致しない:
+//   'shape:<id>' … opts.courseUnit (アプリの解決規則＝main.js raceCourseUnit) が「再検証が走らせるコース」に解決できた
+//                  参照。id は練習記録の鍵と同じ形の指紋 (名前・説明を抜いた形)。同じ形に解決する参照は 1 つの枠。
+//                  接頭辞はここで付ける (courseUnit が何を返しても他の型の鍵と混ざらない)。
+//   'ref:<文字列>' … 解決できない文字列参照 (投稿一覧を読めていない・消えた・複数に当たる、または courseUnit 無し)。
+//                  従来どおり文字列で束ねる (勝手にまとめない)。
+//   'def:<指紋>'   … 解決できない同梱 def。素の def を歩いた指紋 (courseShapeDigest・鍵の並びに依らない)。別の def は別の枠。
+//   'race:<大会>'  … def を歩けない (循環・極端に深い入れ子で courseShapeDigest が投げる) とき。その大会だけの枠
+//                  (混ぜるより分ける)。<大会> は eventId と verifyHash の組 (入力の並びに依らない)。
+// 見出し (courseLabel) は courseUnit が返す表示名 (言語追従・注記はアプリ側)。courseUnit が id を返さず label だけを
+// 返したときは、鍵は既定 (文字列・def の指紋) のまま見出しだけを使う (検査で断られた同梱 def に注記を付ける等)。
+// courseUnit が無い・何も返さないときは、文字列参照は参照そのもの、同梱 def は文字列の name (無い・文字列でなければ
+// '(courseDef)')。同じ枠に違う見出しの参照が入ったとき (名前だけ違う同じ形の投稿など) は、見出しを符号単位の昇順で
+// ' / ' に並べる (環境の locale に依らない＝決定論)。
+// 限界 (正直に書く): shape: の同一性は practiceCourseId (1e-6 の格子で丸めた 64bit の指紋・lap.js の注記) の同一性。
+// **レース結果・verifyHash・result.json には触れない** (集計と表示の単位だけ)。
+function defaultUnit(ref, raceTag) {
+  if (ref !== null && typeof ref === 'object') {
+    const label = (typeof ref.name === 'string' && ref.name) ? ref.name : '(courseDef)';
+    try { return { key: 'def:' + courseShapeDigest(ref), label }; }
+    catch (e) { return { key: 'race:' + raceTag, label }; }
+  }
+  return { key: 'ref:' + String(ref), label: String(ref) };
+}
+const raceTagOf = (eventId, verifyHash) => JSON.stringify([String(eventId || ''), String(verifyHash || '')]);
+// 1 回の集計の中で参照ごとに 1 回だけ解決する (同じ大会の完走者・リタイアで同じ参照を何度も引く)。
+// courseUnit(ref) → { id, label } | { label } | null。id が空・null・例外なら鍵は既定 (上の defaultUnit)、
+// label が文字列ならそれを見出しにする。
+function unitResolver(opts) {
+  const resolve = (opts && typeof opts.courseUnit === 'function') ? opts.courseUnit : null;
+  const byObj = new Map(), byPrim = new Map();
+  return (ref, raceTag) => {
+    const isObj = ref !== null && typeof ref === 'object';
+    const memo = isObj ? byObj : byPrim;
+    const mk = isObj ? ref : typeof ref + ':' + String(ref);
+    if (memo.has(mk)) return memo.get(mk);
+    let r = null;
+    if (resolve) { try { r = resolve(ref); } catch (e) { r = null; } }
+    const label = (r && typeof r.label === 'string') ? r.label : null;
+    let u;
+    if (r && typeof r.id === 'string' && r.id) u = { key: 'shape:' + r.id, label: label == null ? '' : label };
+    else { u = defaultUnit(ref, raceTag); if (label != null) u = { key: u.key, label }; }
+    memo.set(mk, u);
+    return u;
+  };
+}
+// レコードの枠の鍵・見出し。recordsFrom/dnfsFrom の出力は必ず courseKey/courseLabel を持つ。持たない (手で組んだ
+// レコード) ときは既定の規則で course から作る (同梱 def を '[object Object]' にしない)。race_season も使う。
+export function courseKeyOf(r) {
+  return (r && typeof r.courseKey === 'string') ? r.courseKey : defaultUnit(r && r.course, raceTagOf(r && r.eventId, r && r.verifyHash)).key;
+}
+export function courseLabelOf(r) {
+  return (r && typeof r.courseLabel === 'string') ? r.courseLabel : defaultUnit(r && r.course, '').label;
+}
+// 枠の中のレコードの見出しを 1 つにまとめる (違う見出しは符号単位の昇順で ' / ' 区切り)。
+export function joinLabels(rows) {
+  const s = [...new Set(rows.map(courseLabelOf))].sort();
+  return s.join(' / ');
+}
+// 枠 (クラス×コース) の鍵。区切り文字を使わない (クラス名・参照に '::' が入っても別の枠が混ざらない)。
+const groupKey = (cls, courseKey) => JSON.stringify([String(cls), courseKey]);
 
 // 補充車 (filler) や著者不明は「ドライバー」ではない (称号の対象外)。
 export function realAuthor(a) {
@@ -57,20 +125,25 @@ const entryOf = (ix, author, name) =>
 // 検証済レース群 → finisher レコードの平坦配列。各レコードは順位/著者/タイム/クラス/コース等を持つ。
 // AS13 で **season / lang / points** を追記 (いずれも event/entries 由来＝result.json は不変)。
 // opts.progLang(key) を渡すと progKey 参照エントリーの言語も解決する (省略可)。
-export function recordsFrom(races, opts = {}) {
+// BF4: opts.courseUnit(ref) を渡すとコースの枠を「再検証が走らせるコースの形」で決める (上の注記)。各レコードは
+//   course (参照そのもの・従来どおり) に加えて courseKey (枠の鍵) と courseLabel (その参照の見出し) を持つ。
+export function recordsFrom(races, opts = {}) { return recordsWith(races, opts, unitResolver(opts)); }
+function recordsWith(races, opts, unitOf) {
   const recs = [];
   for (const race of (races || [])) {
     if (!isVerified(race)) continue;
     const r = race.result, ev = race.event || {};
     const cls = r.class || ev.class || 'open';
     const course = r.course || ev.course || '';
+    const unit = unitOf(course, raceTagOf(r.eventId || ev.id, r.verifyHash));
     const season = String(ev.season || '');                 // 未指定 = 既定シーズン ('' で1つに束ねる)
     const points = Array.isArray(ev.points) ? ev.points : null;   // イベント別の配点上書き (任意)
     const ix = entryIndex(race);
     for (const f of (r.finishers || [])) {
       recs.push({
         eventId: r.eventId || ev.id || '', eventTitle: ev.title || r.eventId || ev.id || '',
-        cls, course, regime: r.regime || ev.regime || '', laps: r.laps || ev.laps || 0,
+        cls, course, courseKey: unit.key, courseLabel: unit.label,
+        regime: r.regime || ev.regime || '', laps: r.laps || ev.laps || 0,
         engineVer: r.engineVer || ev.engineVer || '', verifyHash: r.verifyHash,
         rank: f.rank, name: f.name, author: f.author || '',
         carType: f.carType || '', totalTimeMs: f.totalTimeMs || 0,
@@ -87,16 +160,19 @@ export function recordsFrom(races, opts = {}) {
 
 // 検証済レース群 → **リタイア (DNF)** レコードの平坦配列。ラダー/称号には入れない (完走していない)。
 // チャンピオンシップの「出走数」を正直に数えるためだけに使う (完走のみ数えると出走が過小になる)。
-export function dnfsFrom(races, opts = {}) {
+export function dnfsFrom(races, opts = {}) { return dnfsWith(races, opts, unitResolver(opts)); }
+function dnfsWith(races, opts, unitOf) {
   const out = [];
   for (const race of (races || [])) {
     if (!isVerified(race)) continue;
     const r = race.result, ev = race.event || {};
+    const course = r.course || ev.course || '';
+    const unit = unitOf(course, raceTagOf(r.eventId || ev.id, r.verifyHash));
     const ix = entryIndex(race);
     for (const d of (r.dnf || [])) {
       out.push({
         eventId: r.eventId || ev.id || '', eventTitle: ev.title || r.eventId || ev.id || '',
-        cls: r.class || ev.class || 'open', course: r.course || ev.course || '',
+        cls: r.class || ev.class || 'open', course, courseKey: unit.key, courseLabel: unit.label,
         season: String(ev.season || ''), points: Array.isArray(ev.points) ? ev.points : null,
         name: d.name, author: d.author || '', carType: d.carType || '',
         lapsCompleted: d.lapsCompleted || 0, reason: d.reason || '',
@@ -108,12 +184,16 @@ export function dnfsFrom(races, opts = {}) {
 }
 
 // クラス×コース別リーダーボード。各グループ rows を classified time 昇順 (タイブレーク bestLap→name)
-// で並べ、record = rows[0] (=👑 コースレコード保持者)。グループは key 昇順 (決定論)。
+// で並べ、record = rows[0] (=👑 コースレコード保持者)。
+// BF4: コースの単位は courseKey (上の注記)。各枠は courseKey と courseLabel (枠の見出し) を持つ。course は枠の
+//   最初のレコードの参照 (従来のフィールド・表示や照合には使わない)。枠の並びはクラス→見出し→鍵 (鍵は枠ごとに一意＝決定論)。
+const cmpCode = (x, y) => (x < y ? -1 : x > y ? 1 : 0);
 export function leaderboards(records) {
   const byKey = new Map();
   for (const r of records) {
-    const k = groupKey(r.cls, r.course);
-    if (!byKey.has(k)) byKey.set(k, { key: k, cls: r.cls, course: r.course, regime: r.regime, rows: [] });
+    const ck = courseKeyOf(r);
+    const k = groupKey(r.cls, ck);
+    if (!byKey.has(k)) byKey.set(k, { key: k, cls: r.cls, course: r.course, courseKey: ck, regime: r.regime, rows: [] });
     byKey.get(k).rows.push(r);
   }
   const boards = [...byKey.values()];
@@ -123,14 +203,17 @@ export function leaderboards(records) {
       ((a.bestLapMs == null ? Infinity : a.bestLapMs) - (c.bestLapMs == null ? Infinity : c.bestLapMs)) ||
       String(a.name).localeCompare(String(c.name)));
     b.record = b.rows[0] || null;     // 👑 そのクラス×コースの最速 = コースレコード
+    b.courseLabel = joinLabels(b.rows);
   }
-  boards.sort((a, b) => a.key.localeCompare(b.key));
+  boards.sort((a, b) => String(a.cls).localeCompare(String(b.cls)) ||
+    a.courseLabel.localeCompare(b.courseLabel) || cmpCode(a.courseKey, b.courseKey));
   return boards;
 }
 
 // あるクラス×コースの世界ベスト (= リーダーボード row0) を引く。無ければ null。
-export function worldBest(boards, cls, course) {
-  const b = boards.find((x) => x.cls === cls && x.course === course);
+// BF4: course は**枠の鍵** (board.courseKey)。参照の文字列ではない (参照は同一性ではない＝上の注記)。
+export function worldBest(boards, cls, courseKey) {
+  const b = boards.find((x) => String(x.cls) === String(cls) && x.courseKey === courseKey);
   return b ? b.record : null;
 }
 
@@ -179,8 +262,9 @@ export function titlesFor({ wins, podiums, recordsHeld }) {
 }
 
 // 起動時「打破通知」用。me (自分の GitHub author) が記録を持つグループで、世界ベスト保持者が
-// 自分でない (= 抜かれている) ものを返す。{cls, course, mine, world, gapMs} の配列 (gap 大きい順)。
+// 自分でない (= 抜かれている) ものを返す。{cls, course, courseKey, courseLabel, mine, world, gapMs} の配列 (gap 大きい順)。
 // 静的 SPA のロード時チェック (W_spec §8・自己/エントリー記録 vs 世界ベスト)。
+// BF4: グループは leaderboards の枠そのもの (courseKey)。表示には courseLabel (枠の見出し) を使う。
 export function beatenChecks(records, me) {
   const author = realAuthor(me);
   if (!author) return [];
@@ -193,7 +277,8 @@ export function beatenChecks(records, me) {
     const mine = mineRows[0];                  // 自分の最良 (rows は昇順)
     const world = b.record;
     if (realAuthor(world.author) === author) continue;   // 自分が世界ベスト = 抜かれていない
-    out.push({ cls: b.cls, course: b.course, mine, world, gapMs: mine.classifiedMs - world.classifiedMs });
+    out.push({ cls: b.cls, course: b.course, courseKey: b.courseKey, courseLabel: b.courseLabel,
+      mine, world, gapMs: mine.classifiedMs - world.classifiedMs });
   }
   out.sort((a, b) => (b.gapMs - a.gapMs));
   return out;
@@ -201,10 +286,12 @@ export function beatenChecks(records, me) {
 
 // まとめて集計 (UI が1回で全部得る)。races = [{event,entries,result}]。
 // AS13: dnfs (チャンピオンシップの出走数用) も同時に返す。既存の返りフィールドは不変 (追加のみ)。
+// BF4: opts.courseUnit (上の注記) は完走とリタイアで同じ解決を使う (参照ごとに 1 回だけ引く)。
 export function aggregate(races, opts = {}) {
-  const records = recordsFrom(races, opts);
+  const unitOf = unitResolver(opts);
+  const records = recordsWith(races, opts, unitOf);
   const boards = leaderboards(records);
   const drivers = profiles(records, boards);
-  return { records, dnfs: dnfsFrom(races, opts), boards, drivers,
+  return { records, dnfs: dnfsWith(races, opts, unitOf), boards, drivers,
     verifiedCount: (races || []).filter(isVerified).length };
 }

@@ -1080,8 +1080,8 @@ function hostOfficialEvent() {
 //  エントリー (PR)。**公式の確定は固定環境の正準エンジンで判定 = ブラウザは参考** (W_spec §5.1/§7)。
 //  取得失敗 (未シード/レート制限) は通知1行で本体継続 (Q1/V4 契約)。races/ のシードは人間 (CI-11)。
 // ============================================================================
-const RU = initRaceUI({ $, escapeHtml, logLine, activeSlot, exitEdit, courseDisplayName, carTypeLabel, entryCarLabel, setActiveProgram, playCountdown, resolveRaceCourse, submitToGithub });
-const { renderRaceResult, loadOfficialRaces, loadAllOfficialData, checkBeaten, openOfficialDlg, reloadOfficial, selectOfficialRace, submitOfficialEntry, toggleProgSrc, forkOfficialEntry, openRankingsDlg, reloadRankings, renderRankings, saveMe, ghostVsWorld, openGhostReplay } = RU;
+const RU = initRaceUI({ $, escapeHtml, logLine, activeSlot, exitEdit, courseDisplayName, carTypeLabel, entryCarLabel, setActiveProgram, playCountdown, resolveRaceCourse, submitToGithub, raceCourseUnit });
+const { renderRaceResult, loadOfficialRaces, loadAllOfficialData, checkBeaten, openOfficialDlg, reloadOfficial, selectOfficialRace, submitOfficialEntry, toggleProgSrc, forkOfficialEntry, openRankingsDlg, reloadRankings, renderRankings, saveMe, ghostVsWorld, openGhostReplay, courseListSettled } = RU;
 // イベントの course (名前 or 同梱 courseDef) → 走行可能なコースに解決。組込名→プリセット、
 // community 名→投稿コース、object→正規化。見つからなければ null (再実行不可)。
 // ── 投稿コースを名前で引く規則 (BE6・2026-09-25) ─────────────────────────────────────
@@ -1156,6 +1156,59 @@ function officialCourseRef(c) {
   //  いるので走行は同じだが、その投稿が消されると再検証できなくなる。層 4 の 3 回目の観察・未決へ送った。)
   if (communityListState !== 'ok') return { ref: null, clash: null, unknown: true };
   return { ref: c.name, clash: null };
+}
+
+// ── BF4・2026-09-29: 公式記録のランキングの「コース」の単位 (race_ladder の courseUnit) ───────────────────────
+// 旧実装はランキングの枠を event.course の**文字列**で束ねていた。参照は同一性ではない (上の officialCourseRef と同じ問題)
+// ので、同じ投稿コースを名前で開催した大会とファイル名で開催した大会が別の枠になり、見出しにファイル名が出ていた。
+// 同梱 def は '[object Object]' の 1 枠に束ねられていた (BE-6 ② (a))。
+// ここでは参照を**再検証・👻 と同じ規則 (resolveRaceCourse)** で引き、形の指紋 (練習記録の鍵・officialCourseRef と同じ
+// lapParts.practiceCourseId＝名前・説明を抜いた形) を返す。同じ形に解決する参照は 1 つの枠、違う形は別の枠になる
+// (例: 出荷『オーバル』と name『オーバル』の投稿は形が違うので別の枠)。
+// 返さない (null) とき race_ladder は従来どおり参照の文字列で束ねる (同梱 def は def の指紋＝別の def は別の枠):
+//   ・投稿コースの文字列参照で、一覧を読めていない ('ok' 以外) … 他の参照と同じコースかを判定できない (officialCourseRef と同じ基準)
+//   ・解決できない (消えた・複数に当たる・検査で断られた同梱 def)
+//   ・古い lap.js がキャッシュに残る (practiceCourseId が無い・BA1)
+// 出荷コース名と同梱 def は一覧に依らず解決する (resolveRaceCourse は出荷名を先に引く)。
+// 見出しはコース選択欄と同じ表示: 出荷＝表示名 / 投稿＝🌐＋表示名 (無ければファイル名) / 同梱 def＝表示名＋大会同梱の注記
+// (同名の出荷コースの枠と見分けるため。検査で断られて解決できない def も、鍵は def の指紋のまま見出しに注記を付ける)。
+// **投稿コースの名前が一覧の中で 1 件に決まらない** (同じ name の投稿が複数・name が別の投稿のファイル名) ときは、
+// 見出しにファイル名を添える (層 4 の指摘: 形の違う同名の投稿が同じ見出しの 2 枠になり、改修前はファイル名で見分けられた)。
+// 判定は communityByRef と同じ (名前で引くと 2 件以上に当たる＝名前だけではどの投稿か言えない)。
+// 解決には出荷コースの組み立て (presetByName は一致するまで毎回組む)・形の指紋で参照 1 つあたり数 ms かかり、ランキングは
+// 開く・言語を切り替える・「記憶」を押すたびに集計し直す。∴ 答えを変えうる状態 (投稿一覧・その読込状態・出荷コースの
+// 組み直し・言語) が同じ間は参照ごとの答えを覚えて使い回し、どれか 1 つでも変われば捨てる。
+let _raceUnitMemo = null;
+function raceCourseUnit(ref) {
+  const state = [communityCourses, communityListState, PRESETS.length, PRESETS[0], getLang()];
+  if (!_raceUnitMemo || _raceUnitMemo.state.some((v, i) => v !== state[i])) _raceUnitMemo = { state, prim: new Map(), obj: new WeakMap() };
+  const isObj = ref !== null && typeof ref === 'object';
+  const m = isObj ? _raceUnitMemo.obj : _raceUnitMemo.prim;
+  const k = isObj ? ref : typeof ref + ':' + String(ref);
+  if (m.has(k)) return m.get(k);
+  const u = raceCourseUnitNow(ref);
+  m.set(k, u);
+  return u;
+}
+function raceCourseUnitNow(ref) {
+  const id = typeof lapParts.practiceCourseId === 'function' ? lapParts.practiceCourseId : null;
+  if (!id || ref == null || ref === '') return null;
+  if (typeof ref === 'object') {
+    // 表示名は courseDisplayName と同じ規則 (en で name_en)。検査で断られた def は name が文字列とは限らない。
+    const nm = (getLang() === 'en' && typeof ref.name_en === 'string' && ref.name_en) ? ref.name_en
+      : ((typeof ref.name === 'string' && ref.name) ? ref.name : '(courseDef)');
+    const label = hasKey('rank.course.bundled') ? t('rank.course.bundled', { name: nm }) : nm;
+    const rc = resolveRaceCourse(ref, { quiet: true });
+    return rc ? { id: id(rc), label } : { label };   // 解決できなければ鍵は race_ladder の既定 (def の指紋)
+  }
+  const preset = presetByName(ref);
+  if (preset) return { id: id(preset), label: courseDisplayName(preset) };
+  if (communityListState !== 'ok') return null;
+  const rc = resolveRaceCourse(ref, { quiet: true });
+  const { cc } = communityByRef(ref);
+  if (!rc || !cc) return null;
+  const dup = !!(cc.data && cc.data.name) && communityByRef(cc.data.name).n > 1;
+  return { id: id(rc), label: '🌐 ' + (courseDisplayName(cc.data) || cc.name) + (dup ? ` (${cc.name})` : '') };
 }
 
 // ---- 車両カラム UI (色・測距・プログラム・シリアルを縦に、列を横並びで同時表示) ----
@@ -3561,10 +3614,20 @@ loadPresets().then(() => {
   syncButtons();
   // BC4: 投稿コースが一覧に載るのは**ここ**なので、読込が終わってから共有 URL のコースを引き直す
   // (取得失敗・0 件でも then は走るので、そのときは「見つかりません」を 1 行出して終わる)。
-  loadCommunityCourses().then(finishPendingShareCourse); // GitHub 投稿コースを非同期で追加読み込み
+  const communityReady = loadCommunityCourses();   // GitHub 投稿コースを非同期で追加読み込み
+  communityReady.then(finishPendingShareCourse);
   loadCommunityPrograms(); // GitHub 投稿プログラムを非同期で追加読み込み
   loadCommunityCars();     // GitHub 投稿車種を非同期で追加読み込み (V4)
   // GitHub 公式レース: 一覧 → 全詳細を集計 (W5/W6) → 起動時の打破通知 (自分の記録 vs 世界ベスト)。
   // 未シードは [] のまま (通知1行)・打破通知も no-op。失敗しても本体は止めない (Q1/V4 契約)。
-  loadOfficialRaces().then(() => loadAllOfficialData()).then(checkBeaten).catch(() => {});
+  // BF4: 打破通知は**投稿コースの一覧も読み終えてから** (成否を問わず) 出す。ランキングの枠 (raceCourseUnit) が一覧に依るので、
+  //   先に出すと、同じ投稿コースを名前とファイル名で開催した大会が別の枠のまま判定され、通知の有無が起動ごとの到着順で変わる。
+  //   ただし一覧の取得にはタイムアウトが無い (1 件の本体が止まると一覧全体が決着しない) ので、待つのは最長 10 秒。過ぎたら
+  //   その時点の状態 (一覧未読＝投稿コースは文字列の枠) で出す (層 4 の指摘: 止まると通知が永久に出なかった。10 秒は
+  //   利用者が起動直後の通知を待てる目安で、物理の定数ではない)。
+  const communityOrLate = Promise.race([communityReady.catch(() => {}), new Promise((r) => setTimeout(r, 10000))]);
+  Promise.all([loadOfficialRaces().then(() => loadAllOfficialData()), communityOrLate])
+    .then(checkBeaten).catch(() => {});
+  // BF4: 一覧を読み終えたら、開いているランキングを今の枠で描き直す (古い race_ui.js がキャッシュに残れば関数が無い＝何もしない)。
+  communityReady.then(() => { if (typeof courseListSettled === 'function') courseListSettled(); }).catch(() => {});
 });

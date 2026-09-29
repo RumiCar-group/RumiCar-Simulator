@@ -28,6 +28,8 @@ import { course } from './state.js';
 
 // --- 依存注入スロット(initRaceUI で main.js から束縛。関数本文は bare 参照のまま=byte 不変) ---
 let $, escapeHtml, logLine, activeSlot, exitEdit, courseDisplayName, carTypeLabel, entryCarLabel, setActiveProgram, playCountdown, resolveRaceCourse, submitToGithub;
+// BF4: 公式記録の集計の枠を決める解決規則 (main.js raceCourseUnit)。古い main.js がキャッシュに残れば undefined＝従来どおり文字列の枠。
+let raceCourseUnit;
 
 // 【BE3・2026-09-24】持ち込み車種 (carDef) は runRace の finally で車種表から外れる (config.js registerRaceCarTypes)。
 //   レース後に描く結果表・ゴーストの凡例が carTypeLabel (＝車種表を引く) のままだと、持ち込みの自作車が key の生文字列で
@@ -583,6 +585,25 @@ function saveMe(a) { try { localStorage.setItem(ME_KEY, String(a || '').trim());
 // program.lang を持つ通常のエントリーはこの経路を通らない (race_ladder.langOfEntry が先に返す)。
 const progLangOf = (key) => (PROGRAM_BY_KEY[key] || {}).lang || null;
 
+// ── BF4・2026-09-29: 集計は使うたびにやり直す ────────────────────────────────────────────
+// コースの枠 (race_ladder の courseKey) は main.js raceCourseUnit が「再検証が走らせるコースの形」で決める。その答えは
+// 投稿コースの一覧を読めたか (起動直後は未読) と出荷コースの読込で変わり、見出しは言語で変わる。起動時に 1 回だけ
+// 集計した結果を使い回すと、一覧を読む前の枠 (名前とファイル名が別々) が残る。∴ 描画・打破通知のたびに今の状態で集計する
+// (大会の取得はしない＝officialData を集計し直すだけ。参照ごとに 1 回だけ解決する)。
+// 👻 は直近の集計 (ladder・描画か打破通知が作る) を引く。枠の鍵は状態が同じなら同じで言語にも依らず、状態が変われば
+// courseListSettled (投稿一覧の決着)・言語切替が描き直すので、ボタンの鍵と ladder はずれない。
+// 限界: 古い race_ui.js/race_season.js がキャッシュに残り新しい race_ladder.js と混ざると、古い側は参照の文字列で
+// worldBest/langRecordsAt を引くので 👻 と言語別の帯が当たらない (落ちはしない)。BC1 で JS は no-cache＝配信の途中で
+// 版が変わったときだけ起き、再読込で直る。
+function aggregateNow() {
+  ladder = aggregate(officialData, { progLang: progLangOf, courseUnit: raceCourseUnit });
+  return ladder;
+}
+// 枠の鍵・見出し。古い race_ladder.js がキャッシュに残るブラウザ (BA1) では枠が courseKey/courseLabel を持たないので、
+// 従来どおり参照の文字列を使う (古い worldBest は参照の文字列で照合する)。
+const boardKey = (b) => (typeof b.courseKey === 'string' ? b.courseKey : String(b.course));
+const boardLabel = (b) => (typeof b.courseLabel === 'string' ? b.courseLabel : String(b.course));
+
 // 全公式レースの詳細を取得 → race_ladder で集計 (起動時 + ランキング/再読込時)。未シードは [] のまま。
 async function loadAllOfficialData(force) {
   if (officialDataLoaded && !force) return officialData;
@@ -594,20 +615,21 @@ async function loadAllOfficialData(force) {
   }));
   const out = fetchedRaces.filter((race) => race && race.event);
   officialData = out;
-  ladder = aggregate(out, { progLang: progLangOf });
+  aggregateNow();
   officialDataLoaded = true;
   return officialData;
 }
 
 // 起動時の打破通知 (W_spec §8): 自分の公式記録 vs 世界ベスト。抜かれていれば通知1行＋差 (gap)。
+// BF4: main.js は投稿コースの一覧を読み終えてから呼ぶ (枠の解決が一覧に依る)。ここでも今の状態で集計し直す。
 function checkBeaten() {
   const me = loadMe();
-  if (!me || !ladder) return;
-  const beaten = beatenChecks(ladder.records, me);
+  if (!me || !officialDataLoaded) return;
+  const beaten = beatenChecks(aggregateNow().records, me);
   if (!beaten.length) return;
   const top = beaten.slice(0, 3);
   for (const b of top) {
-    logLine(t('log.w6.beaten', { course: b.course, cls: t('event.class.' + b.cls), who: b.world.author, gap: (b.gapMs / 1000).toFixed(2) }));
+    logLine(t('log.w6.beaten', { course: boardLabel(b), cls: t('event.class.' + b.cls), who: b.world.author, gap: (b.gapMs / 1000).toFixed(2) }));
   }
   if (beaten.length > top.length) logLine(t('log.w6.beatenMore', { n: beaten.length - top.length }));
 }
@@ -677,6 +699,12 @@ async function reloadRankings() {
   renderRankings();
 }
 
+// BF4: 投稿コースの一覧を読み終えた (成否を問わず・main.js が呼ぶ)。枠の解決が変わりうるので、ランキングを開いていれば
+// 描き直す (起動直後に開いた人に、一覧を読む前の枠＝名前とファイル名が別々のまま見せ続けない)。読込中は触らない。
+function courseListSettled() {
+  if (officialDataLoaded && $('dlgRankings').open) renderRankings();
+}
+
 // AS13: 既定配点の表示ラベル (「10-8-6-5-4-3-2-1」)。規定を画面にも出して黙って配らない。
 const POINTS_LABEL = POINTS_DEFAULT.join('-');
 // AS13: プログラム言語の表示名。言語名は ja/en で同一なので i18n キーは持たせない (孤児を作らない)。
@@ -693,7 +721,7 @@ function titleLabel(x) {
 function renderRankings() {
   const esc = escapeHtml;
   const me = loadMe();
-  const data = ladder || aggregate(officialData, { progLang: progLangOf });
+  const data = aggregateNow();   // BF4: 今の状態 (投稿一覧・言語) で枠を決める
   const { boards, drivers, verifiedCount } = data;
   if (!verifiedCount || !boards.length) { $('rankBody').innerHTML = `<p class="race-empty">${esc(t('rank.empty'))}</p>`; return; }
   let html = `<p class="hint rank-verifiednote">${esc(t('rank.verified'))} · ${esc(t('rank.intro'))}</p>`;
@@ -709,7 +737,7 @@ function renderRankings() {
     if (beaten.length) {
       html += `<h3>${esc(t('rank.beaten.h'))}</h3><ul class="rank-beaten">`;
       for (const b of beaten) {
-        html += `<li>${esc(t('rank.beaten.row', { course: b.course, cls: t('event.class.' + b.cls), who: b.world.author, mine: fmtTime(b.mine.classifiedMs / 1000), gap: (b.gapMs / 1000).toFixed(2) }))}</li>`;
+        html += `<li>${esc(t('rank.beaten.row', { course: boardLabel(b), cls: t('event.class.' + b.cls), who: b.world.author, mine: fmtTime(b.mine.classifiedMs / 1000), gap: (b.gapMs / 1000).toFixed(2) }))}</li>`;
       }
       html += '</ul>';
     }
@@ -753,10 +781,11 @@ function renderRankings() {
   // クラス別ラダー (👑コースレコード・🥇🥈🥉・「あなた」ハイライト・👻 vs world)
   html += `<h3>${esc(t('rank.boards.h'))}</h3>`;
   for (const b of boards) {
-    html += `<div class="rank-board"><div class="rank-board-head"><b>${esc(t('event.class.' + b.cls))}</b> — ${esc(b.course)} ` +
-      `<button class="rank-vsworld" data-cls="${esc(b.cls)}" data-course="${esc(b.course)}" title="${esc(t('ghost.vsWorld.title'))}">${esc(t('ghost.vsWorld'))}</button></div>`;
+    // BF4: 見出しは枠の見出し (コースの表示名)、👻 のボタンは枠の鍵を持つ (参照の文字列は同一性ではない)。
+    html += `<div class="rank-board"><div class="rank-board-head"><b>${esc(t('event.class.' + b.cls))}</b> — ${esc(boardLabel(b))} ` +
+      `<button class="rank-vsworld" data-cls="${esc(b.cls)}" data-course="${esc(boardKey(b))}" title="${esc(t('ghost.vsWorld.title'))}">${esc(t('ghost.vsWorld'))}</button></div>`;
     // 言語別のコースレコード帯 (同じコース・同じクラスの中で「その言語での最速」を並べる)
-    const lrec = langRecordsAt(lb.boards, b.cls, b.course);
+    const lrec = langRecordsAt(lb.boards, b.cls, boardKey(b));
     if (lrec.length) {
       html += '<p class="rank-langstrip">' + lrec.map((x) =>
         `<span class="rank-langchip"><b>${esc(langLabel(x.lang))}</b> 👑 ${esc(x.rec.name)}` +
@@ -826,6 +855,7 @@ function entryForRecord(race, rec) {
 
 // 👻 あなた vs 世界ベスト: アクティブ車と、このクラス×コースの世界ベスト記録を同じ時間軸で
 // ゴースト対戦させ差を体感する (interact=false で衝突させず純粋に走りを並べる・ローカル参考)。
+// BF4: course は描画した枠の鍵 (ボタンの data-course)。世界ベストの記録が出た大会のコースで走らせる。
 function ghostVsWorld(cls, course) {
   if (!ladder) return;
   const rec = worldBest(ladder.boards, cls, course);
@@ -834,7 +864,11 @@ function ghostVsWorld(cls, course) {
   const wEntry = race ? entryForRecord(race, rec) : null;
   if (!race || !wEntry) { logLine(t('ghost.none')); return; }
   const rcourse = resolveRaceCourse(race.event.course);
-  if (!rcourse) { logLine(t('official.verify.noCourse', { name: course })); return; }
+  if (!rcourse) {
+    const bd = ladder.boards.find((x) => String(x.cls) === String(cls) && boardKey(x) === course);
+    logLine(t('official.verify.noCourse', { name: bd ? boardLabel(bd) : course }));
+    return;
+  }
   const s = activeSlot(); if (!s) return;
   const field = [
     { name: t('ghost.you'), lang: s.lang, src: s.src, carType: s.carType },
@@ -1077,7 +1111,7 @@ function ghostResetOrder(a) {
 }
 
 export function initRaceUI(deps) {
-  ({ $, escapeHtml, logLine, activeSlot, exitEdit, courseDisplayName, carTypeLabel, entryCarLabel, setActiveProgram, playCountdown, resolveRaceCourse, submitToGithub } = deps);
+  ({ $, escapeHtml, logLine, activeSlot, exitEdit, courseDisplayName, carTypeLabel, entryCarLabel, setActiveProgram, playCountdown, resolveRaceCourse, submitToGithub, raceCourseUnit } = deps);
   $('raceGhost').addEventListener('click', () => { if (pendingRaceGhost) openGhostReplay(pendingRaceGhost); });
   $('ghostPlay').addEventListener('click', () => {
     if (!ghostAnim) return;
@@ -1094,5 +1128,5 @@ export function initRaceUI(deps) {
     // AB10: 観戦リプレイを閉じたら一度だけ後処理 (自動観戦時の結果ダイアログ表示など)。
     const cb = ghostOnClose; ghostOnClose = null; if (cb) { try { cb(); } catch (e) {} }
   });
-  return { renderRaceResult, loadOfficialRaces, loadAllOfficialData, checkBeaten, openOfficialDlg, reloadOfficial, selectOfficialRace, submitOfficialEntry, toggleProgSrc, forkOfficialEntry, openRankingsDlg, reloadRankings, renderRankings, saveMe, ghostVsWorld, openGhostReplay, stopGhost, drawRaceMap };
+  return { renderRaceResult, loadOfficialRaces, loadAllOfficialData, checkBeaten, openOfficialDlg, reloadOfficial, selectOfficialRace, submitOfficialEntry, toggleProgSrc, forkOfficialEntry, openRankingsDlg, reloadRankings, renderRankings, saveMe, ghostVsWorld, openGhostReplay, stopGhost, drawRaceMap, courseListSettled };
 }
