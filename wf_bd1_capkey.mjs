@@ -17,7 +17,10 @@
 //   D-2) 上限を超えて投入しても項目数が上限で止まり、追い出しを跨いでも答えが変わらない。
 //   D-0) その前提: 複製したツリーが「誰とも共有していない 1 セット」であること（fitguard 経由の呼び出しが
 //        ゲートの見る覚え書きに載ること）。ここが崩れると D-1 は必ず緑になる。
-//   E) 検出力: 一時ツリーへ複製して鍵や約束を壊す変異を入れ、A)/C)/D) が実際に赤くなることを測る。
+//   E) 検出力: 一時ツリーへ複製して鍵や約束を壊す変異を入れ、A)/C)/D)/F) が実際に赤くなることを測る。
+//   F) 【BF2】プローブ車（normal_fr）の定義: 組込車種のローカル上書き（V3・`car_crud.js` `writeCarType`）で定義が変わると
+//      鍵が変わり、答えが真値（`stuckAtN`）と一致する。定義のどの値を変えても鍵が変わる。元の定義・中身が同じ写しに戻すと
+//      覚え書きが当たる（項目が増えない）。
 //
 // 【測らないこと（沈黙截断の禁止）】① 追い出しの順序が LRU か FIFO かは**測っていない**。観測できるのは
 //   項目数と答えだけで、順序を区別するには壁時計（ヒットとミスの所要差）に頼ることになるため。
@@ -270,6 +273,62 @@ async function checkD(dir) {
   return v;
 }
 
+// ── F) プローブ車の定義（BF2）───────────────────────────────────────────────────────
+// 定義の差し替えは `car_crud.js` の `writeCarType` と同じ 2 行（車種の並びと鍵の表の両方を新しいオブジェクトへ）。
+//   `writeCarType` は DOM 付きの `initCarCrud` の中にあって export されていないので、同じ操作をここで行う
+//   （上書きの**内容**は product の `applyCarOverride` と同じく「出荷時の定義の写し＋変えた項目」）。
+const OVAL_REF = (crs) => { const sp = SPECS.find((x) => x.name === 'オーバル'); return sp ? crs.buildFromSpec(sp) : null; };
+async function checkF(dir) {
+  const v = [];
+  const m = await loadTree(dir, true);
+  const { cap, cfg, crs } = m;
+  const course = OVAL_REF(crs);
+  if (!course) return ['F) 組込の『オーバル』が見つからない（治具が陳腐化＝この章は空振り）'];
+  const KEY = m.rr.PROGRAM_BY_KEY['normal_fr'].carType;
+  const orig = cfg.CAR_TYPE_BY_KEY[KEY];
+  const put = (obj) => { const i = cfg.CAR_TYPES.findIndex((x) => x.key === KEY); cfg.CAR_TYPES[i] = obj; cfg.CAR_TYPE_BY_KEY[KEY] = obj; };
+  const clone = () => JSON.parse(JSON.stringify(orig));
+  const ask = () => { setScale(cfg, 0.8); return cap.driveableCapN(course, 'tabletop', 1); };
+  const truth = () => { setScale(cfg, 0.8); return cap.stuckAtN(course, 'tabletop', 1) > 0 ? 0 : 1; };
+  try {
+    // F-1 再現の形: 既定で 1 台走り出せる → 加速 0 に上書き → 走り出せない（真値 0）。古い答え 1 を返さないこと。
+    const a0 = ask(), t0 = truth();
+    if (a0 !== 1 || t0 !== 1) v.push(`F-1 治具が陳腐化: 既定の定義で答え ${a0}・真値 ${t0}（どちらも 1 のはず）`);
+    put({ ...clone(), accel: 0 });
+    const a1 = ask(), t1 = truth();
+    if (t1 !== 0) v.push(`F-1 治具が陳腐化: 加速 0 でも真値が ${t1}（走り出せないはず）＝この節は空振り`);
+    if (a1 !== t1) v.push(`F-1 加速 0 に上書きした後の答え ${a1} が真値 ${t1} と違う（鍵が定義の変化を見ていない）`);
+    // F-2 定義のどの値を変えても鍵が変わる（＝項目が 1 つ増える）。数値は 1e-9 だけ動かす（量子化しない）。
+    const fields = [];
+    for (const [k, val] of Object.entries(orig)) if (typeof val === 'number') fields.push([k, (d) => { d[k] = val + 1e-9; }]);
+    fields.push(['drift を null→既定のドリフト', (d) => { d.drift = JSON.parse(JSON.stringify(cfg.CAR_TYPE_BY_KEY.drift_fr.drift)); }]);
+    const dd = cfg.CAR_TYPE_BY_KEY.drift_fr.drift;
+    for (const [k, val] of Object.entries(dd)) if (typeof val === 'number') fields.push([`drift.${k}`, (d) => { d.drift = { ...JSON.parse(JSON.stringify(dd)), [k]: val + 1e-9 }; }]);
+    // 数値以外の値も動かす（層 4: 数値だけでは「文字列・真偽を歩かない digest」が F を通る）。
+    fields.push(['drift.trigger（文字列）', (d) => { d.drift = { ...JSON.parse(JSON.stringify(dd)), trigger: dd.trigger === 'power' ? 'liftoff' : 'power' }; }]);
+    fields.push(['drift.brakeDrift（真偽）', (d) => { d.drift = { ...JSON.parse(JSON.stringify(dd)), brakeDrift: !dd.brakeDrift }; }]);
+    // 前提: 上限に届かないこと（届くと項目数が釘付けになり「鍵が変わらない」を捕まえられない＝BD1 の D-1 と同じ罠）。
+    if (cap.CAP_CACHE.size + fields.length + 2 >= cap.CAP_CACHE.max) v.push(`F-2 の前提が崩れている: 項目数 ${cap.CAP_CACHE.size}＋${fields.length} が上限 ${cap.CAP_CACHE.max} に届く（増分を測れない）`);
+    let n = 0;
+    for (const [what, mut] of fields) {
+      const d = clone(); mut(d); put(d);
+      const before = cap.CAP_CACHE.size; ask();
+      if (cap.CAP_CACHE.size !== before + 1) v.push(`F-2 ${what} を変えても鍵が変わらない（項目数 ${before}→${cap.CAP_CACHE.size}）`);
+      n++;
+    }
+    if (n < 16) v.push(`F-2 変えた値が ${n} 個しかない（定義の数値 13 個＋drift の有無・数値・trigger・brakeDrift＝母集団が崩れた）`);
+    // F-3 元の定義（参照そのもの）・中身が同じ写しに戻すと覚え書きが当たる（項目が増えず、答えは最初と同じ）。
+    for (const [what, obj] of [['元の参照', orig], ['中身が同じ写し', clone()]]) {
+      put(obj);
+      const before = cap.CAP_CACHE.size, a = ask();
+      if (cap.CAP_CACHE.size !== before) v.push(`F-3 ${what}に戻したのに覚え書きが当たらない（項目数 ${before}→${cap.CAP_CACHE.size}）`);
+      if (a !== a0) v.push(`F-3 ${what}に戻した後の答え ${a} が最初の答え ${a0} と違う`);
+    }
+    console.log(`     F-1 既定 ${a0}（真値 ${t0}）→ 加速 0 ${a1}（真値 ${t1}）・F-2 変えた値 ${n} 個・F-3 戻すと当たる`);
+  } finally { put(orig); }
+  return v;
+}
+
 // ── 本番ツリーで A)〜D) ─────────────────────────────────────────────────────────
 console.log('\nBD1) 実走容量の覚え書きが「同じコース」を形状で判定する');
 const real = await loadTree(JS_ROOT);
@@ -283,11 +342,17 @@ console.log('\n  C) 形の差を取りこぼさない');
 report('C) 区別できなかった差', checkC(real));
 console.log('\n  D) 項目数が上限で止まり、答えは変わらない');
 report('D) 上限・答えの違反', await checkD(JS_ROOT));
+console.log('\n  F) プローブ車（normal_fr）の定義が変わると鍵が変わる（BF2・V3 の組込上書き）');
+report('F) 定義の変化を見落とした', await checkF(JS_ROOT));
 
 // ── E) 検出力（変異）─────────────────────────────────────────────────────────────
 // **product のファイルは読むだけ**（変異は一時ツリーの複製に入れる）。
 console.log('\n  E) 変異試験（鍵を壊して A)/C)/D) が赤くなるか）');
 const MUTATIONS = [
+  ['鍵からプローブ車の定義を外す（BF2 以前）', 'capacity.js', 'F',
+    (s) => s.replace('|${courseShapeDigest(_probeDef())}|', '|')],
+  ['鍵に入れるのが定義の中身でなく key だけ（上書きしても key は normal_fr のまま）', 'capacity.js', 'F',
+    (s) => s.replace('courseShapeDigest(_probeDef())', '_probeDef().key')],
   ['鍵の 1 つ目を course.name へ戻す（BD1 以前）', 'capacity.js', 'A',
     (s) => s.replace('const key = `${courseShapeDigest(course)}|', 'const key = `${course.name}|')],
   // 【BE2・2026-09-24】digest 本体は `capacity.js` から葉 `course_digest.js` へそのまま移した（循環 import 回避）ので、
@@ -317,6 +382,7 @@ for (const [name, file, chapter, fn] of MUTATIONS) {
     let caught = 0;
     if (chapter === 'A') caught = (await checkA(tmp, '変異')).length;
     else if (chapter === 'C') caught = checkC(await loadTree(tmp, true)).length;
+    else if (chapter === 'F') caught = (await checkF(tmp)).filter((x) => !x.includes('治具が陳腐化') && !x.includes('前提が崩れて')).length;   // 治具・前提の崩れは検出に数えない
     else caught = (await checkD(tmp)).length;
     if (caught === 0) mutMiss.push(`${name} → ${chapter}) が見逃した`);
     else console.log(`     ✓ ${name} → ${chapter}) が ${caught} 件で赤`);

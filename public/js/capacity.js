@@ -8,8 +8,10 @@
 // 設計判断: ① 判定プログラムは normal_fr (既定サンプル=容量の保守的代表・楽め込みが顕在化する母体)。
 //   ② trackNet (観測のみ=verifyHash 不変) で各車の spawn からの最大変位を読み、 < carLen かつ非クラッシュを
 //   「走り出せない」とする (wf_recover_model と同一述語=ライブとゲートが同じオラクルを使う・CI-9)。
-//   ③ 結果は (コース形状の digest, regime, carLen, maxN, PHYSICS.mode) でキャッシュする。
+//   ③ 結果は (コース形状の digest, プローブ車の定義の digest, regime, carLen, maxN, PHYSICS.mode) でキャッシュする。
 //      ・**形状依存=digest**〔BD1 で `course.name` から置換。同名で壁だけ違うコースを区別できていなかった〕
+//      ・**プローブ車の定義=digest**〔BF2 で追加。組込車種のローカル上書き (V3・`car_crud.js` の `writeCarType`) で
+//        normal_fr の加速・最高速などを変えても鍵が動かず、古い台数を返していた〕
 //      ・領域依存=regime ・**エンジン依存=PHYSICS.mode**〔AZ6 で追加〕
 //      ・carLen は **判定閾値**として効く。**【BD1 で是正した旧注記】**「スケール依存=carLen に内包」は誤りで、
 //        `runRace` は `race_engine.js` の `setCarScale(1)` で **carScale スライダーを既定へ固定して走る**ので
@@ -18,7 +20,7 @@
 //        **呼び出し側の** CAR.length である。∴ 鍵に carLen が要るのは本当だが、理由は「シムが変わるから」ではない。
 //   ④ ライブは tabletop でのみ使う (楽め込みバグと判定述語の母体は卓上。fullscale は専用コース×凍結グリッド)。
 import { runRace } from './race_engine.js';
-import { CAR, FLEET, PHYSICS } from './config.js';
+import { CAR, FLEET, PHYSICS, CAR_TYPE_BY_KEY } from './config.js';
 import { PROGRAM_BY_KEY } from './programs.js';
 import { courseShapeDigest } from './course_digest.js';
 
@@ -48,6 +50,9 @@ export { courseShapeDigest };
 export const CAP_CACHE = { max: CACHE_MAX, get size() { return _cache.size; } };
 
 const _field = (n) => { const p = PROGRAM_BY_KEY['normal_fr']; return Array.from({ length: n }, () => ({ lang: p.lang, src: p.code, carType: p.carType })); };
+// プローブ車の定義（`_field` が走らせる車種の、**いま**の車種表の中身）。走行物理は `CAR_TYPE_BY_KEY[type]` を引くので
+//   (physics*.js の `profile()`)、答えはこの定義で決まる。
+const _probeDef = () => CAR_TYPE_BY_KEY[PROGRAM_BY_KEY['normal_fr'].carType];
 
 // この (course, regime, 現 CAR 寸法) で n 台を実走させ「走り出せない車 (最大変位 < carLen・非クラッシュ)」数。
 export function stuckAtN(course, regime, n) {
@@ -90,8 +95,15 @@ export function driveableCapN(course, regime, maxN = FLEET.maxCars) {
   //   `regime || 'tabletop'` と補っており、falsy を渡すと **鍵は tabletop・実行は現在の `REGIME_STATE.active`**
   //   （`race_engine.js` の `if (regime) applyRegime(regime);`）という食い違いが起きた。製品側
   //   （`fitguard.js` ⑥）は常に領域名を渡すので到達しないが、鍵と実行が別の値を見る形は残さない。
+  // **【BF2・2026-09-29】鍵の 2 つ目にプローブ車の定義の digest を入れた。** 組込車種のローカル上書き（V3）は
+  //   `CAR_TYPE_BY_KEY.normal_fr` を別のオブジェクトに差し替える（`car_crud.js` `writeCarType`）ので、加速 0 に上書きすると
+  //   実走では 1 台も走り出せないのに、上書き前の答え（走り出せる）を返していた（改修前ツリーで実測: 真値 0・答え 1・
+  //   項目数は増えない＝鍵が動いていない）。コースと同じく**場を列挙せず定義を丸ごと歩く**（答えに効く値を数え上げると、
+  //   車種の項目が増えたとき同じ壊れ方をする）。既定に戻すと中身が出荷時と同じになるので同じ鍵に戻り、覚え書きが当たる。
+  //   ほかにプローブの走行を変えうる大域の値は `runRace` が固定する（ノイズ/ホールド/光学は OFF・車体スケール ×1・装備は
+  //   field の既定）か、既に鍵にある（領域・車長・エンジン）。
   regime = regime || 'tabletop';
-  const key = `${courseShapeDigest(course)}|${regime}|${CAR.length.toFixed(4)}|${maxN}|${PHYSICS.mode}`;
+  const key = `${courseShapeDigest(course)}|${courseShapeDigest(_probeDef())}|${regime}|${CAR.length.toFixed(4)}|${maxN}|${PHYSICS.mode}`;
   if (_cache.has(key)) { const hit = _cache.get(key); _cache.delete(key); _cache.set(key, hit); return hit; }   // LRU: 参照で最新へ
   let cap = maxN;
   while (cap >= 1 && stuckAtN(course, regime, cap) > 0) cap--;
