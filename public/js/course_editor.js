@@ -282,10 +282,16 @@ export function loadSavedCourses() {
   try { return JSON.parse(localStorage.getItem(STORE_KEY) || '{}'); }
   catch (e) { return {}; }
 }
+// 書き込めたら true (BF1: 呼び出し側は true のときだけ「保存しました」と出す。失敗は AP4 のハンドラが 1 行通知)。
+// BF1: 保存名は利用者が自由に付けるので、`all[name] = …` の代入にしない。名前が '__proto__' だと代入は
+//   Object.prototype の setter に渡って all の原型を差し替えるだけで、JSON に載らない＝保存されないのに
+//   「保存しました」と出ていた（BE6 の層 4 (g)）。defineProperty は名前によらず自分のプロパティを作る
+//   （'constructor'・'toString' 等も同じ）。読み戻しの JSON.parse は '__proto__' も自分のプロパティとして作るので、
+//   一覧（Object.keys）・削除（delete all[name]）はそのまま効く。
 export function saveCourse(name, json) {
   const all = loadSavedCourses();
-  all[name] = { ...json, name };
-  safeSetItem(STORE_KEY, JSON.stringify(all), 'course'); // AP4: 失敗は 1 行通知
+  Object.defineProperty(all, name, { value: { ...json, name }, enumerable: true, writable: true, configurable: true });
+  return safeSetItem(STORE_KEY, JSON.stringify(all), 'course'); // AP4: 失敗は 1 行通知
 }
 export function deleteCourse(name) {
   const all = loadSavedCourses();

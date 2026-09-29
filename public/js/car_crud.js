@@ -16,7 +16,7 @@ const CUSTOM_CARS_KEY = 'rumicar.customCars';
 function loadCustomCars() {
   try { return JSON.parse(localStorage.getItem(CUSTOM_CARS_KEY) || '[]'); } catch (e) { return []; }
 }
-function saveCustomCars(arr) { safeSetItem(CUSTOM_CARS_KEY, JSON.stringify(arr), 'car'); } // AP4: 失敗は 1 行通知
+function saveCustomCars(arr) { return safeSetItem(CUSTOM_CARS_KEY, JSON.stringify(arr), 'car'); } // AP4: 失敗は 1 行通知・BF1: 結果を返す
 
 // ===== V3: 組込6車種のローカル上書き編集 (opt-in runtime override レイヤ) =====
 // 設計核心 (PLAN Stage V): shipped 既定 (config.js CAR_TYPES/mkType) は無改変。上書きは
@@ -29,6 +29,11 @@ const CAR_OVR_KEY = 'rumicar.carOverrides';
 // 別オブジェクトに差し替えるので、この退避参照は常に出荷時の値を保つ。
 const BUILTIN_DEFAULTS = Object.fromEntries(CAR_TYPES.map(c => [c.key, c]));
 const isBuiltinKey = (k) => Object.prototype.hasOwnProperty.call(BUILTIN_DEFAULTS, k);
+// BF1: 車種 key に使えない名前 (config.js の isReservedCarKey・registerCarType と同じ述語)。改修前は利用者の追加が
+//   「組込車種と重複」という誤った理由で断られ、投稿車種 (他人の JSON) は黙って登録されていた。
+//   config.js から**名前付き import しない**: BF1 で足した名前なので、古い config.js がキャッシュに残るブラウザで
+//   モジュールグラフ全体が読み込めなくなる (BA1 の規則・race_engine.js の registerRaceCarTypes と同じ扱い)。
+const isReservedCarKey = (k) => String(k) in Object.prototype;
 const cloneCarDef = (o) => JSON.parse(JSON.stringify(o)); // 車種 def は純データ (数値/文字列/null/drift) ＝ JSON クローン安全
 function loadCarOverrides() {
   try { const o = JSON.parse(localStorage.getItem(CAR_OVR_KEY) || '{}'); return (o && typeof o === 'object' && !Array.isArray(o)) ? o : {}; }
@@ -145,11 +150,20 @@ function uniqueCarKey(base) {
 }
 
 // 独自車種を1件 add/update (同 key は置換) して全 UI を反映。
+// 書き込めたら true (BF1: 呼び出し側は true のときだけ「追加しました」と出す。失敗は AP4 のハンドラが 1 行通知)。
+// 書き込めなかったときは登録も元へ戻す: 車種メニュー (CAR_TYPES) と自作車の一覧 (localStorage) が食い違わないように
+//   (層 4 の 2 回目: 戻さないと、メニューにはあるのに一覧に無く、編集も削除もできない車種が残った)。
 function upsertCustomCar(def) {
+  const prev = loadCustomCars().find(c => c.key === def.key);
   registerCarType(def);
-  const arr = loadCustomCars().filter(c => c.key !== def.key); arr.push(def); saveCustomCars(arr);
+  const arr = loadCustomCars().filter(c => c.key !== def.key); arr.push(def);
+  const stored = saveCustomCars(arr);
+  if (!stored) { if (prev) registerCarType(prev); else unregisterCarType(def.key); pruneSlotCarTypes(); }
   buildFleetColumns(); renderCarParamTable(); renderCustomCarList();
+  return stored;
 }
+// BF1: 保存できなかったとき、「追加しました」の代わりに出す (登録も戻したので、追加・更新は起きていない)。
+function carStoreFailMsg(msg) { msg.textContent = t('store.saveFail', { what: t('store.what.car') }); msg.style.color = 'var(--red)'; }
 
 // ===== V2: フォーム入力 GUI エディタ (JSON 貼付と双方向同期) =====
 // 主要パラメータ [key, min, max, step]。順序は CAR_PARAM_DOC を踏襲 (ラベル/ツールチップの単一ソース)。
@@ -249,6 +263,7 @@ function renderCarForm(def) {
 // メッセージは現在言語で eager に解決する (i18n キーを静的参照に保ち孤児検査③を汚さない)。
 function validateCarDef(def) {
   if (!def || typeof def !== 'object' || !def.key || !def.name) return { ok: false, msg: t('cars.add.errRequired') };
+  if (isReservedCarKey(def.key)) return { ok: false, msg: t('cars.add.errReservedKey', { key: def.key }) };   // BF1
   // BE3: 組込 key に `custom` 印が付く経路 (公式レースの持ち込み車種の居残り) は config.js の registerRaceCarTypes が
   //   レース後に元の参照へ戻すので塞がった。改修前はその居残りの後にここをすり抜けて組込を上書き・保存できた。
   if (CAR_TYPE_BY_KEY[def.key] && !CAR_TYPE_BY_KEY[def.key].custom) return { ok: false, msg: t('cars.add.errDupKey', { key: def.key }) };
@@ -430,7 +445,7 @@ export function initCarCrud(deps) {
     catch (e) { msg.textContent = t('cars.add.errJson', { e: e.message }); msg.style.color = 'var(--red)'; return; }
     const v = validateCarDef(def);
     if (!v.ok) { msg.textContent = v.msg; msg.style.color = 'var(--red)'; return; }
-    upsertCustomCar(def);
+    if (!upsertCustomCar(def)) { carStoreFailMsg(msg); return; }
     msg.textContent = t('cars.add.added', { name: def.name }); msg.style.color = 'var(--green)';
     logLine(t('log.customCarAdded', { name: def.name }));
   });
@@ -485,7 +500,7 @@ export function initCarCrud(deps) {
       msg.textContent = t('cars.list.editLoaded', { name: def.name }); msg.style.color = 'var(--text-dim)';
     } else if (btn.classList.contains('carlist-dup')) {
       const copy = { ...def, key: uniqueCarKey(def.key), name: t('cars.list.copyName', { name: def.name }) };
-      upsertCustomCar(copy);
+      if (!upsertCustomCar(copy)) { carStoreFailMsg(msg); return; }
       msg.textContent = t('cars.list.duplicated', { name: copy.name }); msg.style.color = 'var(--green)';
       logLine(t('log.customCarAdded', { name: copy.name }));
     } else if (btn.classList.contains('carlist-del')) {
@@ -511,5 +526,5 @@ export function initCarCrud(deps) {
   });
   $('carOvrSaveBtn').addEventListener('click', saveBuiltinOverride);
   $('carOvrCancelBtn').addEventListener('click', cancelBuiltinEdit);
-  return { loadCustomCars, isBuiltinKey, renderCarParamTable, renderCarForm, readCarForm, builtinSkipped };
+  return { loadCustomCars, isBuiltinKey, isReservedCarKey, renderCarParamTable, renderCarForm, readCarForm, builtinSkipped };
 }

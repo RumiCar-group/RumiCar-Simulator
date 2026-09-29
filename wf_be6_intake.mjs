@@ -288,7 +288,7 @@ else {
 const MM = [
   ['寸法変更で告知しない', s => s.replace("  noteWallsOutside(editor.toJSON());   // BE6 (⑥): 縮めた瞬間", "  // (変異) 縮めた瞬間")],
   ['✔適用で告知しない', s => s.replace('  noteWallsOutside(c);   // BE6 (⑥)', '  // (変異)')],
-  ['保存で告知しない', s => s.replace("  logLine(t('log.courseSaved', { name }));\n  noteWallsOutside(editor.toJSON());", "  logLine(t('log.courseSaved', { name }));")],
+  ['保存で告知しない', s => s.replace("  if (stored) logLine(t('log.courseSaved', { name }));\n  noteWallsOutside(editor.toJSON());", "  if (stored) logLine(t('log.courseSaved', { name }));")],   // BF1: 「保存しました」は書けたときだけ
   ['JSON 取込で告知しない', s => s.replace('    noteWallsOutside(editor.toJSON());   // BE6 (⑥): own で通した', '    // (変異) own で通した')],
   ['告知の hasKey ガードを外す', s => s.replace("if (n > 0 && hasKey('log.edWallsOutside')) logLine", 'if (n > 0) logLine')],
   ['保存名の衝突を逃がさない', s => s.replace("const key = (courseSources[n] || n.startsWith('gh:') || n.startsWith('★')) ? '★' + n : n;", 'const key = n;')],

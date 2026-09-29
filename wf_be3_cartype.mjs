@@ -192,16 +192,22 @@ function checkD(m) {
     v.push(...diffState(s0, tableState(cfg), `D) ${label} の後`));
     if ('maxSpeed' in cfg.CAR_TYPE_BY_KEY) v.push(`D) ${label}: 車種表が持ち込み車種を原型に持ったまま`);
   }
-  // 先に利用者の '__proto__' の自作車がある（改修前からある経路で入りうる）→ 同じ key を持ち込むレースの後も戻る
+  // 利用者の '__proto__' の自作車（バックアップの取込等で localStorage に入りうる）→ 同じ key を持ち込むレースの後も戻る。
+  // 【BF1・2026-09-29】BE3 の時点では registerCarType がこれを登録して車種表の原型を差し替えた（「改修前から・未決」＝
+  //   ここは「差し替わった原型がレース後に戻る」を測っていた）。BF1 で registerCarType が原型の名前 ('__proto__'・
+  //   'constructor' 等) を拒むようになったので、**拒むこと・原型が Object.prototype のままであること**を測り、その上で
+  //   同じ key を持ち込むレースの後も車種表が元どおりであることを測る（測る性質は強くなった＝緩めていない）。
   {
     const mine = cfg.registerCarType(JSON.parse('{"key":"__proto__","name":"mine","maxSpeed":0.7}'));
+    if (mine !== null) v.push('D) 原型の名前 __proto__ の自作車を登録した（BF1: 拒むはず）');
+    if (Object.getPrototypeOf(cfg.CAR_TYPE_BY_KEY) !== Object.prototype) v.push('D) 自作車 __proto__ の登録で車種表の原型が差し替わった');
     const s0 = tableState(cfg);
     const f = plainField();
     f.push({ ...f[1], name: 'p', carType: '__proto__', carDef: JSON.parse('{"key":"__proto__","name":"theirs","maxSpeed":1.4}') });
     run(f);
-    v.push(...diffState(s0, tableState(cfg), 'D) 既存の __proto__ 自作車'));
-    if (Object.getPrototypeOf(cfg.CAR_TYPE_BY_KEY) !== mine) v.push('D) 既存の __proto__ 自作車の原型が戻らない');
-    const i = cfg.CAR_TYPES.indexOf(mine); if (i >= 0) cfg.CAR_TYPES.splice(i, 1);   // 後始末（この性質は改修前から・未決）
+    v.push(...diffState(s0, tableState(cfg), 'D) __proto__ の自作車を拒んだ後の持ち込み'));
+    if (Object.getPrototypeOf(cfg.CAR_TYPE_BY_KEY) !== Object.prototype) v.push('D) __proto__ を持ち込むレースの後、車種表の原型が戻らない');
+    if (mine) { const i = cfg.CAR_TYPES.indexOf(mine); if (i >= 0) cfg.CAR_TYPES.splice(i, 1); }   // 後始末（拒めていれば不要）
     Object.setPrototypeOf(cfg.CAR_TYPE_BY_KEY, Object.prototype);
   }
   // 登録の途中で例外（key が {"toString":1} の carDef は CAR_TYPE_BY_KEY[key] の文字列化で投げる＝PR で来うる JSON。
@@ -298,6 +304,8 @@ const FIRST_VERSION = `export function registerRaceCarTypes(defs) {
   };
 }`;
 const MUTATIONS = [
+  ['registerCarType が原型の名前を拒まない（BF1 の前）', 'D',
+    (s) => s.replace('  if (isReservedCarKey(def.key)) return null;   // BF1\n', '')],
   ['registerCarType の組込保護を外す（改修前）', 'A',
     (s) => s.replace('  if (BUILTIN_CAR_KEYS.has(String(def.key))) return null;\n', '')],
   ['registerCarType が組込 key に custom 印を付けて置き換える（→ unregisterCarType でも消せてしまう）', 'A',

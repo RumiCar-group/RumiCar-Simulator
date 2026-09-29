@@ -428,8 +428,14 @@ export function isBuiltinCarKey(key) { return BUILTIN_CAR_KEYS.has(String(key));
 // 独自車種を登録する (利用者定義。最低限 key/name と駆動系パラメータがあればよい)。
 // 既定値で埋めるので、一部だけ指定しても動く。重複キーは置き換える (自作車の再登録＝更新)。
 // **組込 key は登録しない** (null を返す)。拒否の告知は呼び出し側が理由つきで出す (BE3)。
+// 【BF1・2026-09-29】車種 key に使えない名前＝普通のオブジェクトが原型から持つ名前 ('__proto__'・'constructor'・
+//   'toString'・'hasOwnProperty' 等)。CAR_TYPE_BY_KEY は普通のオブジェクトなので、'__proto__' の登録は表の原型を
+//   差し替え、'constructor' 等は登録前の引きが原型の関数に当たる。登録の入口でも拒む (バックアップの取込で
+//   localStorage に入った自作車が起動時にここを通る＝UI の検査 validateCarDef を通らない経路)。
+export function isReservedCarKey(key) { return String(key) in Object.prototype; }
 export function registerCarType(def) {
   if (!def || !def.key) return null;
+  if (isReservedCarKey(def.key)) return null;   // BF1
   // key は CAR_TYPE_BY_KEY[key] で文字列へ変換されて引かれるので、判定も文字列で行う (['normal_fr'] 等の非文字列 key で
   //   すり抜けない・層 4 の実測)。
   if (BUILTIN_CAR_KEYS.has(String(def.key))) return null;

@@ -757,7 +757,7 @@ function carTypeLabel(key) { const ct = CAR_TYPE_BY_KEY[key]; return ct ? carTyp
 // 表示し、未登録の持ち込み車種は同梱 carDef.name をそのまま表示する (custom 車のポータビリティ)。
 function entryCarLabel(carType, carDef) {
   const key = carType || (carDef && carDef.key) || '';
-  if (key && CAR_TYPE_BY_KEY[key]) return carTypeLabel(key);
+  if (key && Object.prototype.hasOwnProperty.call(CAR_TYPE_BY_KEY, key)) return carTypeLabel(key);   // BF1: 'constructor' 等を素通りさせない
   return (carDef && carDef.name) || key || '';
 }
 
@@ -907,7 +907,7 @@ const evClassLabel = (cls) => t('event.class.' + cls);
 function openEventDlg() {
   exitEdit();
   const spec = $('evSpecCar');
-  if (spec) spec.innerHTML = CAR_TYPES.map((ct) => `<option value="${ct.key}">${escapeHtml(carTypeName(ct))}</option>`).join('');
+  if (spec) spec.innerHTML = CAR_TYPES.map((ct) => `<option value="${escapeHtml(ct.key)}">${escapeHtml(carTypeName(ct))}</option>`).join('');
   if (!raceEvent) raceEvent = { class: 'open', specCar: CAR_TYPE_DEFAULT, budget: { total: 60 }, laps: 3, rejoin: false, minField: 3, entries: [] };
   if (!CAR_TYPE_BY_KEY[raceEvent.specCar]) raceEvent.specCar = CAR_TYPE_DEFAULT;   // 削除された独自車種の保険
   $('evClass').value = raceEvent.class;
@@ -1171,13 +1171,13 @@ function buildFleetColumns() {
     col.innerHTML =
       '<div class="cc-head">' +
         `<span class="cc-dot" style="background:${s.color}"></span>` +
-        `<input class="cc-name" value="${s.name}" maxlength="6" title="${t('cc.name.title')}">` +
+        `<input class="cc-name" value="${escapeHtml(s.name)}" maxlength="6" title="${t('cc.name.title')}">` +
         `<select class="cc-lang" title="${t('cc.lang.title')}">${optsHtml}</select>` +
         `<button class="cc-sample" title="${t('cc.sample.title')}">📄</button>` +
         `<button class="cc-del" title="${t('cc.del.title')}"${(slots.length <= 1 || running) ? ' disabled' : ''}>✕</button>` +
       '</div>' +
       `<div class="cc-typerow"><span class="cc-typelabel">${t('cc.cartype')}</span>` +
-        `<select class="cc-cartype" title="${t('cc.cartype.title')}">${CAR_TYPES.map(ct => `<option value="${ct.key}"${s.carType === ct.key ? ' selected' : ''}>${escapeHtml(carTypeName(ct))}</option>`).join('')}</select>` +
+        `<select class="cc-cartype" title="${t('cc.cartype.title')}">${CAR_TYPES.map(ct => `<option value="${escapeHtml(ct.key)}"${s.carType === ct.key ? ' selected' : ''}>${escapeHtml(carTypeName(ct))}</option>`).join('')}</select>` +
       '</div>' +
       `<div class="cc-typerow"><span class="cc-typelabel">${t('cc.program')}</span>` +
         `<select class="cc-program" title="${t('cc.program.title')}">${programSelectOptions()}</select>` +
@@ -1925,6 +1925,9 @@ async function loadCommunityCars() {
     const label = (list[di] && list[di].name) || (def && def.key) || '?';
     if (def == null) continue;                       // 1 件失敗はスキップ
     if (!def || !def.key || !def.name) { badCars.push({ label, why: 'key/name' }); continue; }   // 不正 JSON はスキップ
+    // BF1: '__proto__' 等は車種表の原型を壊す。isReservedCarKey は car_crud.js が BF1 で足した名前なので、古い car_crud.js が
+    //   キャッシュに残るブラウザでは無い＝そのときは registerCarType (新しい config.js なら拒む) に任せる (BA1 の規則)。
+    if (typeof isReservedCarKey === 'function' && isReservedCarKey(def.key)) { badCars.push({ label, why: 'reserved' }); continue; }
     if (isBuiltinKey(def.key)) { badCars.push({ label, why: 'builtin' }); continue; }            // 組込 key は保護 (上書きしない)
     if (localKeys.has(def.key)) { badCars.push({ label, why: 'local' }); continue; }             // ローカル独自車種を優先
     let ct;
@@ -2608,7 +2611,7 @@ document.querySelectorAll('.infohint').forEach((h) =>
 
 // ---- ③ 車種パラメータの公開 + 独自車種の追加 ----
 const CC = initCarCrud({ $, escapeHtml, carTypeName, logLine, buildFleetColumns, pruneSlotCarTypes, submitToGithub });
-const { loadCustomCars, isBuiltinKey, renderCarParamTable, renderCarForm, readCarForm } = CC;
+const { loadCustomCars, isBuiltinKey, isReservedCarKey, renderCarParamTable, renderCarForm, readCarForm } = CC;
 // 削除/編集で key が消えたスロットは既定車種へ戻す (セレクタの stale option を防ぐ)。
 function pruneSlotCarTypes() {
   for (const s of slots) {
@@ -2715,7 +2718,9 @@ $('edSave').addEventListener('click', () => {
   // 保存名 '' のコースは option value も '' になり、選べても normalizeCourse が名前を『カスタム』に畳んでいた。
   const name = ($('edName').value.trim() || t('ed.name.default'));
   editor.course.name = name;
-  saveCourse(name, editor.toJSON());
+  // BF1: 書き込めなかった (容量超過・保存不可) ときは「保存しました」を出さない (失敗は AP4 のハンドラが 1 行出す)。
+  // 古い course_editor.js がキャッシュに残るブラウザでは戻り値が undefined＝従来どおり出す (false のときだけ出さない)。
+  const stored = saveCourse(name, editor.toJSON()) !== false;
   // 衝突を逃がした保存コースは option value が保存名と違うので、**一覧を作り直してから**値を引いて選ぶ。
   // ⚠ `rebuildCourseList(savedKeyOf(name) || name)` にしてはならない (層 4 の 2 回目・2026-09-25 に実測): 引数は
   //   作り直す前に評価されるので、初めて保存する名前では null → name に落ち、name が逃がし対象 (プリセット名・
@@ -2723,7 +2728,7 @@ $('edSave').addEventListener('click', () => {
   rebuildCourseList();
   const savedKey = savedKeyOf(name);
   if (savedKey != null) { $('courseSel').value = savedKey; courseSelValue = savedKey; }
-  logLine(t('log.courseSaved', { name }));
+  if (stored) logLine(t('log.courseSaved', { name }));
   noteWallsOutside(editor.toJSON());
 });
 $('edExport').addEventListener('click', () => {
@@ -3165,10 +3170,27 @@ holdButton('mFwd', 'ArrowUp'); holdButton('mBack', 'ArrowDown');
 holdButton('mLeft', 'ArrowLeft'); holdButton('mRight', 'ArrowRight');
 
 // キーボード
+// BF1: 矢印キーを車の操作に取るのは「ページそのもの」にフォーカスがあるときだけ。次の 2 つでは取らない
+//   （keys も立てず preventDefault もしない＝ブラウザ既定の動作に任せる）:
+//   ・フォーカスが矢印を自分で使う要素にある: 入力欄・テキスト欄・<select>（選択肢の移動）・contentEditable。
+//     改修前は TEXTAREA/INPUT だけで、<select>（#courseSel・各車の言語/車種/プログラム等）で矢印を押すと
+//     背後の車が走り、選択肢の移動は preventDefault で奪われていた（BE1 の層 4 E4）。
+//   ・ダイアログが開いている（本アプリのダイアログはすべて showModal＝背後は操作できない前提の画面）。
+//     改修前はダイアログ内のボタンにフォーカスがあると背後の車が走り、矢印での本文のスクロールも奪われていた。
+//   ボタン（▶ 等）にフォーカスが残っているときは従来どおり走る（押した直後に矢印で運転する使い方を壊さない）。
+function arrowKeysForCar() {
+  if (document.querySelector('dialog[open]')) return false;
+  const ae = document.activeElement;
+  if (!ae) return true;
+  return !(ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.tagName === 'SELECT' || ae.isContentEditable);
+}
+const ARROW_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
 window.addEventListener('keydown', (e) => {
-  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
-    const ae = document.activeElement;
-    if (ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT')) return; // 入力中は捕捉しない
+  if (ARROW_KEYS.includes(e.key)) {
+    // 取らないときは、矢印の駆動をすべて解く: 体の上で矢印を押したまま <select> をクリックすると、以後のキーリピートは
+    //   select に届く。解かないと keys が true のまま車が走り続け、しかも選択肢も動く (BF1 の層 4)。キーリピートは
+    //   最後に押したキーにしか来ないので、そのキーだけでなく 4 本とも解く (↑ を押したまま ← を足してから移ると ↑ が残った)。
+    if (!arrowKeysForCar()) { for (const k of ARROW_KEYS) keys[k] = false; return; }
     keys[e.key] = true; e.preventDefault();
   }
 });
@@ -3389,7 +3411,7 @@ function applyShareState(st) {
   }
   // ③ 領域 regime (regimeSel change → applyRegime + enforceFitRatio=Stage U/Y 比率補正)。
   //    最終的な regime は course のフィット比率に従って自動補正される (= hash はヒント・CI-5)。
-  if (st.regime != null && REGIMES[st.regime]) {
+  if (st.regime != null && Object.prototype.hasOwnProperty.call(REGIMES, st.regime)) {   // BF1: 車種と同じ
     const sel = $('regimeSel');
     if (sel && sel.value !== st.regime) { sel.value = st.regime; fireChange(sel); }
   }
@@ -3405,7 +3427,10 @@ function applyShareState(st) {
   if (st.recon != null) { const el = $('raceRecon'); const v = String(Math.max(0, Math.min(3, Math.round(st.recon)))); if (el && [...el.options].some(o => o.value === v)) el.value = v; }
   // ⑥ 車種 (アクティブ列の cc-cartype change → 既定プログラム自動読込)。未解決は通知。
   if (st.car != null) {
-    if (CAR_TYPE_BY_KEY[st.car]) {
+    // BF1: 自分のプロパティだけで引く。`CAR_TYPE_BY_KEY[st.car]` のままだと #car=constructor が原型の関数に当たって
+    //   素通りし、どの選択肢にも無い値を select に入れて change を撃つ＝selectedIndex -1 の .text で TypeError になり、
+    //   車種が '' のまま残った (他人が送れるリンク)。
+    if (Object.prototype.hasOwnProperty.call(CAR_TYPE_BY_KEY, st.car)) {
       const col = colEl(activeIdx);
       const sel = col && col.querySelector('.cc-cartype');
       if (sel && sel.value !== st.car) { sel.value = st.car; fireChange(sel); }
@@ -3415,7 +3440,7 @@ function applyShareState(st) {
   }
   // ⑦ プログラム (車種より後=車種が自動読込した既定を上書き)。組込キー/汎用のみ・未解決は通知。
   if (st.program != null) {
-    if (st.program === 'generic' || PROGRAM_BY_KEY[st.program]) {
+    if (st.program === 'generic' || Object.prototype.hasOwnProperty.call(PROGRAM_BY_KEY, st.program)) {   // BF1: 車種と同じ
       const col = colEl(activeIdx);
       const sel = col && col.querySelector('.cc-program');
       if (sel) { sel.value = st.program; fireChange(sel); }
