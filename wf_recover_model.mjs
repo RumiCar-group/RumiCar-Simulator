@@ -38,8 +38,8 @@ console.log('A) 正準レース verifyHash 不変 (発走順次化ゲートが�
   const fld = (...ks) => ks.map((k, i) => { const p = prog(k); return { name: 'C' + i, lang: p.lang, src: p.src, carType: p.carType, rear: false, encoder: false }; });
   const r1 = runRace({ report: true, course: oval, laps: 3, field: fld('normal_fr', 'normal_awd', 'normal_ff'), crashRule: { rejoin: false, penaltySec: 3 } });
   const r2 = runRace({ report: true, course: oval, laps: 2, field: fld('normal_ff', 'normal_fr'), crashRule: { rejoin: true, penaltySec: 3 } });
-  ok(r1.verifyHash === FROZEN_HASH.f0, `f0(oval3) verifyHash=${r1.verifyHash} (期待 ${FROZEN_HASH.f0} = AM1 コーン測距で再凍結)`);
-  ok(r2.verifyHash === FROZEN_HASH.f1, `f1(oval2rejoin) verifyHash=${r2.verifyHash} (期待 ${FROZEN_HASH.f1} = AM1 コーン測距で再凍結)`);
+  ok(r1.verifyHash === FROZEN_HASH.f0, `f0(oval3) verifyHash=${r1.verifyHash} (期待 ${FROZEN_HASH.f0} = 中央マニフェスト wf_frozen_manifest.json の現行値)`);
+  ok(r2.verifyHash === FROZEN_HASH.f1, `f1(oval2rejoin) verifyHash=${r2.verifyHash} (期待 ${FROZEN_HASH.f1} = 中央マニフェスト wf_frozen_manifest.json の現行値)`);
 }
 
 // (B)(C)(D) 全 66 コース（出荷 41 ＋ AX3 派生峠 18 ＋ AY2 舵角限界ベンチ 7）×1..6台 tabletop/0.8 を本物の runRace (trackNet=観測のみ) で回し、各車の最大変位・recoverN を測る。

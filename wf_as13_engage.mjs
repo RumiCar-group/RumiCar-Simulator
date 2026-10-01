@@ -25,6 +25,7 @@ import { runRace } from './public/js/race_engine.js';
 import { PROGRAMS, PROGRAM_BY_KEY } from './public/js/programs.js';
 import { recordsFrom, dnfsFrom, aggregate, leaderboards, profiles, beatenChecks, realAuthor, worldBest } from './public/js/race_ladder.js';
 import { courseShapeDigest } from './public/js/course_digest.js';
+import { FROZEN } from './wf_frozen.mjs';   // BG2: f0 の値は中央マニフェストから読む (直書きすると wf_refreeze で追従しない)
 import { championships, langBoards, langRecordsAt, langProfiles, pointsFor, POINTS_DEFAULT } from './public/js/race_season.js';
 import { challengeState, isCompletable, DIFF_LEVELS } from './public/js/challenge.js';
 import { sectorAnalysis, crossIndex, sectorDeltas, SECTORS_DEFAULT } from './public/js/sector.js';
@@ -277,8 +278,8 @@ const field = ['normal_fr', 'normal_awd', 'normal_ff'].map((k, i) => {
   const p = prog(k); return { name: 'C' + i, lang: p.lang, src: p.src, carType: p.carType };
 });
 const rr = runRace({ report: true, ghost: true, course: oval, laps: 3, field, crashRule: { rejoin: false, penaltySec: 3 } });
-ok(rr.verifyHash === '636ed39f',
-  `D2 本番 runRace の既定挙動が f0 記録値と一致 (ghost:true は byte 不変・実測 ${rr.verifyHash})`);
+ok(rr.verifyHash === FROZEN.f0,
+  `D2 本番 runRace の既定挙動が f0 記録値と一致 (ghost:true は byte 不変・実測 ${rr.verifyHash}・f0=${FROZEN.f0})`);
 const an = sectorAnalysis(rr.ghost, oval.bounds, SECTORS_DEFAULT);
 ok(an.k === 3 && an.dt > 0 && an.cars.length === field.length, `D2 3 区間で ${an.cars.length} 台ぶん解析 (dt=${an.dt.toFixed(4)}s)`);
 ok(an.lapsCounted > 0, `D2 完了周回を検出 (${an.lapsCounted} 周ぶん)`);

@@ -32,8 +32,8 @@ console.log('A) 正準レース verifyHash 不変 (クリーン/公式記録は�
   const fld = (...ks) => ks.map((k, i) => { const p = prog(k); return { name: 'C' + i, lang: p.lang, src: p.src, carType: p.carType, rear: false, encoder: false }; });
   const r1 = runRace({ report: true, course: oval, laps: 3, field: fld('normal_fr', 'normal_awd', 'normal_ff'), crashRule: { rejoin: false, penaltySec: 3 } });
   const r2 = runRace({ report: true, course: oval, laps: 2, field: fld('normal_ff', 'normal_fr'), crashRule: { rejoin: true, penaltySec: 3 } });
-  ok(r1.verifyHash === FROZEN.f0, `f0(oval3) verifyHash=${r1.verifyHash} (期待 ${FROZEN.f0} = AM1 コーン測距で再凍結)`);
-  ok(r2.verifyHash === FROZEN.f1, `f1(oval2rejoin) verifyHash=${r2.verifyHash} (期待 ${FROZEN.f1} = AM1 コーン測距で再凍結)`);
+  ok(r1.verifyHash === FROZEN.f0, `f0(oval3) verifyHash=${r1.verifyHash} (期待 ${FROZEN.f0} = 中央マニフェスト wf_frozen_manifest.json の現行値)`);
+  ok(r2.verifyHash === FROZEN.f1, `f1(oval2rejoin) verifyHash=${r2.verifyHash} (期待 ${FROZEN.f1} = 中央マニフェスト wf_frozen_manifest.json の現行値)`);
 }
 
 // (B) ライブ多台でねじ込みが起きない (報告バグの直接再現＝ロングオーバル6台)。

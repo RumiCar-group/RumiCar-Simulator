@@ -209,6 +209,10 @@ export class DynCar {
     this.recoverSteer = CONST.CENTER;
     this.recoverN = 0; this.recoverX = 0; this.recoverY = 0; this.gaveUp = false; this.recoverCooldownT = 0; // Stage AK4/D5: 後退リカバリの袋小路ガード
     this.held = false; this.released = false; // Stage AK7: 発走の順次化(anti-pile-up)。前方に他車が居る間 held=発走保留・空けば released(ラッチ)
+    // BG2: 車どうしの STUCK の窓 (fleet.js integrateSlot) と v2 のスタック検出の窓 (integrateFleetV2) を reset で消す
+    //   (旧: どちらも reset で消えず、走行を押し直すと前の走行の計時を持ち越した＝BG1 層 4 L5)。_stuckT=0 なら次の
+    //   積分で窓の始点 (_stuckX/_stuckY) を取り直すので、新しく作った車と同じ状態になる。
+    this._ccOn = false; this._ccT = 0; this._ccX = 0; this._ccY = 0; this._stuckT = 0;
     this.slip = 0;            // 描画互換: 後軸の飽和度 0..1 (スモーク)
     this.slipSign = 1;
     this.steerAngle = 0;

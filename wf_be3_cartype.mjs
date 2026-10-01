@@ -31,7 +31,8 @@
 //      持ち込み車種のレースが改修前と同じ結果で走る（新しい名前を名前付き import すると、ここで読み込みごと落ちる）。
 //   G) 検出力: 一時ツリーへ複製して保護・復元を壊す変異を入れ、上の章が赤くなることを測る（product は無改変）。
 //
-// 【凍結値の出どころ】C) の FROZEN は**改修前ツリー（HEAD 82683cf）**で同じ field を走らせて刻んだ値。
+// 【凍結値の出どころ】C) の FROZEN は版付き回帰記録。BE3 では**改修前ツリー（HEAD 82683cf）**で同じ field を走らせて刻み、
+//   Stage BG2 で改修後の値に刻み直した（上の定義の注記）。
 //   「レース中の挙動を 1 bit も変えない」の物差しなので、走行物理を意図的に変えた版では刻み直す
 //   （f0〜f3 と同じ版付き回帰記録。刻み直すときは改修前後の両方で測った理由を添えること）。
 // 【測らないこと】同じレースの中で 2 台が同じ key の違う定義を持ち込んだときの後勝ち、および carDef を持たない車が
@@ -46,8 +47,10 @@ import { pathToFileURL } from 'node:url';
 const JS_ROOT = './public/js';
 const SPECS = JSON.parse(fs.readFileSync('./public/data/courses.json', 'utf8'));
 const BUILTIN = ['normal_fr', 'normal_ff', 'normal_awd', 'drift_ff', 'drift_fr', 'drift_awd'];
-// 改修前ツリー (HEAD 82683cf・2026-09-24) で刻んだ verifyHash。オーバル・2 周・maxSec 30・dynamic・interact。
-const FROZEN = { plain: '7cee2df9', withDefs: '97b6657c' };
+// オーバル・2 周・maxSec 30・dynamic・interact の verifyHash。BE3 の改修前ツリー (HEAD 82683cf・2026-09-24) で 7cee2df9 / 97b6657c を
+// 刻んだ。**Stage BG2 (2026-10-02) で刻み直した**: 車どうしの接触 (ESCAPE/STUCK) と完走・リタイアした車の扱いを変えたので、
+// 多台数のこのレースの結果が変わる (改修前ツリー 7026bd9 では旧値 7cee2df9 / 97b6657c を再現・BG2 の改修後は 4df013a9 / 6bf8faff)。
+const FROZEN = { plain: '4df013a9', withDefs: '6bf8faff' };
 
 let pass = true;
 const report = (label, violations) => {
@@ -258,7 +261,7 @@ async function checkE(dir = JS_ROOT) {
   try { m = await loadTree(tmp); } catch (e) { return [`改修前の config.js と組み合わせると読み込めない（${e.message}）`]; }
   const { run, defsField } = raceKit(m);
   const h = run(defsField());
-  if (h !== FROZEN.withDefs) v.push(`混在ツリーの持ち込み車種のレース ${h}（改修前 ${FROZEN.withDefs}）`);
+  if (h !== FROZEN.withDefs) v.push(`混在ツリーの持ち込み車種のレース ${h}（凍結 ${FROZEN.withDefs}）`);
   return v;
 }
 
@@ -270,7 +273,7 @@ console.log('\n  A) 組込 6 車種は registerCarType / unregisterCarType で 1
 report('A) 違反', checkA(real));
 console.log('\n  B) 自作車は従来どおり（追加・その場で更新・drift の継承・削除）');
 report('B) 違反', checkB(real));
-console.log(`\n  C) 持ち込み車種はレースの間だけ（凍結 plain=${FROZEN.plain}・withDefs=${FROZEN.withDefs}・改修前ツリーで刻んだ値）`);
+console.log(`\n  C) 持ち込み車種はレースの間だけ（凍結 plain=${FROZEN.plain}・withDefs=${FROZEN.withDefs}・版付き回帰記録＝走行物理を変えた版で刻み直す）`);
 report('C) 違反', checkC(real));
 console.log("\n  D) 形の変わった key（'__proto__'・非文字列）・レース中の例外でも車種表が元どおり");
 report('D) 違反', checkD(real));

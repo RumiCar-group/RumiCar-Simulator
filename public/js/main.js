@@ -90,6 +90,10 @@ import { fmtTime, loadBestRec } from './lap.js';
 // BE6: 公式開催で「その参照で引くと同じ形のコースに当たるか」を比べる指紋 (練習記録の鍵と同じ関数＝名前・説明を抜いた形)。
 // BE2 で足した名前なので名前空間で受ける (古い lap.js がキャッシュに残るブラウザでグラフ全体を落とさない・BA1)。
 import * as lapParts from './lap.js';
+// BG2: ゴールした車 (峠) を他車のセンサー・衝突の相手から外す fleet.js の fleetEdges は BG2 で足した名前なので名前空間で
+// 受ける (古い fleet.js がキャッシュに残るブラウザでグラフ全体を落とさない・BA1。そのときは従来どおり全車の車体エッジ)。
+import * as fleetParts from './fleet.js';
+const fleetEdgesOf = (sl) => (typeof fleetParts.fleetEdges === 'function' ? fleetParts.fleetEdges(sl) : sl.map(s => carEdges(s.car)));
 import {
   CourseEditor, loadSavedCourses, saveCourse, deleteCourse,
 } from './course_editor.js';
@@ -482,7 +486,8 @@ function applyManual() {
 // 恒久デッドロックする(速度0で発走できない)。多台×interact のときだけ積分を ≤1/loopHz に分割し、
 // 各サブステップで車体エッジを再計算する(決定論レースエンジンの固定60Hzと同じ細かさで順次分離)。
 // 単独車 or interact OFF は othersFor が常に [] を返すため従来の単一積分と完全に等価(ライブ単独挙動 不変)。
-// freeSpawn/integrateSlot 自体は無改変=レースエンジン共有コードの verifyHash/卓上 byte 不変。
+// (#22 では freeSpawn/integrateSlot 自体は無改変だった。BG2 で integrateSlot に車どうしの ESCAPE/STUCK を足した＝
+//  fleet.js の注記。ライブとレースは同じ integrateSlot を通る。)
 function integrateLive(dt) {
   applyStartGate(slots, interact);   // Stage AK7: 発走の順次化 (held を1フレーム1回更新・レースと同一機構)
   // Stage AO4: mode==='v2' は全車同時積分＋インパルス接触 (integrateFleetV2 が内部で 1/60 サブステップ＋
@@ -493,7 +498,7 @@ function integrateLive(dt) {
   let rem = dt;
   while (rem > 1e-6) {
     const step = Math.min(max, rem);
-    const e = slots.map(s => carEdges(s.car));
+    const e = fleetEdgesOf(slots);   // BG2: ゴールした車は相手にしない (fleet.js isRetired)
     slots.forEach((s, i) => integrateSlot(s, step, othersFor(e, i, interact), course.walls, recover));
     rem -= step;
   }
@@ -508,7 +513,7 @@ function frame(t) {
 
   applyManual();
   const sdt = real * speed;
-  const edges = slots.map(s => carEdges(s.car));
+  const edges = fleetEdgesOf(slots);   // BG2: センサー (tickSlot)・一時停止ステップ・描画のセンサーも同じ外し方
 
   if (running) {
     if (paused) {
@@ -613,7 +618,7 @@ function render(edges) {
   }
   if (editing) { hideHudBand(); editor.drawOverlay(ctx, view); ctx.setTransform(1, 0, 0, 1, 0, 0); return; }   // BC6: 編集中は HUD 自体を描かない＝帯も畳む
 
-  edges = edges || slots.map(s => carEdges(s.car));
+  edges = edges || fleetEdgesOf(slots);
   // 軌跡 (各車の色。色覚セーフ ON 時は安全パレットへ写像)
   slots.forEach((s, i) => drawTrail(ctx, s.car, view, dispColor(i, s.color)));
   // お手本ライン (AB13・PX-014): ON のとき選択車の実走軌跡をなめらか化した基準線を重ねる (表示のみ)。

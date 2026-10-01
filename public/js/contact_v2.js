@@ -2,7 +2,8 @@
 // ════════════════════════════════════════════════════════════════════════════
 // AO4 で **掃引 CCD・壁2点マニフォールド・OBB-OBB 車車マニフォールド・法線/接線 (クーロン) インパルス
 // 解決 (逐次インパルス Gauss-Seidel)・split-impulse 位置補正** を追加した (`resolveFleetContacts`)。
-// これを fleet.js の `integrateFleetV2` が全車同時積分で呼ぶ (旧 `integrateSlot`=1台ずつ原子棄却 は無改変)。
+// これを fleet.js の `integrateFleetV2` が全車同時積分で呼ぶ (旧 `integrateSlot`=1台ずつ原子棄却 は AO4 では無改変。
+// BG2 で integrateSlot に車どうしの ESCAPE/STUCK を足した＝fleet.js の注記)。
 // 本ファイルは車の内部 (動力学/aFrac/izK) を知らない **純粋な剛体接触ライブラリ**: 車は
 // physics_v2.js の `_contactBody()`/`_setContactVel()` で剛体パラメータ (CG・世界系速度・逆質量/慣性) を
 // 提供し、ソルバはこの抽象 body 配列 (fleet が組む) のみを読み書きする (カプセル化・決定論・乱数/時刻なし)。
@@ -500,6 +501,9 @@ export function resolveFleetContacts(bodies, grid, walls, grip, interact) {
     for (let i = 0; i < n; i++) {
       for (let j = i + 1; j < n; j++) {
         if (bodies[i].invM <= 0 && bodies[j].invM <= 0) continue; // static 同士のみ除外 (少なくとも片方 dynamic なら index 順に依らず解決)
+        // BG2: ゴール・完走・リタイアした車 (fleet.js isRetired が立てる ghost) は車どうしの組を作らない。他車の
+        //   センサーからも外れるので、残すと「見えないのに当たる」になる (BG1 層 4 G3)。ghost を持たない body は従来どおり。
+        if (bodies[i].ghost || bodies[j].ghost) continue;
         obbManifold(bodies[i], bodies[j], slop, contacts, i, j);
       }
     }

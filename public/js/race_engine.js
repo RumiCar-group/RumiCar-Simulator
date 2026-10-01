@@ -333,8 +333,9 @@ export function runRace(spec) {
           if (s.lap.laps >= reconLaps) break;   // N 周到達で試走終了。
         }
         // グリッド復帰: car/lap を戻す (controller は再構築しない=学習地図保持)。本番開始状態を no-recon
-        // 経路と byte 一致させるため v2 のスタック検出トランジェント _stuckT もクリア (car.reset は
-        // recoverT/crashed 等は消すが _stuckT/_stuckX/_stuckY は消さない=本ブロックでのみクリア=physics 非改変)。
+        // 経路と byte 一致させるため v2 のスタック検出トランジェント _stuckT もクリア (AO9 当時の car.reset は
+        // _stuckT/_stuckX/_stuckY を消さなかった。BG2 で DynCar.reset が _stuckT を消すようにしたので、ここは
+        // その上に _stuckX/_stuckY も今の位置へ揃える＝同じ状態を二重に作るだけで結果は変わらない)。
         s.car.reset(s.spawn);
         s.car._stuckT = 0; s.car._stuckX = s.car.x; s.car._stuckY = s.car.y;
         s.world._pendingDelay = 0; s.world._others = [];
@@ -374,7 +375,10 @@ export function runRace(spec) {
 
     let tick = 0;
     for (; tick < maxTicks; tick++) {
-      const edges = slots.map((s) => carEdges(s.car));
+      // BG2: 完走・リタイアした車 (下の判定で s.retired を立てた車) は他車のセンサー・衝突の相手にしない
+      //   (fleet.js isRetired の注記・裁定 A)。fleet.js の新しい名前は使わず本ファイルが立てた印だけで外す
+      //   (古い fleet.js がキャッシュに残っても読み込める＝BA1。そのときは v2 の接触と自分側の当たりだけ従来どおり)。
+      const edges = slots.map((s) => (s.retired ? [] : carEdges(s.car)));
 
       // 1) プログラム tick (index 昇順・loopHz ゲート・delay 反映) — frame() と同一
       slots.forEach((s, i) => {
@@ -390,7 +394,8 @@ export function runRace(spec) {
       applyStartGate(slots, interact);
       // 2) 物理積分 (index 昇順・全スロット) — frame() と同一 (crashed は integrateSlot 内で不動)。
       // Stage AO4: mode==='v2' は全車同時積分＋インパルス接触 (integrateFleetV2)。dynamic/standard は
-      // 従来の 1台ずつ原子棄却 (integrateSlot) を **byte 不変** で維持 (guarded branch=canonical f0/f1 不変)。
+      // 従来の 1台ずつ原子棄却 (integrateSlot) を維持 (AO4 では byte 不変。BG2 で車どうしの ESCAPE/STUCK と完走・リタイア
+      // 車の除外を足し、多台数の f0/f1 は刻み直した＝fleet.js の注記)。
       if (PHYSICS.mode === 'v2') integrateFleetV2(slots, RACE_DT, course.walls, recover, interact);
       else slots.forEach((s, i) => integrateSlot(s, RACE_DT, othersFor(edges, i, interact), course.walls, recover));
 
@@ -403,6 +408,8 @@ export function runRace(spec) {
       slots.forEach((s, i) => {
         // クラッシュ計数: recoverT が増加 (=新規復帰開始で 0.7 にセット) した tick を1回と数える。
         // recoverT は通常 dt ずつ減るだけなので「増加」が復帰開始を一意に表す (端境ケースも捕捉)。
+        // 壁の切り返しだけでなく、車どうしで前進を阻まれ続けた車の切り返し (BG2 の STUCK・dynamic/standard) と v2 の
+        // スタック検出の切り返しも同じく 1 回と数える (BG2 の利用者裁定「v2 と同じく数える」)。
         if (recover && s.car.recoverT > prevRecoverT[i] + 1e-9) {
           crashCount[i]++;
           if (report && crashAt[i] == null) crashAt[i] = { x: s.car.x, y: s.car.y, tick };
@@ -411,6 +418,7 @@ export function runRace(spec) {
         // DNF (rejoin=false): crashed 遷移を1回だけ記録
         if (!recover && s.car.crashed && dnf[i] == null && finished[i] == null) {
           dnf[i] = { lapsCompleted: s.lap.laps, tick, reason: 'crash' };
+          s.retired = true;   // BG2: リタイアした車は次の tick から他車の相手にしない
           if (report) crashAt[i] = { x: s.car.x, y: s.car.y, tick };
         }
         // レースレポート: 摩擦円使用率/β のピークを観測 (dynamic 車のみ・読み取り専用)。
@@ -431,10 +439,11 @@ export function runRace(spec) {
           if (lt != null && (bestLapMs[i] == null || lt * 1000 < bestLapMs[i])) bestLapMs[i] = lt * 1000;
           prevLaps[i] = s.lap.laps;
         }
-        // フィニッシュ: 目標周回到達 → 駆動解除 (以後は惰行・タイム凍結)
+        // フィニッシュ: 目標周回到達 → 駆動解除 (以後は惰行・タイム凍結・BG2 で次の tick から他車の相手にしない)
         if (finished[i] == null && dnf[i] == null && s.lap.laps >= laps) {
           finished[i] = { tick, totalTimeMs: s.lap.totalTime * 1000 };
           s.running = false; s.car.driveDir = CONST.FREE; s.car.pwm = 0;
+          s.retired = true;
         }
       });
 

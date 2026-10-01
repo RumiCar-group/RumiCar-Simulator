@@ -431,6 +431,7 @@ export function rebuildSpawns(slots, course, grid, lapOpts) {
     s.world.walls = course.walls;
     s.world.start = sp;
     s.world._others = [];
+    s.retired = false;   // BG2: 公式レースが立てる「完走・リタイア」を下ろす (isRetired)
     s.car.reset(sp);
     s.lap.reset(course, { carType: s.carType, tire: s.world.tire, wear: s.world.wear, gear: s.world.gear, persist, memo });   // 練習記録はコース×車種別 (W2)・装備を記録へ刻む (AP2/AS9)
     s.running = false; s.loopTimer = 0;
@@ -559,11 +560,117 @@ export function applyRoadFrame(car, rf) {
   car.gLat = gLatOf(DYN.g, rf.bank, w);
 }
 
+// ── BG2 (2026-10-02): ゴール・完走・リタイアした車を他車の相手から外す ─────────────────────────
+// ゴールで止まった峠の車・公式レースで完走して惰行で止まった車・リタイア規則のクラッシュ車は、以後走らないのに
+// 他車のセンサー・衝突の対象に残り、後続がその後ろで永久に止まっていた (BG1 実測: 峠と公式レースの停止の主因。
+// 凍結記録 f1 は 2 台中 1 台しか完走しない記録で、完走車を外すと 2 台とも完走する)。裁定 A (BG-1) で外す:
+//   ・ライブ/レースの峠: ゴールした車 (lap.touge && lap.finished。lap.reset で消える)
+//   ・公式レース: race_engine が完走・リタイア (DNF) で立てる slot.retired (rebuildSpawns で下ろす)
+// 外し方: 他車の相手にしない (呼び出し側が fleetEdges で車体エッジを空にする＝センサー・integrateSlot の others
+// から消える)・自分も他車と当たらない (integrateSlot)・v2 の接触計算でも車どうしの組を作らない (integrateFleetV2 →
+// contact_v2.js resolveFleetContacts)。壁とは従来どおり当たる。ライブのクラッシュ車 (自動復帰 OFF) は周回・峠とも
+// 対象外 (裁定の範囲外・従来どおり残る)。ライブで ⏹ した後もゴールした車は lap.finished が残るので、次の ▶ か
+// リセット (lap.reset) までは外れたまま。発走の順次化 (applyStartGate) は外した車を数えたまま (発走時だけの機構)。
+export function isRetired(slot) {
+  return slot.retired === true || !!(slot.lap && slot.lap.touge && slot.lap.finished);
+}
+// 各車の車体エッジ (他車を障害物としてセンサー/衝突に渡す元)。外した車は空配列＝othersFor が何も足さない。
+export function fleetEdges(slots) {
+  return slots.map((s) => (isRetired(s) ? [] : carEdges(s.car)));
+}
+
+// ── BG2 (2026-10-02): 車どうしの詰まり ───────────────────────────────────────────────────────
+// 動力学・classic の車どうしの接触は「位置を取り消してその場で止める」だけで、壁と違って切り返さない。押し合った
+// 車は互いに前が空かず永久に待ち、その間に車体が重なる (融着) と、どの向きの一歩も「交差」で取り消されて二度と
+// 動けなかった (BG1 実測: 動力学 6 台・120 秒で 1 回あたり平均 1.72 台が止まり、止まった車の約 8 割が重なったまま。
+// 重なりの始まりは下の「向きは戻さない」による回頭が大半)。裁定 A (BG-1) で次の 2 つを足した:
+//   ESCAPE: すでに他車と重なっている車は、どの相手とも重なりの面積を増やさない動きなら通す (重なりから抜けられる)。
+//   STUCK : 自動復帰 ON・走行中の車が、**前進指令**のまま**前にいる車**に動きを取り消されたら窓を開き、そこから
+//           STUCK_WINDOW 秒 (シム時間・v2 のスタック検出と同じ長さ) たっても窓の始点から stuckEps (0.5 車長・v2 と同じ)
+//           以上動けておらず、その時点 (またはその後、動けないまま) で直近 STUCK_RECENT 秒以内に前の車に阻まれていれば、
+//           壁と同じ切り返し (armRecover) を仕込む (窓の閉じ方は integrateSlot の末尾の注記)。
+//           ・窓を開くのは前進が阻まれたときだけ: 切り返しは後退なので、後退中に後ろの車に阻まれた車へ更に後退を重ねると
+//             切り返しの回数だけが積もって諦めに至る (BG2 の実測: 狭い峠で先頭の車がプログラムの行き止まり脱出で後退し、
+//             発走待ちの車に阻まれて 7 回で諦め、後ろの車も発走できなくなった)。
+//           ・開いた窓は指令が変わっても捨てない: 前進と惰行/制動を切り替えるプログラムでも、阻まれたまま動けて
+//             いなければ切り返す (BG2 層 4 A-2・3 回目 A-1。v2 は前進指令が続くあいだだけ窓を回すので、そこは v2 と違う)。
+//           ・公式レースの「3 秒ペナルティ復帰」では、この切り返しも壁の切り返しと同じく 1 回と数える (利用者裁定・
+//             BG2。v2 のスタック検出の切り返しも従来から同じ扱い・race_engine.js のクラッシュ計数)。
+// 回頭が重なりを生むときに向きも戻す案・各車が他車の最新位置と照合する案は採らない (重なりは消えるが停止は
+// 減らなかった＝BG1 の試作 K3)。∴ 位置を取り消しても回頭は残り、回頭だけで重なりが深まることがある (BG2 層 4 3 回目 A-2:
+// 横にいて中心がやや後ろの車へ舵を切ったまま前進すると、相手の中心が「前」に入るまで窓が開かず、約 9 秒で車体の 4 割
+// 余りまで重なってから切り返した。改修前は同じ形で永久に融着した。実走の母集団での最大は 13.6%＝改修前 43%)。
+// 1 台走行・interact OFF は others が空なのでどちらも働かない。
+//
+// 重なりの量 = 2 つの凸四角形 (corners() の 4 隅) の交わりの面積 (一方を他方の 4 辺で切り取り、残った多角形の面積)。
+//   ・十字に交差する重なり・中心がほぼ同じ重なりでも正になる (「相手の中に入った隅の深さ」で測ると 0 になって
+//     ESCAPE が働かない＝BG1 層 4 L4)。
+//   ・「最小の分離距離 (SAT)」は使わない: 深く刺さると小さい方の幅で頭打ちになり、刺さった車が相手を縦に通り抜けて
+//     追い越せた (BG2 層 4 A-3)。面積なら前へ押し込むほど増えるので取り消され、下がれば減るので通る。
+function polyArea2(p) {   // 符号付き面積の 2 倍 (靴ひも公式)
+  let s = 0;
+  for (let i = 0; i < p.length; i++) { const a = p[i], b = p[(i + 1) % p.length]; s += a.x * b.y - b.x * a.y; }
+  return s;
+}
+function overlapArea(a, b) {
+  const sgn = polyArea2(b) >= 0 ? 1 : -1;   // b の巻き向き (内側の判定の符号)
+  let poly = a;
+  for (let k = 0; k < b.length && poly.length; k++) {
+    const s = b[k], e = b[(k + 1) % b.length];
+    const ex = e.x - s.x, ey = e.y - s.y;
+    const side = (q) => sgn * (ex * (q.y - s.y) - ey * (q.x - s.x));   // ≥0 = b の内側 (辺の上を含む)
+    const inp = poly; poly = [];
+    for (let i = 0; i < inp.length; i++) {
+      const P = inp[i], Q = inp[(i + 1) % inp.length];
+      const sp = side(P), sq = side(Q);
+      if (sp >= 0) poly.push(P);
+      if ((sp >= 0) !== (sq >= 0)) { const t = sp / (sp - sq); poly.push({ x: P.x + t * (Q.x - P.x), y: P.y + t * (Q.y - P.y) }); }
+    }
+  }
+  return poly.length >= 3 ? Math.abs(polyArea2(poly)) / 2 : 0;
+}
+// 車どうしの接触の判定 (ESCAPE と STUCK の材料)。(px,py,pth) = このサブステップの前の姿勢・car = 動いた後の姿勢・
+// others = othersFor の他車エッジ (1 台 4 本・carEdges の順＝各辺の始点が 4 隅)。4 隅は car.corners() をその姿勢で呼んで
+// 得る (寸法の定義を写し取らない)。戻り値:
+//   escape: 前の姿勢がどれかの相手と重なっていて、どの相手とも重なりの面積が増えない (新しく重なる相手が無いことも含む)。
+//           比較には車体の面積の 1e-9 倍の許容を付ける: 軸に斜めの姿勢では、面積が変わらない平行移動でも丸めで数 ulp
+//           ずれ、許容なしだと「増えた」と判定されて取り消された (BG2 層 4 A-1: SAT 版で θ=0.3 の十字から 0 mm)。
+//   ahead : 動きを阻んだ相手 (重なりの面積が増えた相手。増えた相手が無い＝辺が触れただけなら、辺が交差する相手) のうち、
+//           中心が自分の中心より進行方向の前にいる相手があるか。STUCK はこれが真の前進だけを数える (後ろの車に回頭で
+//           触れたときに後退の切り返しを仕込むと、その車へ下がって突っ込む＝BG2 層 4 2 回目 M3)。
+// 他車エッジが 4 本ずつでない (呼び出し側の約束が崩れた) ときは escape=false・ahead=true (従来どおり取り消して止める)。
+function carContact(car, px, py, pth, others) {
+  if (others.length % 4 !== 0) return { escape: false, ahead: true };
+  const tol = 1e-9 * CAR.length * CAR.width;
+  const nx = car.x, ny = car.y, nth = car.theta;
+  const now = car.corners();
+  car.x = px; car.y = py; car.theta = pth;
+  const before = car.corners();
+  car.x = nx; car.y = ny; car.theta = nth;
+  let wasIn = false;
+  const grew = [], touched = [];
+  for (let k = 0; k < others.length; k += 4) {
+    const o = [0, 1, 2, 3].map((j) => ({ x: others[k + j].x1, y: others[k + j].y1 }));
+    const a0 = overlapArea(before, o), a1 = overlapArea(now, o);
+    if (a1 > a0 + tol) grew.push(o);
+    else if (checkCollision(car, [], others.slice(k, k + 4))) touched.push(o);
+    if (a0 > tol) wasIn = true;
+  }
+  if (wasIn && !grew.length) return { escape: true, ahead: false };
+  const blockers = grew.length ? grew : touched;
+  const cx = 0.25 * (now[0].x + now[1].x + now[2].x + now[3].x), cy = 0.25 * (now[0].y + now[1].y + now[2].y + now[3].y);
+  const hx = Math.cos(nth), hy = Math.sin(nth);
+  const ahead = blockers.some((o) => (0.25 * (o[0].x + o[1].x + o[2].x + o[3].x) - cx) * hx + (0.25 * (o[0].y + o[1].y + o[2].y + o[3].y) - cy) * hy > 0);
+  return { escape: false, ahead };
+}
+
 // 物理積分 + 衝突 + ラップ (1 台分)。
 // 壁との衝突: recover=ON なら「後退して切り返し復帰」を試みる / OFF なら従来どおりクラッシュ(恒久停止)。
-// 他車との接触 = 重なり防止のため移動を取り消してその場停止 (クラッシュではない)。
+// 他車との接触 = 移動を取り消してその場で止まる (クラッシュではない)。ただし重なりから抜ける動きは通し (ESCAPE)、
+// 自動復帰 ON で動けないまま STUCK_WINDOW 秒たてば切り返す (STUCK)。外した車 (isRetired) は他車と当たらない。
 export function integrateSlot(slot, dt, others, walls, recover) {
   const car = slot.car;
+  if (others.length && isRetired(slot)) others = [];   // BG2: ゴール・完走・リタイアした車は他車と当たらない
   if (!car.crashed && dt > 0 && !car.held) {
     // 諦め(袋小路)中は一定時間 待避して他車を塞がない → クールダウン後に再挑戦 (周囲の渋滞が動けば抜ける)。
     if (car.gaveUp) {
@@ -605,12 +712,39 @@ export function integrateSlot(slot, dt, others, walls, recover) {
         }
         break;   // 衝突サブステップは取り消し済。残り dt は同姿勢で進めても無意味=壁際で待つ
       } else if (others.length && checkCollision(car, [], others)) {
+        // BG2 ESCAPE: すでに重なっていて、どの相手とも重なりの面積を増やさない動きなら通す (取り消さない)。
+        const cc = carContact(car, px, py, pth, others);
+        if (cc.escape) continue;
         // 他車に重なる前進を取り消す (= 前車に阻まれて進めない)。**向き(theta)は戻さない**:
-        // 接触中もわずかに回頭して隣をすり抜けられる余地を残す (レース流れ・恒久デッドロック回避)。
-        // 壁と違い相手も動くので回頭の累積めり込みは起きにくく、theta を戻すと密集レースで
-        // 車が団子に固まって壁へ押し出され大量 DNF になる (実測で確認・car-car は従来挙動を保つ)。
+        // 接触中もわずかに回頭して隣をすり抜けられる余地を残す。theta を戻すと密集レースで車が団子に固まって
+        // 壁へ押し出され大量 DNF になる (実測で確認)。ただしこの回頭は重なり (融着) の始まりの大半でもある
+        // (BG1 実測)。重なった車は上の ESCAPE で抜け、抜けられなければ下の STUCK で切り返す。
         car.x = px; car.y = py; car.halt(); car.trail.length = tlen;
+        // BG2 STUCK: 前にいる車に前進を阻まれた時点から窓を開く (開いている窓は延ばさない＝窓の始点は最初に阻まれた位置)。
+        //   阻まれるたびに「最後に阻まれた時刻」(窓の中の時刻) を更新する。
+        if (cc.ahead && car.driveDir === CONST.FORWARD && car.pwm > 5) {
+          if (!car._ccOn) { car._ccOn = true; car._ccT = 0; car._ccX = car.x; car._ccY = car.y; }
+          car._ccLast = car._ccT;
+        }
         break;
+      }
+    }
+    // BG2 STUCK: 窓の時刻を dt ごとに進める (break で捨てた残り時間も含める)。STUCK_WINDOW 秒たったら毎回次を見る:
+    //   ・窓の始点から stuckEps 以上動けた・切り返し中 (壁の切り返しを含む) → 窓を閉じる (仕込まない)。
+    //   ・まだ動けておらず、直近 STUCK_RECENT 秒以内にも前の車に前進を阻まれている → 切り返しを仕込んで閉じる。
+    //   ・まだ動けていないが、直近は阻まれていない → 窓を**閉じずに保留**し、次に前の車に阻まれた時点で仕込む。
+    //     阻んだ車が去った・自分のプログラムが止めた車は、動かない限り仕込まれない (BG2 層 4 2 回目 M3)。前進と惰行を
+    //     切り替えるプログラムでも、窓の満了が惰行の側に当たり続けて永久に仕込まれない、ということが無い (同 3 回目 A-1:
+    //     保留しない版は、満了の位相が惰行と揃う周期 0.3/0.6 秒で 30 秒間一度も切り返さなかった)。
+    // 自動復帰 OFF・走行していない車は窓を捨てる (壁と同じ条件)。指令が変わっても捨てない (上の注記)。
+    if (car._ccOn) {
+      if (!(recover && slot.running)) car._ccOn = false;
+      else {
+        car._ccT += dt;
+        if (car._ccT >= STUCK_WINDOW) {
+          if (Math.hypot(car.x - car._ccX, car.y - car._ccY) >= stuckEps() || car.recoverT > 0) car._ccOn = false;
+          else if (car._ccT - car._ccLast <= STUCK_RECENT) { armRecover(car, slot); car._ccOn = false; }
+        }
       }
     }
   }
@@ -631,11 +765,15 @@ export function integrateSlot(slot, dt, others, walls, recover) {
 // 純変位が伸びない (袋小路) ときは既存 RECOVER_STEER_CYCLE を arm (recover 接続)。接触の検出/解決は
 // contact_v2.js の resolveFleetContacts (純粋な剛体ソルバ) に委譲し、本関数は基質 (recover 上書き・
 // gaveUp クールダウン・held/crashed=static・ラップ・touge) を従来 integrateSlot と同型に配線する。
-// **旧 integrateSlot は無改変** = 卓上既定 (dynamic) の canonical f0/f1・collision/recover ゲート byte 不変。
+// (AO4 時点では旧 integrateSlot を無改変に保った。BG2 で integrateSlot に ESCAPE/STUCK を足し、両経路で
+// ゴール・完走・リタイアした車を車どうしの接触から外した＝f0/f1 は刻み直し・v2 の f2/f3 と公式サンプルは不変。)
 // ════════════════════════════════════════════════════════════════════════════
 // 壁グリッドは contact_v2.js の共有 wallGridFor (WeakMap・コースごと1回構築) を使う。センサー/衝突/接触が
 // 同じ course.walls を渡す限り 1 個のグリッドを共用する (AP6 で readAll/checkCollision も同グリッドへ配線)。
 const STUCK_WINDOW = 1.2;   // 前進指令下でこの秒数 純変位<STUCK_EPS なら袋小路 → recover arm (AO_spec §3「1.2s」)
+// BG2: 車どうしの STUCK が「いまも前の車に阻まれている」とみなす、判定の時点から遡る時間 (ライブの外側 dt 最大 0.15 秒より
+//   長い＝1 フレームの中で阻まれた記録が必ず残る)。周期の長い切り替えは窓の保留で拾う (integrateSlot の末尾の注記)。
+const STUCK_RECENT = 0.25;
 function stuckEps() { return 0.5 * CAR.length; }   // 「動けていない」とみなす窓内純変位 (車長比=スケール不変)
 
 // 袋小路の recover を arm (後退復帰の切り返しを仕込む)。**両エンジン共通** = integrateSlot (dynamic・
@@ -697,6 +835,7 @@ export function integrateFleetV2(slots, dt, walls, recover, interact) {
       const nb = car._contactBody();        // step 後 (now) の CG・速度
       bodies.push({
         slot, car, isStatic,
+        ghost: isRetired(slot),   // BG2: ゴール・完走・リタイアした車は車どうしの接触を作らない (壁とは当たる)
         invM: isStatic ? 0 : nb.invM, invI: isStatic ? 0 : nb.invI, m: nb.m,
         cx: nb.cx, cy: nb.cy, pcx: pb.cx, pcy: pb.cy,
         vx: nb.vx, vy: nb.vy, w: nb.w,

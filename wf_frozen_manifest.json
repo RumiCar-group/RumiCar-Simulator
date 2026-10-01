@@ -2,17 +2,17 @@
   "_doc": "凍結回帰ハッシュの中央マニフェスト (Stage AP3・単一の真実源)。物理を意図的に変えた版では wf_refreeze.mjs で刻み直す (実行→差分→人間承認→書込・CI-11)。意図せぬ変化は 5 参照ゲート (ab8_bench/ak5_robustness/ao5_calib/collision_model/recover_model) が exit 1 で検出する。AP-0 方針: 卓上 byte 不変は 2026-07-10 に緩和され、f0〜f3 は『絶対不変ゲート』から『版付き回帰記録』へ降格 (旧版値は当時のエンジン版・条件の時点記録として history に保持)。",
   "schemaVersion": 1,
   "current": {
-    "appVersion": "v6.0.0",
-    "stampedAt": "2026-08-04",
+    "appVersion": "v8.9.0",
+    "stampedAt": "2026-10-02",
     "hashes": {
-      "f0": "636ed39f",
-      "f1": "ae2f0753",
+      "f0": "d3267904",
+      "f1": "f9a8e088",
       "f2": "af5a68bd",
       "f3": "6bb96b8a"
     },
     "meta": {
-      "f0": "卓上オーバル×3周 dynamic・normal (走行エンジン v1・AM1 コーン測距で再凍結)",
-      "f1": "卓上オーバル×2周 rejoin dynamic・normal (走行エンジン v1・AM1 で再凍結)",
+      "f0": "卓上オーバル×3周 dynamic・normal (走行エンジン v1・AM1 コーン測距で再凍結・AS3/BG2 で刻み直し)",
+      "f1": "卓上オーバル×2周 rejoin dynamic・normal (走行エンジン v1・AM1 で再凍結・AS3/BG2 で刻み直し)",
       "f2": "競技サーキット×3車種(FF/FR/AWD)×v2・normal (Circuit Racer・AO7 で凍結)",
       "f3": "競技サーキット×ドリフト FR×v2・slip (Slip Attack・AO7 で凍結)"
     }
@@ -27,6 +27,17 @@
     "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: BF5: Stage BF 結了 v8.9.0（APP_VERSION が engineFingerprint 経由で resultSha256 を変える・AQ-1）"
   },
   "history": [
+    {
+      "appVersion": "v8.9.0",
+      "stampedAt": "2026-10-02",
+      "hashes": {
+        "f0": "d3267904",
+        "f1": "f9a8e088",
+        "f2": "af5a68bd",
+        "f3": "6bb96b8a"
+      },
+      "reason": "BG2: 車どうしの接触（重なりの面積を増やさない動きは通す ESCAPE・前の車に阻まれて動けなければ切り返す STUCK）と、ゴール・完走・リタイアした車を他車の相手から外す改修（Stage BG・裁定 A）。多台数の f0/f1 が変わる（f1 は完走車が障害物に残らなくなり 2 台とも完走）。f2/f3（v2・独立走行／1 台）と公式サンプル大会は不変。版スタンプは Stage BG 結了（BG4）で版を上げるまで開発中の v8.9.0（公開済み v8.9.0 の f0/f1 は 636ed39f/ae2f0753＝v6.0.0 から据え置き・下の履歴）。"
+    },
     {
       "appVersion": "v6.0.0",
       "stampedAt": "2026-08-04",
