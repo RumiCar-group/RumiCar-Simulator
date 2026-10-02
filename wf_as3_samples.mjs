@@ -110,7 +110,8 @@ console.log(`  参照 (合否に使わない): 凍結時と完走数が異なる
 //   この 2 本は 1 台ずつ走らせれば既定 3 サンプルとも完走し (切り返し＝多点旋回で回る)、他車を障害物にしない設定でも 3/3 だった。
 //   ∴ 「被験 5 本で 0」は舵の限界ではなく、先にリタイアした車が廊下に残って後続を阻んでいたことに支えられていた。道幅 2 台分の
 //   3 本は 1 台でも 0 完走 (切り返す幅も無い) なので、ここを構造的にゼロとして守り、3.5 台分の 2 本は対照と同じく記録に回す。
-//   外部文書 (physics_model・アプリ Q&A) の「1/21」と結論の書き直しは Stage BG3。
+//   外部文書 (physics_model §11 日英・アプリ Q&A pm.s11.rmin) の結論は Stage BG3 で書き直した (追加時の「1/21」は v8.2.0 の
+//   CHANGELOG と同じく歴史として残し、改修後の 3 台同時の合計と 1 台ずつの完走を併記)。その合計は下の desc 照合の後で突き合わせる。
 console.log('\n=== D: 舵角限界ベンチ (AY2・bench 持ち) が既定サンプルでは通れないままか ===');
 // **被験と対照を混ぜない**（層 4 レビュー D1）: 7 本のうち `ratioOutMin < 1` の 5 本が「舵では原理的に曲がれない」セル、
 //   `>= 1` の 2 本（比 1.02）は「舵で通せる側」の対照セル。被験のうち道幅 2 台分の 3 本だけを構造的にゼロとして守る（BG2）。
@@ -136,8 +137,8 @@ ok(subjTotal === 0,
   `(= 通れるようになった。意図した物理変更なら AY1 のベンチを測り直して結論ごと刻み直す)`);
 console.log(`  被験・道幅 2 台分 ${subjIdx.length} 本(R_out/R_min<1)・完走総数 ${subjTotal}/${subjIdx.length * 3} (要求 0)・内訳 ${subjIdx.map((i) => `[${i}]${bench[i]}`).join(' ')}`);
 console.log(`  被験・道幅 3.5 台分 ${wideIdx.length} 本(切り返しで回れる幅)・完走総数 ${wideTotal}/${wideIdx.length * 3} (0 を要求しない・数は desc と照合)・内訳 ${wideIdx.map((i) => `[${i}]${bench[i]}`).join(' ')}`);
-// desc に書いた完走数そのものを照合する（層 4 レビュー 2 巡目 ⑨）。physics_model・アプリ Q&A・CHANGELOG の
-//   看板数値「1/21」はこの 7 本の合計なので、ここが黙って古くなると外部文書が一斉に嘘になる。
+// desc に書いた完走数そのものを照合する（層 4 レビュー 2 巡目 ⑨）。physics_model §11・アプリ Q&A の看板数値（BG3 以降は
+//   改修後の「7 本合計 X/21」）はこの 7 本の合計なので、ここが黙って古くなると外部文書が一斉に嘘になる＝下で文書側も照合する。
 //   desc の表記 = 「動力学(卓上の既定エンジン) X/3・精密v2 Y/3」。本ゲートは既定エンジン＝動力学で走るので X を照合する。
 {
   const bad = [];
@@ -149,7 +150,27 @@ console.log(`  被験・道幅 3.5 台分 ${wideIdx.length} 本(切り返しで�
   }
   ok(bad.length === 0,
     `D 各ベンチの desc に書いた既定サンプル完走数が実測と一致 (不一致 ${bad.length}${bad.length ? ': ' + bad.join(' / ') : ''}) ` +
-    `⇒ 合計 ${benchIdx.reduce((a, i) => a + bench[i], 0)}/${benchIdx.length * 3}（外部文書の「1/21」は追加時の合計＝Stage BG3 で書き直す）`);
+    `⇒ 合計 ${benchIdx.reduce((a, i) => a + bench[i], 0)}/${benchIdx.length * 3}`);
+  // 外部文書 4 か所（physics_model §11 日英・アプリ Q&A pm.s11.rmin 日英）に書いた「3 台同時の 7 本合計」が実測の合計と一致（BG3）。
+  //   追加時の「1/21」は歴史として残っている（同じ文の中の別の数）ので、改修後の合計を書いた句だけを拾う。
+  const sum = benchIdx.reduce((a, i) => a + bench[i], 0);
+  //   アプリ Q&A はキー pm.s11.rmin の値そのものから拾う（ファイル全体の最初の一致に頼らない）。
+  const { MESSAGES } = await import('./public/js/i18n/messages.js');
+  const rd = (f) => fs.readFileSync(new URL('./' + f, import.meta.url), 'utf8');
+  const DOCS = [
+    ['docs/physics_model.md', () => rd('docs/physics_model.md'), /3 台同時でも \*\*7 本合計 (\d+)\/21\*\*/],
+    ['docs/physics_model.en.md', () => rd('docs/physics_model.en.md'), /3 cars at once finish \*\*(\d+) of 21\*\* across the 7 courses/],
+    ['pm.s11.rmin (ja)', () => MESSAGES['pm.s11.rmin'].ja, /3台同時でも7本合計<b>(\d+)\/21<\/b>/],
+    ['pm.s11.rmin (en)', () => MESSAGES['pm.s11.rmin'].en, /3 cars at once finish <b>(\d+) of 21<\/b>/],
+  ];
+  const badDoc = [];
+  for (const [f, get, re] of DOCS) {
+    const m = get().match(re);
+    if (!m) badDoc.push(`${f}: 記載が見つからない (${re})`);
+    else if (Number(m[1]) !== sum) badDoc.push(`${f}: 記載 ${m[1]}/21 ≠ 実測 ${sum}/21`);
+  }
+  ok(badDoc.length === 0, `D 外部文書 ${DOCS.length} か所の「3 台同時の 7 本合計」が実測 ${sum}/21 と一致（不一致 ${badDoc.length}${badDoc.length ? ': ' + badDoc.join(' / ') : ''}）`);
+  console.log(`  外部文書（physics_model §11 日英・アプリ Q&A 日英）の 7 本合計 ${sum}/21 を照合${badDoc.length ? '・不一致 ' + badDoc.length : '・一致'}`);
 }
 console.log(`  対照 ${ctrlIdx.length} 本(R_out/R_min>=1・舵で通せる側)・完走総数 ${ctrlTotal}/${ctrlIdx.length * 3} (0 を要求しない=軌道カオス・数は desc と照合)・内訳 ${ctrlIdx.map((i) => `[${i}]${bench[i]}`).join(' ')}`);
 

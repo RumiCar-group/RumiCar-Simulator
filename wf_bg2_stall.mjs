@@ -40,7 +40,10 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import crypto from 'crypto';
-import { pathToFileURL, fileURLToPath } from 'url';
+import { fileURLToPath } from 'url';
+// product のモジュール一式（product か、変異を入れた一時ツリー）とライブ経路の写しは library wf_bg_live.mjs
+// （実ブラウザゲート browser/check_bg3_live_replay.mjs と共有＝写しを 2 つ作らない・BG3）。
+import { loadMods, liveSetup as liveSetupOn, liveFrame } from './wf_bg_live.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const rootIdx = process.argv.indexOf('--root');
@@ -52,13 +55,6 @@ const T0 = Date.now();
 let fail = 0;
 const ok = (cond, msg) => { console.log(`  ${cond ? '○' : '✗'} ${msg}`); if (!cond) fail++; return cond; };
 
-// ── モジュール一式（product か、変異を入れた一時ツリー）──────────────────────────
-async function loadMods(jsDir) {
-  const u = (f) => pathToFileURL(path.join(jsDir, f)).href;
-  const [fleet, physics, config, course, runner, api, programs, fitguard, race, dyn, fnv] = await Promise.all(
-    ['fleet.js', 'physics.js', 'config.js', 'course.js', 'runner.js', 'api.js', 'programs.js', 'fitguard.js', 'race_engine.js', 'physics_dyn.js', 'fnv1a.js'].map((f) => import(u(f))));
-  return { fleet, physics, config, course, runner, api, programs, fitguard, race, dyn, fnv };
-}
 
 // ── コース ──────────────────────────────────────────────────────────────────────
 const SPECS = JSON.parse(fs.readFileSync(path.join(ROOT, 'public/data/courses.json'), 'utf8'));
@@ -81,7 +77,8 @@ const isTouge = (name) => { const s = SPECS.find((x) => x.name === name); return
 
 // ── ライブの ▶ 走行（main.js startAuto → frame の走行中・非ポーズ分岐 → integrateLive の写し）──────────
 // 呼ぶ関数はすべて product（fleet/runner/api/fitguard）。写しが本物と同じことは BG1 で実ブラウザの rAF 時刻列を再生して
-// 確かめた（11 本で全車の位置差 0.000 mm・docs は internal の stage_bg/bg1）。外し方が本物と同じことは F) で固定する。
+// 確かめ（11 本で全車の位置差 0.000 mm・docs は internal の stage_bg/bg1）、BG3 から実ブラウザゲート
+// browser/check_bg3_live_replay.mjs が同じ写し（wf_bg_live.mjs）で確かめる（実ブラウザゲート＝browser/run_all.sh で回す・wf_run_all では回らない）。外し方が本物と同じことは F) で固定する。
 const STOP = { W: 10 }, LIVE_SEC = 120;   // 窓 = 観測の終わりの W 秒 (120 秒観測なので始点 110 秒＝BG1 の「T=30 秒以降」を満たす)
 const SDT_NOMINAL = (1 / 60) * 3;   // 60 fps × 速度 3×（UI 既定）
 // sdt 列: V0 = 名目（▶ 直後の 2 フレーム目は容量プローブの実走で長い＝上限 0.05 s に丸めた 0.15）・VA/VB = 実ブラウザで見た
@@ -91,61 +88,9 @@ const SDT = {
   VA: (k) => (k === 1 ? 0.15 : 3 * Math.min(0.05, [16.6, 16.7, 16.6, 33.3][k % 4] / 1000)),
   VB: (k) => (k === 1 ? 0.15 : 3 * Math.min(0.05, [16.5, 16.8, 16.8, 16.5, 16.7][k % 5] / 1000)),
 };
-function fleetEdgesOf(M, sl) {   // main.js の fleetEdgesOf と同じ
-  return typeof M.fleet.fleetEdges === 'function' ? M.fleet.fleetEdges(sl) : sl.map((s) => M.physics.carEdges(s.car));
-}
-function liveSetup(M, { name, n, mode, userK = 0.8, progKey = 'py_normal_fr' }) {
-  const { config, dyn, fleet, fitguard, programs, runner, api } = M;
-  config.SENSOR_NOISE.on = false;
-  const course = courseOf(M, name);
-  const regime = regimeOf(name);
-  config.setPhysicsMode(mode);
-  dyn.applyRegime(regime);
-  config.setCarScale(userK);
-  // フィットガード（main.js enforceFitRatio('race') の判定コア＝product の settleFitRatio）
-  const fx = { regime: (r) => dyn.applyRegime(r), scale: (k) => config.setCarScale(k), sync: () => {}, log: () => {} };
-  const fit = fitguard.settleFitRatio(course, { regime, userK, slotCount: n, reason: 'race' }, fx);
-  const nUse = Math.min(n, fit.capN);
-  const prog = programs.PROGRAM_BY_KEY[progKey];
-  const slots = [];
-  for (let i = 0; i < nUse; i++) slots.push(fleet.makeSlot({ i, lang: prog.lang, src: prog.code, course, slotCount: slots.length, logFor: () => () => {}, persist: false }));
-  fleet.rebuildSpawns(slots, course, null, { persist: false });   // startAuto
-  for (const s of slots) {
-    s.car.reset(s.spawn);
-    s.world._pendingDelay = 0; s.world._others = [];
-    s.hostEnv = api.buildApi(s.world);
-    s.lap.reset(course, { carType: s.carType, tire: s.world.tire, wear: s.world.wear, gear: s.world.gear, persist: false });
-    s.controller = runner.buildController(s.src, s.lang, s.hostEnv);
-    s.controller.setup();
-    s.running = true; s.loopTimer = 0;
-  }
-  return { M, course, slots, nUse, t: 0, frames: 0 };
-}
-function liveFrame(L, sdt) {
-  const { M, slots, course } = L;
-  const { fleet, config } = M;
-  const edges = fleetEdgesOf(M, slots);
-  slots.forEach((s, i) => {
-    if (!s.running) return;
-    s.loopTimer -= sdt;
-    if (s.loopTimer <= 0) {
-      fleet.tickSlot(s, fleet.othersFor(edges, i, true));
-      s.loopTimer += (1 / config.SIM.loopHz) + (s.world._pendingDelay || 0) / 1000;
-    }
-  });
-  fleet.applyStartGate(slots, true);
-  if (config.PHYSICS.mode === 'v2') fleet.integrateFleetV2(slots, sdt, course.walls, true, true);
-  else {
-    const max = slots.length > 1 ? (1 / config.SIM.loopHz) : sdt;
-    let rem = sdt;
-    while (rem > 1e-6) {
-      const step = Math.min(max, rem);
-      const e = fleetEdgesOf(M, slots);
-      slots.forEach((s, i) => fleet.integrateSlot(s, step, fleet.othersFor(e, i, true), course.walls, true));
-      rem -= step;
-    }
-  }
-  L.t += sdt; L.frames++;
+// コース名から組み立てたコースと推奨領域で ▶ を押した直後の状態を作る（本体は wf_bg_live.mjs の liveSetup）。
+function liveSetup(M, { name, ...rest }) {
+  return liveSetupOn(M, { ...rest, course: courseOf(M, name), regime: regimeOf(name) });
 }
 // 停止車の数（BG1 の述語）。null = フィットガードが台数を減らした（比べられないセル）。
 function liveStopped(M, opts, sdtOf = SDT.V0) {

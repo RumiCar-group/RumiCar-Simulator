@@ -170,7 +170,8 @@ GATES.push({ name: 'wf_official_result.mjs', args: ['--out', OFFICIAL_OUT] });
 const EXCLUDED = {
   'probe (常に exit0・計測のみ＝アサート無し)': ['wf_ab5_measure.mjs'],
   // wf_roomfixture.mjs = 「閉じた部屋」治具の寸法と枠の導出 (BD4・卓上 2 本と browser/check_az2_fitguard.mjs が共有)。
-  'library (単体実行不可・ゲートが import)': ['wf_i18n_hash.mjs', 'wf_frozen.mjs', 'wf_touge_driver.mjs', 'wf_drift_opt.mjs', 'wf_course_corpus.mjs', 'wf_roomfixture.mjs'],
+  // wf_bg_live.mjs = ライブ ▶ 走行の写し (BG3・wf_bg2_stall と browser/check_bg3_live_replay.mjs が共有)。
+  'library (単体実行不可・ゲートが import)': ['wf_i18n_hash.mjs', 'wf_frozen.mjs', 'wf_touge_driver.mjs', 'wf_drift_opt.mjs', 'wf_course_corpus.mjs', 'wf_roomfixture.mjs', 'wf_bg_live.mjs'],
   '変異ツール (product/manifest を書換＝non-変異証明のため除外)': ['wf_i18n_rehash.mjs', 'wf_refreeze.mjs'],
   // wf_release_notes.mjs = changelog.js から Release 本文を出力する (内容の品質は wf_i18n_check の ⑤ が見る)。
   '生成ツール (Release 本文を出力する＝ゲートではない・引数の誤りでだけ非 0)': ['wf_release_notes.mjs'],
