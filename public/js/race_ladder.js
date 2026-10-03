@@ -87,6 +87,24 @@ export function joinLabels(rows) {
 // 枠 (クラス×コース) の鍵。区切り文字を使わない (クラス名・参照に '::' が入っても別の枠が混ざらない)。
 const groupKey = (cls, courseKey) => JSON.stringify([String(cls), courseKey]);
 
+// ── BH1・2026-10-03: レコードの出どころの大会 ───────────────────────────────────────────────
+// レコードの eventId は event.json / result.json の**中身**で、上流のディレクトリ名 (大会の実体) と違って一意の保証が無い:
+// 2 つの大会が同じ eventId を名乗ることも、どちらにも書かれていないこともある。旧実装は eventId で大会を引き直していたので、
+// 重複すると 👻 が最初の大会 (別のコース・別のエントリー) で走り、欠落すると大会を引けなかった。「参加」「n 戦」も eventId の
+// 種類数で数えていたので、同じ eventId の 2 大会が 1 つに数えられた (BF-4 ② (c))。
+// ∴ レコードを作るときに、その元になった大会オブジェクト (入力 races の要素そのもの) を覚えておき、raceOfRecord で引く。
+// レコードの形 (フィールド) は変えない＝JSON にしたときの中身・入力の並びを変えたときの一致は従来どおり
+// (添字を持たせると並びで値が変わる)。覚えは弱参照で、レコードが捨てられれば一緒に消える。
+// 手で組んだレコード (recordsFrom/dnfsFrom を通っていない) は null を返す。数える側は従来どおり eventId で数える。
+const _raceOf = new WeakMap();
+export function raceOfRecord(rec) {
+  return (rec !== null && typeof rec === 'object' && _raceOf.get(rec)) || null;
+}
+// 「何大会か」を数えるときの鍵。出どころが分かればその大会そのもの、分からなければ従来どおり eventId。race_season も使う。
+export function raceKeyOf(rec) {
+  return raceOfRecord(rec) || rec.eventId;
+}
+
 // 補充車 (filler) や著者不明は「ドライバー」ではない (称号の対象外)。
 export function realAuthor(a) {
   const s = String(a || '').trim();
@@ -139,8 +157,11 @@ function recordsWith(races, opts, unitOf) {
     const season = String(ev.season || '');                 // 未指定 = 既定シーズン ('' で1つに束ねる)
     const points = Array.isArray(ev.points) ? ev.points : null;   // イベント別の配点上書き (任意)
     const ix = entryIndex(race);
-    for (const f of (r.finishers || [])) {
-      recs.push({
+    // BH1: result.json の finishers が配列でない・行がオブジェクトでないときは、その行を飛ばす (1 件の壊れた結果で
+    //   全大会の集計が例外で止まり、🏅 が「読み込み中」のまま固まった)。
+    for (const f of (Array.isArray(r.finishers) ? r.finishers : [])) {
+      if (f === null || typeof f !== 'object') continue;
+      const rec = {
         eventId: r.eventId || ev.id || '', eventTitle: ev.title || r.eventId || ev.id || '',
         cls, course, courseKey: unit.key, courseLabel: unit.label,
         regime: r.regime || ev.regime || '', laps: r.laps || ev.laps || 0,
@@ -152,7 +173,9 @@ function recordsWith(races, opts, unitOf) {
         programRef: f.programRef || null,
         season, points,
         lang: langOfEntry(entryOf(ix, f.author, f.name), opts.progLang),
-      });
+      };
+      _raceOf.set(rec, race);   // BH1: 出どころの大会 (上の注記)
+      recs.push(rec);
     }
   }
   return recs;
@@ -169,15 +192,18 @@ function dnfsWith(races, opts, unitOf) {
     const course = r.course || ev.course || '';
     const unit = unitOf(course, raceTagOf(r.eventId || ev.id, r.verifyHash));
     const ix = entryIndex(race);
-    for (const d of (r.dnf || [])) {
-      out.push({
+    for (const d of (Array.isArray(r.dnf) ? r.dnf : [])) {   // BH1: 完走と同じく壊れた行は飛ばす
+      if (d === null || typeof d !== 'object') continue;
+      const rec = {
         eventId: r.eventId || ev.id || '', eventTitle: ev.title || r.eventId || ev.id || '',
         cls: r.class || ev.class || 'open', course, courseKey: unit.key, courseLabel: unit.label,
         season: String(ev.season || ''), points: Array.isArray(ev.points) ? ev.points : null,
         name: d.name, author: d.author || '', carType: d.carType || '',
         lapsCompleted: d.lapsCompleted || 0, reason: d.reason || '',
         lang: langOfEntry(entryOf(ix, d.author, d.name), opts.progLang),
-      });
+      };
+      _raceOf.set(rec, race);   // BH1: 完走と同じ大会オブジェクト (選手権の出走大会数が完走とリタイアで二重にならない)
+      out.push(rec);
     }
   }
   return out;
@@ -234,7 +260,7 @@ export function profiles(records, boards) {
     p.entries++;
     if (r.rank === 1) p.wins++;
     if (r.rank <= 3) p.podiums++;
-    p.events.add(r.eventId);
+    p.events.add(raceKeyOf(r));   // BH1: 大会ごとに数える (eventId は重複・欠落しうる)
     if (!p.best || r.classifiedMs < p.best.classifiedMs) p.best = r;
   }
   const out = [...byAuthor.values()].map((p) => {

@@ -216,10 +216,16 @@ export function clearListCache() {
  * @param {string} dir   'courses/community' 等のディレクトリパス
  * @param {boolean} dirs true ならディレクトリ一覧 (races 用)、false ならファイル一覧
  */
-async function listDirCached(dir, dirs = false) {
+async function listDirCached(dir, dirs = false) { return (await listDirState(dir, dirs)).items; }
+
+// BH1: 上と同じ取得で、**未作成 (404) と取得失敗を区別して**返す。{ items, missing }。
+//   items は listDirCached の戻り値そのもの (失敗・未作成は null)。missing は「API が 404 を返した＝ディレクトリが
+//   まだ無い」ときだけ true (覚えてある 404 も含む)。レート制限・通信失敗・JSON 異常は items=null・missing=false。
+//   呼び出し側が「まだ無い」と「取得できていない」を言い分けるための口で、取得の経路・キャッシュ・回数は変えない。
+async function listDirState(dir, dirs = false) {
   const key = cacheKey(dir, dirs);
   const cached = listCacheGet(key);
-  if (cached) return cached.miss ? null : cached.items;
+  if (cached) return cached.miss ? { items: null, missing: true } : { items: cached.items, missing: false };
 
   // 1) マニフェスト (raw・レート制限なし)。無ければ 404 で素通りして API へ。
   //    dirs=true (races 一覧) では使わない。マニフェストはファイル名しか並べられず、
@@ -237,7 +243,7 @@ async function listDirCached(dir, dirs = false) {
             .filter(NAME_OK)
             .map((n) => listItem(dir, n, false));
           listCacheSet(key, { items, src: 'manifest' });
-          return items;
+          return { items, missing: false };
         }
       }
     } catch (e) { /* マニフェスト無し・通信失敗 → API を試す */ }
@@ -246,19 +252,22 @@ async function listDirCached(dir, dirs = false) {
   // 2) GitHub API (従来経路)。
   let res;
   try { res = await fetch(`https://api.github.com/repos/${COURSE_REPO.owner}/${COURSE_REPO.repo}`
-    + `/contents/${dir}?ref=${COURSE_REPO.branch}`); } catch (e) { return null; }
-  if (res.status === 404) { listCacheSet(key, { miss: true }); return null; }  // 未作成は覚える
-  if (!res.ok) return null;                    // 403 (レート制限) 等は覚えない = 復帰後すぐ拾う
+    + `/contents/${dir}?ref=${COURSE_REPO.branch}`); } catch (e) { return { items: null, missing: false }; }
+  if (res.status === 404) { listCacheSet(key, { miss: true }); return { items: null, missing: true }; }  // 未作成は覚える
+  if (!res.ok) return { items: null, missing: false };   // 403 (レート制限) 等は覚えない = 復帰後すぐ拾う
   let items;
-  try { items = await res.json(); } catch (e) { return null; }
+  try { items = await res.json(); } catch (e) { return { items: null, missing: false }; }
+  // BH1: ディレクトリの中身は配列で返る。配列でない 200 (JSON 異常) は「0 件」ではなく取得失敗＝覚えない
+  //   (旧実装は空の一覧として 1 時間覚え、呼び出し側は「まだありません」と表示した。上の契約「JSON 異常は null」に合わせる)。
+  if (!Array.isArray(items)) return { items: null, missing: false };
   // API 経路もマニフェスト経路と同じ門・同じ形に通す。ここを共通にしておかないと、
   // 上流にマニフェストを置いた途端 index.json が「投稿コース」として一覧に並ぶ
   // (API 経路にしか通らない旧版クライアントで実際に起きる)。
-  const list = (Array.isArray(items) ? items : [])
+  const list = items
     .filter((f) => f && NAME_OK(f.name) && (dirs ? f.type === 'dir' : f.type === 'file'))
     .map((f) => listItem(dir, f.name, dirs));
   listCacheSet(key, { items: list, src: 'api' });
-  return list;
+  return { items: list, missing: false };
 }
 
 // 投稿コース一覧を取得。**取得失敗** (レート制限/オフライン/通信瞬断/JSON 異常) 時は `null` を、
@@ -459,13 +468,19 @@ const RACE_DIR = 'races';
 
 // 公式レース一覧を取得 (races/ 直下のディレクトリ = eventId)。**取得失敗** (未作成 404/レート制限
 // /オフライン/JSON 異常) 時は `null`・**正常取得** 時は配列 (0 件なら `[]`) を返す (Q1/V4 同契約)。
-export async function listOfficialRaces() {
+export async function listOfficialRaces() { return (await listOfficialRacesState()).list; }
+
+// BH1: 一覧と、その決着の中身。{ list, state }。list は listOfficialRaces の戻り値そのもの (Q1/V4 契約は不変)。
+//   state: 'ok' (list は配列) / 'missing' (races/ が未作成＝404。大会がまだ無い正常な状態) /
+//          'failed' (レート制限・オフライン・JSON 異常＝大会があるかどうか分からない)。
+//   list が null のとき、画面が「まだ大会が無い」と「取得できていない」を言い分けるために使う (race_ui.js)。
+export async function listOfficialRacesState() {
   // races/ は「大会が始まるまで存在しない」ディレクトリで、これまで毎回 404 を
-  // 引きに行って API 枠を 1 回ずつ無駄にしていた。未作成は listDirCached が
+  // 引きに行って API 枠を 1 回ずつ無駄にしていた。未作成は listDirState が
   // localStorage に覚えるので、TTL の間は問い合わせない (v7.4.0)。
-  const list = await listDirCached(RACE_DIR, true);   // true = ディレクトリ一覧
-  if (list === null) return null;                     // 取得失敗 (Q1/V4 契約は不変)
-  return list.filter((f) => f.type === 'dir').map((f) => ({ id: f.name, path: f.path }));
+  const { items, missing } = await listDirState(RACE_DIR, true);   // true = ディレクトリ一覧
+  if (items === null) return { list: null, state: missing ? 'missing' : 'failed' };   // 取得失敗・未作成 (list は null のまま)
+  return { list: items.filter((f) => f.type === 'dir').map((f) => ({ id: f.name, path: f.path })), state: 'ok' };
 }
 
 // 1 イベントの定義 + エントリー + 結果を取得。戻り値 `{ event, entries[], result }`。

@@ -417,6 +417,7 @@ export const MESSAGES = {
   'official.loading':    { ja: '読み込み中…', en: 'Loading…' },
   'official.none':       { ja: '公式レースはまだありません (GitHub の races/ が未作成です)。「📋 開催」→「🌐 GitHubで公式開催」で最初の大会を提案できます。', en: 'No official races yet (races/ has not been created on GitHub). Use "📋 Event" → "🌐 Host officially on GitHub" to propose the first one.' },
   'official.fetchFail':  { ja: 'この大会の取得に失敗しました (オフライン/レート制限の可能性)。', en: 'Failed to fetch this race (possibly offline or rate-limited).' },
+  'official.listFail':   { ja: '公式レースの一覧を取得できていません (GitHub のレート制限・オフラインの可能性)。大会や記録が無いとは限りません。「再読込」で取り直せます。', en: 'The list of official races could not be fetched (possibly a GitHub rate limit or offline). This does not mean there are no races or records. Press "Reload" to try again.' },
   'official.pickHint':   { ja: '上のメニューから大会を選んでください。', en: 'Choose a race from the menu above.' },
   // メタ
   'official.meta.title': { ja: 'タイトル', en: 'Title' },
@@ -513,6 +514,7 @@ export const MESSAGES = {
   'rank.intro':          { ja: 'GitHub の公式レース結果から集計したリーダーボードとドライバー称号です。再実行で誰でも検証できる検証済記録のみを反映します (尊敬が本物である根拠)。', en: 'Leaderboards and driver titles aggregated from official race results on GitHub. Reflects only verified records that anyone can re-run to verify (the basis for genuine respect).' },
   'rank.reload':         { ja: '再読込', en: 'Reload' },
   'rank.loading':        { ja: '公式記録を読み込んでいます…', en: 'Loading official records…' },
+  'rank.partial':        { ja: '{n} 件の大会の記録を取得できませんでした (オフライン・通信失敗、または大会の定義がまだ置かれていない可能性)。集計には入っていません。「再読込」で取り直せます。', en: 'Could not fetch the records of {n} race(s) (possibly offline, a network failure, or the race definition is not in place yet). They are not included in the rankings. Press "Reload" to try again.' },
   'rank.empty':          { ja: 'まだ検証済の公式記録がありません。「📋 開催」→「🌐 GitHubで公式開催」で大会を開き、締切後に確定結果 (result.json) が PR されると、ここにランキングが表示されます。', en: 'No verified official records yet. Host a race via "📋 Event" → "🌐 Host officially on GitHub"; once a finalized result (result.json) is PR-ed after the deadline, rankings will appear here.' },
   'rank.boards.h':       { ja: 'クラス別ラダー', en: 'Class ladders' },
   'rank.course.bundled': { ja: '{name}（大会に同梱のコース定義）', en: '{name} (course definition bundled with the race)' },

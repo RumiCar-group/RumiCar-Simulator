@@ -14,8 +14,12 @@
 //  D: 区間別テレメトリ比較 — 本番 runRace の ghost に対する事後解析。**保存則 (区間の和 = 周回時間)** を
 //     厳密に検査し、距離等分の正しさを定速合成で、順位付けの意味を変異注入で確認 (検出力)。
 //  E: 既存エンゲージメント層 (W6) の非退行 — 既存 API の返りフィールドと意味が保たれること。
+//  G: 記録の出どころの大会 (BH1) — eventId は event.json / result.json の中身で重複・欠落しうる。レコードは元の大会
+//     オブジェクトを覚え (raceOfRecord)、「参加」「n 戦」は大会ごとに数える。eventId が重複しない入力では従来と同じ数。
+//     壊れた result.json (finishers が配列でない等) で集計全体を止めない。
+//  H: 読み込み互換 (BH1) — BH1 で足した export を名前付き import しない (古いモジュールがキャッシュに残っても読み込める)。
 // =============================================================================
-import { readFileSync, writeFileSync, mkdtempSync } from 'fs';
+import { readFileSync, writeFileSync, mkdtempSync, readdirSync } from 'fs';
 import { execFileSync } from 'child_process';
 import { tmpdir } from 'os';
 import { join, dirname } from 'path';
@@ -23,7 +27,7 @@ import { fileURLToPath } from 'url';
 import { buildFromSpec } from './public/js/course.js';
 import { runRace } from './public/js/race_engine.js';
 import { PROGRAMS, PROGRAM_BY_KEY } from './public/js/programs.js';
-import { recordsFrom, dnfsFrom, aggregate, leaderboards, profiles, beatenChecks, realAuthor, worldBest } from './public/js/race_ladder.js';
+import { recordsFrom, dnfsFrom, aggregate, leaderboards, profiles, beatenChecks, realAuthor, worldBest, raceOfRecord, raceKeyOf } from './public/js/race_ladder.js';
 import { courseShapeDigest } from './public/js/course_digest.js';
 import { FROZEN } from './wf_frozen.mjs';   // BG2: f0 の値は中央マニフェストから読む (直書きすると wf_refreeze で追従しない)
 import { championships, langBoards, langRecordsAt, langProfiles, pointsFor, POINTS_DEFAULT } from './public/js/race_season.js';
@@ -531,6 +535,121 @@ console.log('\n=== F: コースの枠 (BF4・race_ladder の courseKey／courseL
       { cls: 'open', course: defB, classifiedMs: 2, name: 'b', author: 'b' }]);
     ok(hb.length === 2 && hb[0].courseKey.startsWith('def:') && hb.every((x) => !x.courseLabel.includes('[object Object]')),
       `F10 courseKey の無いレコードでも同梱 def は def の指紋の枠 (${J(hb.map((x) => x.courseLabel))})`);
+  }
+}
+
+// ============================================================================
+console.log('\n=== G: 記録の出どころの大会 (BH1・eventId の重複と欠落) ===');
+{
+  // --- G1 レコードは元の大会オブジェクトを覚えている (完走・リタイアとも・入力の要素そのもの) ---
+  const g1 = aggregate(allRaces, { progLang });
+  const srcOk = (recs) => recs.every((r) => { const src = raceOfRecord(r); return allRaces.includes(src) && (src.result.eventId || src.event.id) === r.eventId; });
+  ok(g1.records.length > 0 && srcOk(g1.records), `G1 完走レコード ${g1.records.length} 件すべてが入力の大会オブジェクトを指す`);
+  ok(g1.dnfs.length > 0 && srcOk(g1.dnfs), `G1 リタイアレコード ${g1.dnfs.length} 件も同じ`);
+  ok(raceOfRecord(recsReal[0]) === raceReal, 'G1 出荷の公式サンプル: レコードの出どころは渡した大会そのもの');
+  ok(g1.boards.every((b) => raceOfRecord(b.record) && raceOfRecord(b.rows[b.rows.length - 1])), 'G1 枠の行・世界ベスト (board.record) から引ける (コピーされていない)');
+  ok(beatenChecks(g1.records, 'bob').every((x) => raceOfRecord(x.world) && raceOfRecord(x.mine)), 'G1 打破通知の world/mine からも引ける');
+  // --- G2 レコードの形は変えていない (出どころは JSON に出ない・入力の並びを変えても中身は同じ) ---
+  const keysBefore = ['eventId', 'eventTitle', 'cls', 'course', 'courseKey', 'courseLabel', 'regime', 'laps', 'engineVer', 'verifyHash',
+    'rank', 'name', 'author', 'carType', 'totalTimeMs', 'bestLapMs', 'penaltiesSec', 'classifiedMs', 'programRef', 'season', 'points', 'lang'];
+  ok(J(Object.keys(g1.records[0])) === J(keysBefore), `G2 完走レコードのキーは BH1 の前と同じ並び (${Object.keys(g1.records[0]).length} 個)`);
+  const sortRecs = (recs) => recs.map((r) => J(r)).sort();
+  ok(J(sortRecs(aggregate([...allRaces].reverse(), { progLang }).records)) === J(sortRecs(g1.records)), 'G2 入力の並びを逆にしてもレコードの中身 (JSON) は同じ集合');
+  // --- G3 手で組んだレコード・レコードでない値は null。数える鍵は従来どおり eventId ---
+  const hand = { eventId: 'h1', cls: 'open', course: 'X', rank: 1, author: 'a', name: 'a', classifiedMs: 1 };
+  ok(raceOfRecord(hand) === null && raceOfRecord(null) === null && raceOfRecord('x') === null && raceOfRecord(undefined) === null, 'G3 出どころを覚えていない値は null');
+  ok(raceKeyOf(hand) === 'h1' && raceKeyOf(g1.records[0]) === raceOfRecord(g1.records[0]), 'G3 数える鍵: 出どころが分かれば大会そのもの・分からなければ eventId');
+  ok(raceOfRecord({ ...g1.records[0] }) === null, 'G3 レコードをコピーすると出どころは付いてこない (コピーは別物＝eventId で数える側に落ちる)');
+  // --- G4 eventId が重複しない入力では「参加」「n 戦」が従来 (eventId の種類数) と同じ ---
+  const distinct = (recs) => new Set(recs.map((r) => r.eventId)).size;
+  const byAuthorOld = (a) => distinct(g1.records.filter((r) => realAuthor(r.author) === a));
+  ok(new Set(allRaces.map((r) => r.result.eventId)).size === allRaces.length, 'G4 前提: この母集団の eventId は重複しない');
+  ok(g1.drivers.length > 0 && g1.drivers.every((d) => d.events === byAuthorOld(d.author)), `G4 ドライバーの「参加」が eventId の種類数と一致 (${g1.drivers.length} 人)`);
+  const ch1 = championships(g1.records, g1.dnfs);
+  ok(ch1.every((c) => c.events === distinct([...g1.records, ...g1.dnfs].filter((r) => String(r.season) === c.season && String(r.cls) === c.cls))),
+    `G4 選手権の「n 戦」が eventId の種類数と一致 (${J(ch1.map((c) => c.events))})`);
+  ok(J(ch1) === J(champs), 'G4 選手権の表は従来の集計 (A の champs) と同一');
+  // --- G5 eventId が重複: 同じ eventId を名乗る 2 大会 (別のコース) を 2 大会として数え、出どころは取り違えない ---
+  const d1 = mkRace('dup', 'GS', 'open', ['zed', 'yan'], ['wes']); d1.event.course = 'G コース1'; d1.result.course = 'G コース1'; d1.result.verifyHash = 'gdup1';
+  const d2 = mkRace('dup', 'GS', 'open', ['zed'], ['yan']); d2.event.course = 'G コース2'; d2.result.course = 'G コース2'; d2.result.verifyHash = 'gdup2';
+  const gd = aggregate([d1, d2], { progLang });
+  const bd2 = gd.boards.find((b) => b.courseKey === 'ref:G コース2');
+  ok(!!bd2 && raceOfRecord(bd2.record) === d2 && raceOfRecord(worldBest(gd.boards, 'open', 'ref:G コース2')) === d2,
+    'G5 後ろの大会の枠の世界ベストは後ろの大会を指す (eventId で探すと最初の大会に当たる)');
+  ok([d1, d2].find((r) => r.result.eventId === bd2.record.eventId) === d1, 'G5 対照: 同じ記録を eventId で探すと前の大会に当たる (取り違えの再現)');
+  const drv = Object.fromEntries(gd.drivers.map((d) => [d.author, d.events]));
+  ok(drv.zed === 2 && drv.yan === 1, `G5 「参加」: zed は 2 大会・yan の完走は 1 大会 (${J(drv)})`);
+  const cd = championships(gd.records, gd.dnfs)[0];
+  const rowOf = (a) => cd.rows.find((r) => r.author === a);
+  ok(cd.events === 2 && rowOf('zed').events === 2 && rowOf('yan').events === 2 && rowOf('wes').events === 1,
+    `G5 選手権: 2 戦・yan は完走 1＋リタイア 1 で 2 大会・wes はリタイアだけで 1 大会 (${cd.events} 戦・${J(cd.rows.map((r) => [r.author, r.events]))})`);
+  // 完走とリタイアが同じ大会のとき二重に数えない (同じ大会オブジェクトを指す)。
+  const one = aggregate([d1], { progLang });
+  ok(championships(one.records, one.dnfs)[0].events === 1 && raceOfRecord(one.records[0]) === raceOfRecord(one.dnfs[0]), 'G5 1 大会の完走とリタイアは同じ大会として 1 戦');
+  // --- G6 eventId が無い大会: 2 大会を 1 つにまとめない ---
+  const n1 = mkRace('', 'GN', 'open', ['zed']); delete n1.event.id; delete n1.result.eventId; n1.result.verifyHash = 'gn1';
+  const n2 = mkRace('', 'GN', 'open', ['zed']); delete n2.event.id; delete n2.result.eventId; n2.result.verifyHash = 'gn2';
+  const gn = aggregate([n1, n2], { progLang });
+  ok(gn.records.every((r) => r.eventId === '') && raceOfRecord(gn.records[0]) === n1 && raceOfRecord(gn.records[1]) === n2, 'G6 eventId が空でも出どころは引ける');
+  ok(gn.drivers[0].events === 2 && championships(gn.records, gn.dnfs)[0].events === 2, `G6 eventId の無い 2 大会は 2 大会 (参加 ${gn.drivers[0].events}・${championships(gn.records, gn.dnfs)[0].events} 戦)`);
+  // --- G7 recordsFrom / dnfsFrom を別々に呼んでも同じ大会オブジェクトを指す (選手権に渡す 2 引数が食い違わない) ---
+  const sepR = recordsFrom([d1, d2], { progLang }), sepD = dnfsFrom([d1, d2], { progLang });
+  ok(championships(sepR, sepD)[0].events === 2, 'G7 別々に作った完走・リタイアでも 2 戦');
+  // --- G8 壊れた result.json (finishers・dnf が配列でない／行がオブジェクトでない) で集計全体を止めない ---
+  for (const bad of [{}, [null], 5, 'x', [1, 'a']]) {
+    const br = mkRace('bad', 'GB', 'open', ['zed']); br.result.finishers = bad; br.result.dnf = bad;
+    let g = null, err = '';
+    try { g = aggregate([br, d1], { progLang }); } catch (e) { err = e.message; }
+    ok(!!g && g.records.length === d1.result.finishers.length && g.dnfs.length === d1.result.dnf.length && g.verifiedCount === 2,
+      `G8 finishers/dnf=${J(bad)}: 投げずに、その大会の行だけを飛ばす (${err || `records ${g.records.length}・dnfs ${g.dnfs.length}`})`);
+  }
+}
+
+// ============================================================================
+console.log('\n=== H: 読み込み互換 (BH1 で足した名前を名前付き import しない) ===');
+{
+  // ブラウザに古いモジュールがキャッシュで残ると、新しい側が「古い側に無い名前」を名前付き import した瞬間に
+  // モジュールグラフ全体が読み込めなくなる (BA1 で実測)。BH1 で足した export は名前空間 import で受け、無ければ従来の挙動に落とす。
+  const NEW_NAMES = { 'loader.js': ['listOfficialRacesState'], 'race_ladder.js': ['raceOfRecord', 'raceKeyOf'] };
+  const JS_DIR = join(HERE, 'public/js');
+  const walk = (dir) => readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(join(dir, e.name)) : (e.name.endsWith('.js') ? [join(dir, e.name)] : [])));
+  const SRCS = Object.fromEntries(walk(JS_DIR).map((f) => [f.slice(JS_DIR.length + 1), readFileSync(f, 'utf8')]));
+  const strip = (src) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+  const violations = (srcs) => {
+    const v = []; let seen = 0;
+    for (const [rel, src] of Object.entries(srcs)) {
+      for (const m of strip(src).matchAll(/(?:import|export)\s*\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g)) {
+        seen++;
+        const target = m[2].split('/').pop();
+        for (const raw of m[1].split(',')) {
+          const name = raw.trim().split(/\s+as\s+/)[0];
+          if (name && (NEW_NAMES[target] || []).includes(name)) v.push(`${rel} が ${target} から「${name}」を名前付き import している`);
+        }
+      }
+    }
+    return { v, seen };
+  };
+  const real = violations(SRCS);
+  ok(real.seen >= 10, `H0 名前付き import を ${real.seen} 件走査した (検査が空振りしていない)`);
+  ok(real.v.length === 0, `H1 BH1 で足した名前の名前付き import は 0 件 (${real.v.join(' / ') || '0 件'})`);
+  // 名前を実際に export していること (名前を変えたら、この検査の対象も変える)。
+  ok(typeof raceOfRecord === 'function' && typeof raceKeyOf === 'function' && /export async function listOfficialRacesState\b/.test(SRCS['loader.js']),
+    'H1 対象の 3 つの名前が実在する (raceOfRecord・raceKeyOf・listOfficialRacesState)');
+  // 無ければ従来の挙動に落とす分岐が、受ける側にあること。
+  ok(/typeof loaderNS\.listOfficialRacesState === 'function'/.test(SRCS['race_ui.js']) && /typeof ladderNS\.raceOfRecord === 'function'/.test(SRCS['race_ui.js'])
+    && /typeof ladderNS\.raceKeyOf === 'function'/.test(SRCS['race_season.js']), 'H2 受ける側 (race_ui.js・race_season.js) に「無ければ従来どおり」の分岐がある');
+  // 変異: 名前付き import に書き換えると検出する。
+  const muts = [
+    ['race_ui.js が listOfficialRacesState を名前付き import', { 'race_ui.js': (x) => x.replace("import { fetchRace, listOfficialRaces,", "import { fetchRace, listOfficialRaces, listOfficialRacesState,") }],
+    ['race_ui.js が raceOfRecord を名前付き import', { 'race_ui.js': (x) => x.replace("import { aggregate, worldBest, beatenChecks }", "import { aggregate, worldBest, beatenChecks, raceOfRecord }") }],
+    ['race_season.js が raceKeyOf を別名で名前付き import', { 'race_season.js': (x) => x.replace("import { realAuthor } from", "import { realAuthor, raceKeyOf as rk } from") }],
+    ['別のファイル (main.js) が再 export する', { 'main.js': (x) => x + "\nexport { raceOfRecord } from './race_ladder.js';\n" }],
+  ];
+  for (const [label, edits] of muts) {
+    const mut = { ...SRCS };
+    for (const [f, fn] of Object.entries(edits)) mut[f] = fn(SRCS[f]);
+    const hit = Object.keys(edits).every((f) => mut[f] !== SRCS[f]);
+    ok(hit && violations(mut).v.length > 0, `H3 変異「${label}」を検出する${hit ? '' : ' (変異が当たっていない)'}`);
   }
 }
 

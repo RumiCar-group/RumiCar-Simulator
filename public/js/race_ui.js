@@ -23,6 +23,10 @@ import { drawCourse, worldToScreen } from './course.js';
 //   (BA1 の規則。無ければ同梱コースの照合をしない＝従来どおり)。
 import * as courseNS from './course.js';
 import { fetchRace, listOfficialRaces, entrySubmission, clearListCache } from './loader.js';
+// BH1: `listOfficialRacesState` (loader.js)・`raceOfRecord` (race_ladder.js) は BH1 で足した名前なので名前付き import しない
+//   (BA1 の規則)。無ければ従来どおり (未作成と取得失敗を言い分けない・大会は eventId で探す)。
+import * as loaderNS from './loader.js';
+import * as ladderNS from './race_ladder.js';
 import { t, applyI18n } from './i18n.js';
 import { course } from './state.js';
 
@@ -239,20 +243,69 @@ function drawRaceMap(res, colorOf, rc = course) {
   }
 }
 
-let officialRaces = null;     // listOfficialRaces の結果 (null=未取得/失敗・[]=0件・[...]=一覧)
+let officialRaces = null;     // listOfficialRaces の結果 (null=未取得/失敗/未作成・[]=0件・[...]=一覧)
+// BH1・2026-10-03: 一覧の取得の状態。officialRaces が null のときに「まだ届いていない」「races/ が未作成 (大会がまだ無い)」
+//   「取得に失敗した」を言い分ける。旧実装は 3 つを区別せず、届く前に開いた 🏅/🏆 が「まだありません」のまま残り
+//   (「再読込」を押すまで直らない)、取得に失敗したときも「まだありません」と言い切っていた (BF-4 ② (a))。
+//   'pending' … まだ決着していない (起動直後・「再読込」の取り直し中)
+//   'ok'      … 一覧を取得できた (officialRaces は配列)
+//   'missing' … races/ が未作成 (404)。大会がまだ無い正常な状態＝従来どおりの文言
+//   'failed'  … レート制限・オフライン・JSON 異常。大会があるかどうか分からない
+let racesListState = 'pending';
+let racesListLoad = null;     // 一覧の取得 (進行中か決着済み) の Promise。取り直すのは「再読込」(force) だけ
 let officialCurrent = null;   // 選択中の { event, entries, result }
 // 選択中の大会の **上流ディレクトリ名** (fetchRace に渡した id)。投稿先は必ずこれで組む。
 // `event.id` (event.json の中身) と一致する保証は無く、食い違うと実在しない場所の投稿画面を
 // 開いてしまう (AZ4 で是正。旧 shareEntryUrl は slugify(event.id) を使っていた)。
 let officialCurrentDir = null;
+// BH1: 大会の選択の世代。応答の遅い大会を選んだ直後に別の大会を選ぶと、遅れて届いた前の大会が画面と投稿先
+//   (officialCurrentDir) を上書きした (選択欄は後の大会のまま)。最後の選択・出し直しより古い応答は捨てる。
+let officialSelectSeq = 0;
 
 // 起動時に公式レース一覧を読み込む (失敗しても本体は止めない・Q1/V4 契約)。
-async function loadOfficialRaces() {
-  let list;
-  try { list = await listOfficialRaces(); } catch (e) { list = null; }
-  if (list === null) { officialRaces = null; logLine(t('log.ghRacesFail')); return; }
-  officialRaces = list;
-  if (list.length) logLine(t('log.ghRacesLoaded', { n: list.length }));
+// BH1: 取得は 1 本にまとめる。起動処理より先に 🏅/🏆 が開かれたときは開いた側が始め、後から来た起動処理は同じ取得に
+//   相乗りする (API・ログの 1 行が二重にならない)。force (「再読込」) だけが取り直し、先に走っていた取得の応答は
+//   画面の状態 (officialRaces・racesListState) には使わない (loader.js の一覧キャッシュは届いた順に書かれる＝ここでは守らない)。
+function loadOfficialRaces(force) {
+  if (racesListLoad && !force) return racesListLoad;
+  racesListState = 'pending';
+  const p = (async () => {
+    let r;
+    try {
+      // 古い loader.js がキャッシュに残れば listOfficialRacesState が無い。未作成と失敗を区別できないので、
+      // null は従来どおりの文言になる 'missing' として扱う。
+      r = typeof loaderNS.listOfficialRacesState === 'function' ? await loaderNS.listOfficialRacesState()
+        : await listOfficialRaces().then((list) => ({ list, state: list === null ? 'missing' : 'ok' }));
+    } catch (e) { r = null; }
+    if (racesListLoad !== p) return;   // 「再読込」が取り直しを始めた＝古い応答で上書きしない
+    if (!r || !Array.isArray(r.list)) {
+      officialRaces = null;
+      racesListState = (r && r.state === 'missing') ? 'missing' : 'failed';
+      logLine(t('log.ghRacesFail'));
+      return;
+    }
+    officialRaces = r.list;
+    racesListState = 'ok';
+    if (r.list.length) logLine(t('log.ghRacesLoaded', { n: r.list.length }));
+  })();
+  racesListLoad = p;
+  return p;
+}
+// 一覧の最新の取得が決着するまで待つ (未開始ならここで始める。待つ間に「再読込」が取り直しを始めたら、そちらを待つ)。
+async function racesListSettled() {
+  let p;
+  do { p = loadOfficialRaces(); await p; } while (p !== racesListLoad);
+}
+// 一覧を取得できていないときの文言。古い messages.js がキャッシュに残ればキーが無い (t はキー名を返す) ので、
+// 同じ事実を言う既存の 1 行 (起動時のログ) で代える。
+function listFailText() {
+  const s = t('official.listFail');
+  return s === 'official.listFail' ? t('log.ghRacesFail') : s;
+}
+// 詳細を取得できなかった大会があるときの文言 (同じく、キーが無ければ既存の 1 行で代える)。
+function partialText(n) {
+  const s = t('rank.partial', { n });
+  return s === 'rank.partial' ? t('official.fetchFail') : s;
 }
 
 // イベントのエントリー期間 {open,close} と現在時刻から状態を決める (結果確定済みは closed)。
@@ -278,15 +331,30 @@ function carDefForEntry(carType) {
 
 
 
+// 🏆 で大会を選ぶ前の案内。BH1: 一覧の状態で言い分ける (届いていない・取得できていないのに「まだありません」と言い切らない)。
+function officialListNote() {
+  const esc = escapeHtml;
+  if (racesListState === 'pending') return `<p class="hint">${esc(t('official.loading'))}</p>`;
+  if (racesListState === 'failed') return `<p class="race-empty">${esc(listFailText())}</p>`;
+  if (!officialRaces || !officialRaces.length) return `<p class="race-empty">${esc(t('official.none'))}</p>`;
+  return `<p class="hint">${esc(t('official.pickHint'))}</p>`;
+}
+
 function openOfficialDlg() {
   exitEdit();
+  officialSelectSeq++;          // 選択欄を出し直す＝取得中の前の選択は捨てる
   renderOfficialSelect();
   $('ofMsg').textContent = '';
   $('ofEntry').hidden = true;
   $('ofName').value = ''; $('ofAuthor').value = loadMe();   // 自分の GitHub を prefill (W6)
-  if (!officialRaces || !officialRaces.length) $('ofDetail').innerHTML = `<p class="race-empty">${escapeHtml(t('official.none'))}</p>`;
-  else $('ofDetail').innerHTML = `<p class="hint">${escapeHtml(t('official.pickHint'))}</p>`;
+  $('ofDetail').innerHTML = officialListNote();
   const dlg = $('dlgOfficial'); applyI18n(dlg); dlg.showModal();
+  // BH1: 一覧がまだ届いていなければ、届いたときに選択欄と案内を出し直す (開いたまま・大会を選ぶ前だけ)。
+  if (racesListState === 'pending') {
+    racesListSettled().then(() => {
+      if (dlg.open && !$('ofRace').value) { renderOfficialSelect(); $('ofDetail').innerHTML = officialListNote(); }
+    });
+  }
 }
 
 function renderOfficialSelect() {
@@ -301,16 +369,21 @@ function renderOfficialSelect() {
 async function reloadOfficial() {
   $('ofMsg').textContent = t('official.loading');
   clearListCache();
-  await loadOfficialRaces();
+  const p = loadOfficialRaces(true);
+  await p;
+  if (p !== racesListLoad) return;   // 連打: 後から始めた取り直しが画面を出し直す (古い方の続きで選択を消さない)
+  officialSelectSeq++;
   renderOfficialSelect();
   $('ofMsg').textContent = '';
   $('ofEntry').hidden = true;
-  if (!officialRaces || !officialRaces.length) $('ofDetail').innerHTML = `<p class="race-empty">${escapeHtml(t('official.none'))}</p>`;
-  else $('ofDetail').innerHTML = `<p class="hint">${escapeHtml(t('official.pickHint'))}</p>`;
+  $('ofDetail').innerHTML = officialListNote();
+  // ここでは 🏅 の集計 (各大会の詳細) を読み直さない。大会の顔ぶれが変わっていれば、🏅 を次に開いたときに読み直す
+  // (officialListChanged)。
 }
 
 // 大会を選択 → fetchRace → 詳細描画。
 async function selectOfficialRace(id) {
+  const seq = ++officialSelectSeq;
   officialCurrent = null;
   officialCurrentDir = null;
   $('ofEntry').hidden = true;
@@ -318,6 +391,7 @@ async function selectOfficialRace(id) {
   $('ofDetail').innerHTML = `<p class="hint">${escapeHtml(t('official.loading'))}</p>`;
   let race;
   try { race = await fetchRace(id); } catch (e) { race = null; }
+  if (seq !== officialSelectSeq) return;   // 待つ間に別の大会が選ばれた・選択欄を出し直した (BH1)
   if (!race) { $('ofDetail').innerHTML = `<p class="race-empty">${escapeHtml(t('official.fetchFail'))}</p>`; return; }
   officialCurrent = race;
   officialCurrentDir = id;          // 投稿先はこの実在ディレクトリ名で組む (AZ4)
@@ -571,7 +645,10 @@ function submitOfficialEntry() {
 // ============================================================================
 const ME_KEY = 'rumicar.author';
 let officialData = [];          // 全公式レースの {event,entries,result} (集計・打破通知・vs world ghost 用)
-let officialDataLoaded = false;
+let officialDataLoaded = false; // 一覧が決着し (取得できたか races/ が未作成)、各大会の詳細を読み終えた。一覧を取得できていない間は立てない (BH1)
+let officialDataLoad = null;    // 進行中の詳細の取得 (BH1: 取得は 1 本にまとめる)
+let officialDataMissed = 0;     // 一覧にあるのに詳細を取得できなかった大会の数 (BH1: 集計から欠けていることを画面で言う)
+let officialDataIds = null;     // 集計の元にした一覧の大会 (ディレクトリ名の並びの JSON)。今の一覧と比べる (officialListChanged)
 let ladder = null;              // race_ladder.aggregate の結果 {records,boards,drivers,verifiedCount}
 let pendingRaceGhost = null;    // renderRaceResult が stash した直近レースの ghost+course (👻 再生用)
 let ghostRaf = 0;               // ゴーストアニメの rAF id (UI のみ・物理非参加)
@@ -605,19 +682,52 @@ const boardKey = (b) => (typeof b.courseKey === 'string' ? b.courseKey : String(
 const boardLabel = (b) => (typeof b.courseLabel === 'string' ? b.courseLabel : String(b.course));
 
 // 全公式レースの詳細を取得 → race_ladder で集計 (起動時 + ランキング/再読込時)。未シードは [] のまま。
-async function loadAllOfficialData(force) {
-  if (officialDataLoaded && !force) return officialData;
-  const list = officialRaces || [];
-  // v5.2.0: 逐次 await を並列取得へ (1件失敗はスキップ=従来同値)。out は list 一覧順を維持
-  // (aggregate 入力の順序決定性を保つ)。
-  const fetchedRaces = await Promise.all(list.map(async (r) => {
-    try { return await fetchRace(r.id); } catch (e) { return null; /* 1件失敗はスキップ */ }
-  }));
-  const out = fetchedRaces.filter((race) => race && race.event);
-  officialData = out;
-  aggregateNow();
-  officialDataLoaded = true;
-  return officialData;
+// BH1: **大会一覧の決着を待ってから**詳細を読む。旧実装は一覧が届く前に呼ばれる (起動直後に 🏅 を開く) と空の一覧で
+//   集計して「読み終えた」印を立て、後から届いた一覧を読まなかった (「再読込」を押すまで空のまま・打破通知も出ない)。
+//   取得は 1 本にまとめる (起動処理と 🏅 が同時に呼んでも詳細を二重に取りに行かない)。force (「再読込」) は取り直す。
+//   一覧を取得できていない ('failed') ときは「読み終えた」印を立てない (描画は「取得できていません」・打破通知は出さない)。
+//   判定に使うのは**この取得が使った一覧**の状態 (詳細を待つ間に 🏆 の「再読込」が一覧の取り直しに失敗しても、
+//   読めた集計を「取得できていません」に倒さない)。
+function loadAllOfficialData(force) {
+  if (!force) {
+    if (officialDataLoaded) return Promise.resolve(officialData);
+    if (officialDataLoad) return officialDataLoad;
+  }
+  const p = (async () => {
+    try {
+      await racesListSettled();
+      if (officialDataLoad !== p) return officialDataLoad || officialData;   // 「再読込」が取り直しを始めた＝そちらに任せる
+      const list = officialRaces || [], listState = racesListState;
+      // v5.2.0: 逐次 await を並列取得へ (1件失敗はスキップ=従来同値)。out は list 一覧順を維持
+      // (aggregate 入力の順序決定性を保つ)。
+      const fetchedRaces = await Promise.all(list.map(async (r) => {
+        try { return await fetchRace(r.id); } catch (e) { return null; /* 1件失敗はスキップ */ }
+      }));
+      if (officialDataLoad !== p) return officialDataLoad || officialData;
+      const out = fetchedRaces.filter((race) => race && race.event);
+      officialData = out;
+      officialDataMissed = list.length - out.length;
+      officialDataIds = raceIdsOf(list);
+      aggregateNow();
+      officialDataLoaded = listState !== 'failed';
+      return officialData;
+    } finally {
+      // 済んだ (投げた場合も) 取得を「進行中」として残さない。残すと次の呼び出しが終わった取得に相乗りし続ける。
+      if (officialDataLoad === p) officialDataLoad = null;
+    }
+  })();
+  officialDataLoad = p;
+  return p;
+}
+
+// BH1: 集計を読み終えた後に、🏆 の「再読込」が一覧を取り直して大会の顔ぶれが変わったか。旧実装は一覧だけを取り直したので、
+//   🏆 に新しい大会が見えていても 🏅 は古い一覧の集計 (大会が無かったなら「まだありません」) のままだった。
+//   変わっていたら 🏅 を開くときに読み直す。変わっていなければ読み直さない (詳細の取得は大会ごとに API を使いうる)。
+//   一覧を取り直せていない (取得中・失敗) 間は、読めている集計をそのまま使う。「読み終えた」印は倒さない
+//   (倒すと、読み直しの間に番が来た起動時の打破通知が出なくなる)。
+const raceIdsOf = (list) => JSON.stringify((list || []).map((r) => r.id));
+function officialListChanged() {
+  return officialDataLoaded && (racesListState === 'ok' || racesListState === 'missing') && raceIdsOf(officialRaces) !== officialDataIds;
 }
 
 // 起動時の打破通知 (W_spec §8): 自分の公式記録 vs 世界ベスト。抜かれていれば通知1行＋差 (gap)。
@@ -680,9 +790,13 @@ function openRankingsDlg() {
   $('rankYou').value = loadMe();
   $('rankMsg').textContent = '';
   const dlg = $('dlgRankings');
-  if (!officialDataLoaded) {
+  const changed = officialListChanged();
+  if (!officialDataLoaded || changed) {
     $('rankBody').innerHTML = `<p class="hint">${escapeHtml(t('rank.loading'))}</p>`;
-    loadAllOfficialData().then(() => { if (dlg.open) renderRankings(); });
+    // 取得が例外で終わっても「読み込み中」のまま残さない (描画が今の状態を出す・BH1)。
+    // 顔ぶれが変わっていて、すでに取得が走っているなら相乗りする (開き直すたびに取り直さない)。
+    const load = (changed && officialDataLoad) ? officialDataLoad : loadAllOfficialData(changed);
+    load.catch(() => {}).then(() => { if (dlg.open) renderRankings(); });
   } else {
     renderRankings();
   }
@@ -693,8 +807,10 @@ async function reloadRankings() {
   $('rankMsg').textContent = t('rank.loading');
   clearListCache();                   // v7.4.0: 一覧キャッシュを捨ててから取り直す。これが無いと
                                       // 「再読込」を押しても TTL の間は古い一覧のままになる
-  await loadOfficialRaces();          // 一覧を取り直し
-  await loadAllOfficialData(true);    // 詳細を再取得して再集計
+  try {
+    await loadOfficialRaces(true);      // 一覧を取り直し
+    await loadAllOfficialData(true);    // 詳細を再取得して再集計
+  } catch (e) { /* BH1: 例外で終わっても「読み込み中」の表示を残さない (下の描画が今の状態を出す) */ }
   $('rankMsg').textContent = '';
   renderRankings();
 }
@@ -721,10 +837,20 @@ function titleLabel(x) {
 function renderRankings() {
   const esc = escapeHtml;
   const me = loadMe();
+  // BH1: 公式記録を読み終えていないのに空の集計を描くと「まだ記録がありません」と言い切ってしまう。読み込み中
+  //   (一覧が届いていない・詳細を取得中) は「読み込み中」、一覧を取得できていないときはそう出す (「再読込」で取り直せる)。
+  if (!officialDataLoaded) {
+    const loading = !!officialDataLoad || racesListState === 'pending';
+    $('rankBody').innerHTML = loading ? `<p class="hint">${esc(t('rank.loading'))}</p>` : `<p class="race-empty">${esc(listFailText())}</p>`;
+    return;
+  }
   const data = aggregateNow();   // BF4: 今の状態 (投稿一覧・言語) で枠を決める
   const { boards, drivers, verifiedCount } = data;
-  if (!verifiedCount || !boards.length) { $('rankBody').innerHTML = `<p class="race-empty">${esc(t('rank.empty'))}</p>`; return; }
-  let html = `<p class="hint rank-verifiednote">${esc(t('rank.verified'))} · ${esc(t('rank.intro'))}</p>`;
+  // BH1: 一覧にあるのに詳細を取得できなかった大会があるときは、集計から欠けていると言う。旧実装は黙って飛ばしたので、
+  //   オフラインで全部を取得できなかったときも「まだ検証済の公式記録がありません」と言い切っていた。
+  const missedNote = officialDataMissed > 0 ? `<p class="race-empty rank-partialnote">${esc(partialText(officialDataMissed))}</p>` : '';
+  if (!verifiedCount || !boards.length) { $('rankBody').innerHTML = missedNote || `<p class="race-empty">${esc(t('rank.empty'))}</p>`; return; }
+  let html = missedNote + `<p class="hint rank-verifiednote">${esc(t('rank.verified'))} · ${esc(t('rank.intro'))}</p>`;
   // AK6: ボード上に当時のエンジン版で樹立された記録が混ざるとき、現行で完全再現しない可能性を1行で正直明示
   // (記録は除外せず条件付きで保持・尊重)。全記録が現行版なら出さない。
   if (data.records.some((r) => r.engineVer && r.engineVer !== APP_VERSION)) {
@@ -842,6 +968,15 @@ function renderRankings() {
 function raceForEvent(eventId) {
   return officialData.find((r) => ((r.result && r.result.eventId) || (r.event && r.event.id)) === eventId) || null;
 }
+// 記録の出どころの大会 (取得済みの {event,entries,result})。
+// BH1: 集計がレコードごとに覚えている大会 (race_ladder raceOfRecord) を引く。eventId は event.json / result.json の中身で、
+//   重複も欠落もしうる (大会の実体は上流のディレクトリ)。eventId で探し直すと、重複したとき最初の大会 (別のコース・
+//   別のエントリー) で 👻 が走り、eventId の無い大会は引けなかった (BF-4 ② (c))。
+//   古い race_ladder.js がキャッシュに残れば raceOfRecord が無い＝従来どおり eventId で探す。
+function raceForRecord(rec) {
+  const src = typeof ladderNS.raceOfRecord === 'function' ? ladderNS.raceOfRecord(rec) : null;
+  return src || raceForEvent(rec.eventId);
+}
 // 記録に対応するエントリー (program+carDef) を author / programRef で引く。
 function entryForRecord(race, rec) {
   if (!race || !race.entries) return null;
@@ -860,7 +995,7 @@ function ghostVsWorld(cls, course) {
   if (!ladder) return;
   const rec = worldBest(ladder.boards, cls, course);
   if (!rec) { logLine(t('ghost.none')); return; }
-  const race = raceForEvent(rec.eventId);
+  const race = raceForRecord(rec);
   const wEntry = race ? entryForRecord(race, rec) : null;
   if (!race || !wEntry) { logLine(t('ghost.none')); return; }
   const rcourse = resolveRaceCourse(race.event.course);

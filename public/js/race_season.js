@@ -17,6 +17,9 @@ import { realAuthor } from './race_ladder.js';
 import * as ladderNS from './race_ladder.js';
 const courseKeyOf = (r) => (typeof ladderNS.courseKeyOf === 'function' ? ladderNS.courseKeyOf(r) : String(r.course));
 const joinLabels = (rows) => (typeof ladderNS.joinLabels === 'function' ? ladderNS.joinLabels(rows) : String(rows[0] && rows[0].course));
+// BH1: 「何大会か」を数える鍵 (race_ladder の raceKeyOf＝出どころの大会そのもの。eventId は重複・欠落しうる)。
+//   BH1 で足した名前なので同じく名前空間で受け、無ければ従来どおり eventId。
+const raceKeyOf = (r) => (typeof ladderNS.raceKeyOf === 'function' ? ladderNS.raceKeyOf(r) : r.eventId);
 
 // ── 配点 (規定) ─────────────────────────────────────────────────────────────
 // AS9〜AS12 の物理ブロックは「新しい絶対定数ゼロ」を設計目標にできたが、**選手権の配点は物理法則では
@@ -58,7 +61,7 @@ export function championships(records, dnfs = []) {
 
   for (const r of (records || [])) {
     const g = grp(r.season, r.cls);
-    g.events.add(r.eventId);
+    g.events.add(raceKeyOf(r));
     const a = realAuthor(r.author);
     if (!a) continue;                                  // 補充車は順位を占めるが選手権には入らない
     const p = row(g, a);
@@ -66,17 +69,17 @@ export function championships(records, dnfs = []) {
     if (r.rank === 1) p.wins++;
     if (r.rank <= 3) p.podiums++;
     p.finishes++; p.starts++;
-    p.events.add(r.eventId);
+    p.events.add(raceKeyOf(r));
     if (p.bestRank == null || r.rank < p.bestRank) p.bestRank = r.rank;
   }
   for (const d of (dnfs || [])) {
     const g = grp(d.season, d.cls);
-    g.events.add(d.eventId);
+    g.events.add(raceKeyOf(d));
     const a = realAuthor(d.author);
     if (!a) continue;
     const p = row(g, a);
     p.dnfs++; p.starts++;                              // リタイアは 0 点だが出走ではある
-    p.events.add(d.eventId);
+    p.events.add(raceKeyOf(d));
   }
 
   const out = [];
