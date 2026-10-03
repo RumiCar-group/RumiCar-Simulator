@@ -273,7 +273,7 @@ let running = false;      // 全車の走行状態 (ユーザーの開始/停止
 let paused = false;
 let stepRequest = false;
 let speed = 3;   // 再生速度の初期値 (×)。スライダー既定と一致させる。
-let interact = true;      // 他車を障害物として扱うか (検知 + 重なり防止)。既定 ON
+let interact = true;      // 他車を障害物として扱うか (検知 + 接触で停止〔v2 は押し合い〕・重なったら抜け出す)。既定 ON
 let rearOn = false;       // 後方センサー(任意装備)を有効にするか。既定 OFF=前方3つのみ(実機 faithful)
 let encoderOn = false;    // 車輪エンコーダ(任意装備)を有効にするか。既定 OFF。競技 TC/ABS で使う
 let tireSet = 'normal';   // v2 タイヤセット (normal|slip|rain)。既定 normal。slip=疑似ドリフト環境 (AO6)・rain=ウェット向き (AS9)。v2 のみ物理反映
