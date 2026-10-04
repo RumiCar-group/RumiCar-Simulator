@@ -33,6 +33,8 @@
 //      相異性・安定性だけでは値の変化を捕まえられない（層 4 の実測: digest の初期値を変えても A〜G は緑だった）。
 //      **この表を刻み直すのは「そのコースの練習記録を別の記録として始め直す」決定**であり、刻み直した版の
 //      CHANGELOG に「どのコースの練習ベストが新しく始まるか」を書くこと（黙って刻み直さない）。
+//   L) BH3: 線の中点を往復するだけでは周回にならず、練習ベストも書かれない（本ゲートの治具 `lapOnce` は BH3 まで
+//      この往復で記録を作っていた＝「回っていないのに数える」不具合に依存していた。今は線の外を回って戻る）。
 //   G) 検出力: 一時ツリーへ複製して鍵を壊す変異を入れ、上の章が赤くなることを測る（product は無改変）。
 //
 // 【測らないこと】指紋の計算時間（`main.js`・`fleet.js` の注記の値は凍結した点測定）。HUD の描画そのもの
@@ -84,15 +86,36 @@ async function loadTree(dir) {
 }
 
 // フィニッシュラインを負側→正側へ横切らせて 1 周（峠は 1 回のゴール）を計上させる。記録は product が書く。
-function lapOnce(m, course, carType, sec) {
+// 【BH3・2026-10-04】周回は「逆向きに線を通ったら、同じ回数だけ順方向に通り直すまで数えない」（lap.js の【BH3】）。
+//   ∴ 線の正側から負側へは**線分の線のはるか外（コースの外）を回って**戻る＝コースを 1 周したのと同じ通り方をさせる。
+//   置き換え前の治具は線の中点を 正側 → 負側 → 正側 と往復させていた（＝BH3 が直した不具合「回っていないのに数える」に
+//   依存していた）。往復では周回にならず記録も書かれないことは下の shuttleOnce と L) が測る。
+const finishFrame = (course) => {
   const f = course.finish;
+  const ex = f.x2 - f.x1, ey = f.y2 - f.y1, len = Math.hypot(ex, ey);
   const mx = (f.x1 + f.x2) / 2, my = (f.y1 + f.y2) / 2;
-  const P = (s) => [mx + f.fx * s, my + f.fy * s];
+  const D = 4 * (course.bounds.w + course.bounds.h) + 4 * len;   // 線分に沿ってコースの外まで
+  return { D, P: (s, q = 0) => [mx + f.fx * s + (ex / len) * q, my + f.fy * s + (ey / len) * q] };
+};
+function lapOnce(m, course, carType, sec) {
+  const { P, D } = finishFrame(course);
+  const tr = new m.lap.LapTracker(course, { carType });
+  tr.update(0, ...P(0.30), true);         // 基準点（prev）＝線の正側
+  tr.update(0, ...P(0.30, D), true);      // 正側のまま、線分に沿ってコースの外へ
+  tr.update(0, ...P(-0.30, D), true);     // コースの外で負側へ（線分とは別の弦＝借りにならない）
+  tr.update(sec, ...P(-0.01), true);      // 線の手前へ戻る（ここで sec 秒経過）
+  const lapped = tr.update(0, ...P(0.01), true);   // 負→正へ線分の中点を横切る＝計上
+  return { tr, lapped };
+}
+// 置き換え前の治具そのもの（update 4 回）: 線の中点を 正側 → 負側 → 正側 と往復するだけ（コースは回らない）。
+// v9.0.0 まではこれで 1 周と数え、練習ベストを書いた（2 回目の update が「線の正側へ 0.25 m より離れて武装」に当たる）。
+function shuttleOnce(m, course, carType, sec) {
+  const { P } = finishFrame(course);
   const tr = new m.lap.LapTracker(course, { carType });
   tr.update(0, ...P(0.30), true);         // 基準点（prev）
-  tr.update(0, ...P(0.30), true);         // 正側へ armDist(≤0.25) より離れて武装
-  tr.update(sec, ...P(-0.01), true);      // 負側へ（ここで sec 秒経過）
-  const lapped = tr.update(0, ...P(0.01), true);   // 負→正へ横切る＝計上
+  tr.update(0, ...P(0.30), true);         // 正側へ 0.25 m より離れた（v9.0.0 までの武装）
+  tr.update(sec, ...P(-0.01), true);      // 線の中点を逆向きに通って負側へ（ここで sec 秒経過）
+  const lapped = tr.update(0, ...P(0.01), true);   // 負→正へ通り直す
   return { tr, lapped };
 }
 const built = (m) => SPECS.map((s) => m.crs.buildFromSpec(s));
@@ -478,6 +501,29 @@ report('E) 往復の不一致', checkE(real));
 console.log('\n  F) 指紋の安定性・チャレンジ・名前で引く呼び出しの残存');
 report('F) 安定性・消費側の違反', await checkF(real));
 
+// ── L) 往復は周回にならず、記録も書かれない（BH3）────────────────────────────────────
+function checkL(m) {
+  const v = [];
+  store.clear();
+  let n = 0;
+  for (const c of built(m).filter((c) => c.finish && !c.touge)) {
+    n++;
+    const { tr, lapped } = shuttleOnce(m, c, 'normal_fr', 3);
+    if (lapped || tr.laps !== 0 || tr.bestLap != null) v.push(`${c.name}: 線の中点の往復で ${tr.laps} 周・ベスト ${tr.bestLap}`);
+  }
+  const keys = [...store.keys()].filter((k) => k.startsWith('rumicar.practice'));
+  if (keys.length) v.push(`往復だけで練習ベストが ${keys.length} 件書かれた（例 ${keys[0]} = ${store.get(keys[0])}）`);
+  if (n < 30) v.push(`周回コースが ${n} 本しか検査されていない`);
+  // 対照: 同じ道具で 1 周させれば書かれる（＝上が「何も書けない治具」だから緑なのではない）
+  const c0 = built(m).find((c) => c.finish && !c.touge);
+  lapOnce(m, c0, 'normal_fr', 20);
+  if (![...store.keys()].some((k) => k.startsWith('rumicar.practiceShape.'))) v.push('対照: 1 周させても練習ベストが書かれない');
+  store.clear();
+  return v;
+}
+console.log('\n  L) 往復は周回にならず、練習ベストも書かれない（BH3）');
+report('L) 往復で数えた周回・書かれた記録', checkL(real));
+
 // ── G) 検出力（変異）─────────────────────────────────────────────────────────────
 console.log('\n  G) 変異試験（一時ツリーの lap.js / course_digest.js / fleet.js を壊して A)〜F)・P) が赤くなるか）');
 const MUTATIONS = [
@@ -506,9 +552,11 @@ const MUTATIONS = [
     (s) => s.replace('  const memo = {};   // BE2:', '  const memo = _lapMemo;   // BE2:').replace('export function rebuildSpawns(', 'const _lapMemo = {};\nexport function rebuildSpawns('), 'fleet.js'],
   ['旧記録を読まない（後方互換を捨てる）', 'A',
     (s) => s.replace('  const old = parseRec(legacyBestKey(course.name, carType));', '  const old = null;')],
+  ['逆向きに線を通った分を借りにしない（BH3 前＝往復で 1 周と数え、記録を書く）', 'L',
+    (s) => s.replace('      } else if (c && this._cg) c.owe += 1;', '      } else if (c && this._cg) c.owe += 0;')],
 ];
 const RAWS = Object.fromEntries(['lap.js', 'course_digest.js', 'fleet.js'].map((f) => [f, fs.readFileSync(path.join(JS_ROOT, f), 'utf8')]));
-const CH = { A: checkA, B: checkB, C: checkC, D: checkD, E: checkE, F: checkF, P: checkP };
+const CH = { A: checkA, B: checkB, C: checkC, D: checkD, E: checkE, F: checkF, P: checkP, L: checkL };
 const miss = [], noop = [];
 for (const [name, chapter, fn, file = 'lap.js'] of MUTATIONS) {
   const RAW = RAWS[file];

@@ -78,58 +78,81 @@ console.log('\n=== B) D14: フルスケール latLoadK — 極端駆動でも状
   applyRegime(null);
 }
 
-console.log('\n=== C) D12: lap 武装距離 — 出荷コースは 0.25 不変・極小ループは到達可能な閾値で計上 ===');
+console.log('\n=== C) D12: 極小ループ・ベンチでも周回を数えられる (BH3 で武装距離を廃止＝コースを回る軌跡で測る) ===');
 {
-  // 出荷の全 (非峠) コースで armDist===0.25 (=arming byte 不変)。峠は touge 分岐で armDist 未使用。
-  // AY2 (2026-09-08): 舵角限界ベンチ (`bench` 持ち) は **本節が用意した縮小機構そのものの対象**＝極小ループで、
-  //   0.25 のままだと永久に武装せず 1 周も計上できない (下の「極小ループ」検査と同じ現象)。∴ 0.25 不変の対象からは
-  //   外し、**代わりに「縮小が効いていること」を積極的に検査する** (枠を緩めるのではなく別の述語を足す)。
-  //   既存コースの verifyHash 不変はベンチが末尾追加ゆえ影響を受けない。
-  let nonTougeChanged = 0, built = 0, benchN = 0, benchShrunk = 0, benchMin = Infinity, benchMax = -Infinity;
+  // AK5 当時の仕組み: フィニッシュ線の正側へ armDist (固定 0.25m・極小ループは 0.5*R+ へ縮小) 離れてから武装し、負側→正側の
+  //   通過を 1 周と数えた。本節は「出荷コースの armDist が 0.25 のまま」「極小ループ・ベンチでは縮小して数えられる」を測っていた。
+  // BH3 (2026-10-04) で武装を廃止した (lap.js の【BH3】): 逆向きに線を通った分の「借り」が発走直後の二重計上を防ぐので要らず、
+  //   残すと ①線を逆向きに戻って通り直すだけで 1 周になる ②内側の線では縮小後の武装距離にも届かず数え漏れる (BH2 実測 22 台＝
+  //   ベンチの道幅 3.5 台分の 3 本)。∴ 本節の主張「極小ループ・ベンチでも周回を数えられる」は変えず、測り方を
+  //   **コースを実際に回る軌跡**へ置き換えた。旧治具はフィニッシュ線の中点を法線方向に往復させるだけで、今回直した不具合
+  //   そのもの (回っていないのに数える) に依存していた＝改修後は 0 周になることを下で固定する。
+  // 軌跡: 中心線つきのコース (track) で、フィニッシュ線分の中点を法線方向に通り、中心線の頂点を順にたどって戻る。
+  const geo = (c) => {
+    const f = c.finish, ex = f.x2 - f.x1, ey = f.y2 - f.y1, len = Math.hypot(ex, ey);
+    let nx = -ey / len, ny = ex / len; if (nx * f.fx + ny * f.fy < 0) { nx = -nx; ny = -ny; }   // 線分の法線 (正方向の側)
+    return { mx: (f.x1 + f.x2) / 2, my: (f.y1 + f.y2) / 2, nx, ny };
+  };
+  // loops 周ぶん与えて、数えた周回を返す。behind=true は線の手前から発走 (最初の通過は発走の通過)。
+  const circulate = (c, loops, behind = false) => {
+    const g = geo(c), cl = c.centerline;
+    const d = Math.min(0.01, 0.25 * Math.hypot(cl[1][0] - cl[0][0], cl[1][1] - cl[0][1]));
+    const lt = new LapTracker(c, { persist: false });
+    const put = (x, y) => lt.update(1 / 60, x, y, true);
+    if (behind) lt.update(0, g.mx - d * g.nx, g.my - d * g.ny, true);
+    put(g.mx + d * g.nx, g.my + d * g.ny);
+    for (let k = 0; k < loops; k++) { for (let i = 1; i < cl.length; i++) put(cl[i][0], cl[i][1]); put(g.mx - d * g.nx, g.my - d * g.ny); put(g.mx + d * g.nx, g.my + d * g.ny); }
+    return lt.laps;
+  };
+  let tracks = 0, benchN = 0; const bad = [];
   for (const spec of specs) {
     let c; try { c = buildFromSpec(JSON.parse(JSON.stringify(spec))); } catch (e) { continue; }
-    if (!c.finish || !c.walls) continue;
-    built++;
-    const lt = new LapTracker(c, { persist: false });
-    if (spec.bench) {
-      benchN++;
-      if (lt.armDist > 0 && lt.armDist < 0.25) benchShrunk++;
-      benchMin = Math.min(benchMin, lt.armDist); benchMax = Math.max(benchMax, lt.armDist);
-      continue;
-    }
-    if (!c.touge && lt.armDist !== 0.25) nonTougeChanged++;
+    if (!c.finish || c.touge || !Array.isArray(c.centerline)) continue;
+    tracks++; if (spec.bench) benchN++;
+    const n = circulate(c, 2);
+    if (n !== 2) bad.push(`${c.name}: ${n}`);
   }
-  ok(nonTougeChanged === 0, `非峠の出荷コース ${built - benchN} 件 (ベンチ ${benchN} 件を除く) すべて armDist===0.25 (arming byte 不変・違反 ${nonTougeChanged})`);
-  ok(benchN > 0 && benchShrunk === benchN,
-    `舵角限界ベンチ ${benchN} 件すべてで armDist が 0<x<0.25 へ縮小 (実測 ${benchMin === Infinity ? '--' : benchMin.toFixed(4)}〜${benchMax === -Infinity ? '--' : benchMax.toFixed(4)}・縮小 ${benchShrunk}/${benchN}) ` +
-    `= 極小ループでも周回を計上できる (0.25 固定なら 0 周のまま=下の検出力検査と同じ現象)`);
-  const ovalLt = new LapTracker(oval, { persist: false });
-  ok(ovalLt.armDist === 0.25, `正準オーバル armDist===0.25 (厳密・verifyHash 不変の根拠)`);
+  ok(tracks >= 30 && benchN > 0 && bad.length === 0, `中心線つきの出荷の周回コース ${tracks} 件 (舵角限界ベンチ ${benchN} 件を含む) すべてで、中心線を 2 周して 2 周と数える (違反 ${bad.length}${bad.length ? ': ' + bad.slice(0, 3).join(' / ') : ''})`);
 
-  // 極小ループ: R+<0.25 → 固定0.25では永久に武装せず=0周。AK5 で 0.5*R+ へ縮小し計上できる。
+  // 極小ループ: 線の正側に壁が 0.25m も伸びない (v9.0.0 の固定 0.25m では永久に武装しなかった)。
   const tiny = buildFromSpec({ name: '極小ループ', kind: 'track', shape: 'ellipse', rx: 0.2, ry: 0.14, width: 0.1 });
   const f = tiny.finish; const mx = (f.x1 + f.x2) / 2, my = (f.y1 + f.y2) / 2;
   let rPlus = -Infinity;
   for (const w of tiny.walls) for (const [x, y] of [[w.x1, w.y1], [w.x2, w.y2]]) { const s = (x - mx) * f.fx + (y - my) * f.fy; if (s > rPlus) rPlus = s; }
-  const tNew = new LapTracker(tiny, { persist: false });
-  const tOld = new LapTracker(tiny, { persist: false }); tOld.armDist = 0.25;   // 旧挙動を同オラクルで再現 (検出力)
-  ok(rPlus < 0.25 && tNew.armDist < 0.25, `極小ループ R+=${rPlus.toFixed(3)}<0.25 → 新 armDist=${tNew.armDist.toFixed(3)} (縮小)`);
-  // 共通の周回軌跡: フィニッシュ中点を法線方向に -k→+k→-k と往復 (3周分)。各 -k→+k で線分中点を負→正に通過。
-  const nx = f.fx, ny = f.fy; const k = 0.9 * rPlus;
-  const feed = (lt) => {
-    let laps = 0;
-    const at = (s) => ({ x: mx + s * nx, y: my + s * ny });
-    let p = at(-k); lt.update(0, p.x, p.y, true);
-    for (let lap = 0; lap < 3; lap++) {
-      for (const s of [-k, -k / 2, 0.0, k / 2, k]) { p = at(s); if (lt.update(1 / 60, p.x, p.y, true)) laps++; }
-      for (const s of [k, k / 2, -k / 2, -k]) { p = at(s); lt.update(1 / 60, p.x, p.y, true); }
+  ok(rPlus < 0.25, `極小ループ: 線の正側の壁は R+=${rPlus.toFixed(3)}m まで (<0.25)`);
+  const lapsAhead = circulate(tiny, 3), lapsBehind = circulate(tiny, 3, true);
+  ok(lapsAhead === 3, `極小ループを線の上から 3 周: 計上 ${lapsAhead} 周 (=3)`);
+  ok(lapsBehind === 3, `極小ループを線の手前から発走して 3 周: 計上 ${lapsBehind} 周 (=3・最初の通過は発走の通過で数えない)`);
+  // 内側の線 (x 半径 0.16・y 半径 0.092 の楕円): 線の先へ 0.092m までしか行かない＝v9.0.0 の武装距離 0.5*R+=0.095m に届かない。
+  //   v9.0.0 は 1 周も数えなかった (＝本節が AK5 で塞いだはずの「永久に数えられない」が内側の線では残っていた)。
+  {
+    const cl = tiny.centerline, n = cl.length;
+    let cx = 0, cy = 0; for (const q of cl) { cx += q[0]; cy += q[1]; } cx /= n; cy /= n;
+    const lt = new LapTracker(tiny, { persist: false });
+    const qx = cx + (mx - cx) * 0.8, qy = cy + (my - cy) * 0.8, d = 0.004;   // フィニッシュ線分を内寄り (中点から 0.04m) で通る
+    let maxS = -Infinity;
+    const put = (x, y) => { const s = (x - mx) * f.fx + (y - my) * f.fy; if (s > maxS) maxS = s; lt.update(1 / 60, x, y, true); };
+    lt.update(0, qx + d * f.fx, qy + d * f.fy, true);
+    for (let k = 0; k < 3; k++) {
+      for (let i = 1; i < n; i++) { const th = 2 * Math.PI * i / n; put(cx + 0.16 * Math.cos(th), cy + 0.092 * Math.sin(th)); }
+      put(qx - d * f.fx, qy - d * f.fy); put(qx + d * f.fx, qy + d * f.fy);
     }
-    return laps;
-  };
-  const lapsNew = feed(tNew), lapsOld = feed(tOld);
-  // 3周分の往復のうち初回は「武装(arm)」に費やされ計上されない (実 LapTracker のヒステリシス仕様)=2計上が正。
-  ok(lapsNew >= 2, `極小ループ 新挙動=計上 ${lapsNew}周 (≥2=武装して数えられる・初回は arm)`);
-  ok(lapsOld === 0, `検出力: 旧挙動 (armDist=0.25) =計上 ${lapsOld}周 (=0=固定閾値では永久に数えられない)`);
+    ok(maxS < 0.5 * rPlus && lt.laps === 3, `極小ループの内側の線を 3 周 (線の先へ最大 ${maxS.toFixed(3)}m < v9.0.0 の武装距離 ${(0.5 * rPlus).toFixed(3)}m): 計上 ${lt.laps} 周 (=3・v9.0.0 は 0 周)`);
+  }
+  // 旧治具 (置き換え前): フィニッシュ中点を法線方向に -k→+k→-k と 3 往復。回っていないので 0 周が正 (v9.0.0 までは 2 周と数えた)。
+  const nx = f.fx, ny = f.fy; const k = 0.9 * rPlus;
+  const tOld = new LapTracker(tiny, { persist: false });
+  let shuttleLaps = 0;
+  {
+    const at = (s) => ({ x: mx + s * nx, y: my + s * ny });
+    let p = at(-k); tOld.update(0, p.x, p.y, true);
+    for (let lap = 0; lap < 3; lap++) {
+      for (const s of [-k, -k / 2, 0.0, k / 2, k]) { p = at(s); if (tOld.update(1 / 60, p.x, p.y, true)) shuttleLaps++; }
+      for (const s of [k, k / 2, -k / 2, -k]) { p = at(s); tOld.update(1 / 60, p.x, p.y, true); }
+    }
+  }
+  ok(shuttleLaps === 0 && tOld.laps === 0, `線の中点を 3 往復するだけ (旧治具): 計上 ${tOld.laps} 周 (=0＝回っていない周回を数えない・BH3)`);
+  ok(!('armDist' in tOld) && !('armed' in tOld), 'LapTracker に武装 (armDist/armed) が残っていない');
 }
 
 console.log('\n=== D) D8: レース fit ガード — 領域/コース不一致の超過は減・capacity は素通し ===');

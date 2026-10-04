@@ -29,7 +29,9 @@ export function fleetEdgesOf(M, sl) {
 
 // ▶ を押した直後の状態を作る。course は組み立て済みのコース（出荷コースは buildFromSpec・投稿コースは acceptCourseData）、
 // regime はそのコースの推奨領域、userK は UI の車体倍率（既定 0.8×）、progKey は全車に載せるプログラム（UI 既定 = Python 版 Apex Hunter）。
-export function liveSetup(M, { course, regime, n, mode, userK = 0.8, progKey = 'py_normal_fr' }) {
+// BH3: prog = { lang, code } を渡すとサンプルに無いプログラムを載せる。persist = true で練習ベストを読み書きする（本物の ▶ と同じ。
+//   既定 false＝測定が localStorage に触れない）。どちらも渡さなければ従来と同じ。
+export function liveSetup(M, { course, regime, n, mode, userK = 0.8, progKey = 'py_normal_fr', prog: progArg = null, persist = false }) {
   const { config, dyn, fleet, fitguard, programs, runner, api } = M;
   config.SENSOR_NOISE.on = false;
   config.setPhysicsMode(mode);
@@ -39,15 +41,15 @@ export function liveSetup(M, { course, regime, n, mode, userK = 0.8, progKey = '
   const fx = { regime: (r) => dyn.applyRegime(r), scale: (k) => config.setCarScale(k), sync: () => {}, log: () => {} };
   const fit = fitguard.settleFitRatio(course, { regime, userK, slotCount: n, reason: 'race' }, fx);
   const nUse = Math.min(n, fit.capN);
-  const prog = programs.PROGRAM_BY_KEY[progKey];
+  const prog = progArg || programs.PROGRAM_BY_KEY[progKey];
   const slots = [];
-  for (let i = 0; i < nUse; i++) slots.push(fleet.makeSlot({ i, lang: prog.lang, src: prog.code, course, slotCount: slots.length, logFor: () => () => {}, persist: false }));
-  fleet.rebuildSpawns(slots, course, null, { persist: false });   // startAuto
+  for (let i = 0; i < nUse; i++) slots.push(fleet.makeSlot({ i, lang: prog.lang, src: prog.code, course, slotCount: slots.length, logFor: () => () => {}, persist }));
+  fleet.rebuildSpawns(slots, course, null, { persist });   // startAuto
   for (const s of slots) {
     s.car.reset(s.spawn);
     s.world._pendingDelay = 0; s.world._others = [];
     s.hostEnv = api.buildApi(s.world);
-    s.lap.reset(course, { carType: s.carType, tire: s.world.tire, wear: s.world.wear, gear: s.world.gear, persist: false });
+    s.lap.reset(course, { carType: s.carType, tire: s.world.tire, wear: s.world.wear, gear: s.world.gear, persist });
     s.controller = runner.buildController(s.src, s.lang, s.hostEnv);
     s.controller.setup();
     s.running = true; s.loopTimer = 0;

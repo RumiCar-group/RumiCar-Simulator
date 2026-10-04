@@ -20,11 +20,11 @@
   "canonicalNode": {
     "node": "22.22.1",
     "v8": "12.4.254.21-node.35",
-    "resultSha256": "e566f188ca3088811816ae963f06fcea5aae7854e14e9cfbf519199ced055d67",
-    "pinnedAt": "2026-10-03",
+    "resultSha256": "9e63f66f9e927ef251eca908fb5fb87409682597c3735c553d8eb8f87487c760",
+    "pinnedAt": "2026-10-04",
     "eventId": "official-sample-circuit",
     "appVersion": "v9.0.0",
-    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=c731ecce 照合で検証済。理由: BG4: Stage BG 結了 v9.0.0（MAJOR/AQ-4・利用者裁定 2026-10-03。APP_VERSION が engineFingerprint 経由で resultSha256 を変える・AQ-1。verifyHash=c731ecce は不変）"
+    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=cb6afdeb 照合で検証済。理由: BH3: 周回の数え方の是正（逆向きにフィニッシュ線を戻って通り直しても数えない）。公式サンプル大会で 1 周していなかった Circuit-FR が完走から外れる（verifyHash c731ecce → cb6afdeb・完走 3 → 2 台）。2026-10-04 利用者承認"
   },
   "history": [
     {
