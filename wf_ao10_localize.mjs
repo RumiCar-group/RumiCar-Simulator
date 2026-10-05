@@ -17,6 +17,8 @@
 import { buildFromSpec } from './public/js/course.js';
 import { runRace } from './public/js/race_engine.js';
 import { PROGRAMS } from './public/js/programs.js';   // 出荷本体 (comp_localize) を検証 (CI-9)
+import { MESSAGES } from './public/js/i18n/messages.js';   // BH6: 利用者向けの説明の数字を実測と照合する (⑥)
+import { readFileSync } from 'node:fs';
 
 // ───────────────────────── 1. comp_localize プログラム源 (Python) ─────────────────────────
 // 反応駆動 (毎周同一ライン=指紋が周回間で再現。実測: 同φ周回間差 ΔC~3100/ΔL~1950 ≪ 1bin あたり
@@ -676,6 +678,9 @@ const J6 = judge6(rows0, rowsR);
   }
   if (scR) console.log('  車' + RECALL_CAR + ' 前方他車 検知 recall: ' + (scR.recall != null ? (scR.recall * 100).toFixed(0) + '% (前に車がいた tick=' + scR.carTrue + ') / 基準 ≥70%・tick > 30' : '— (前方車なし)') + ' ／ 誤報率（前に車がいない tick で立つ割合）' + (scR.falseRate != null ? (scR.falseRate * 100).toFixed(0) + '% (' + scR.noCar + ' tick)' : '—') + '＝記録');
 }
+// 【BH6】集団の中を走る車（車4）の周回内の位置推定＝記録（判定しない。利用者向けの説明に書いた「集団の中では地図がぶれる」の出どころ＝⑥）。
+const scInR = scoreMultiIn(rowsR, RACE_LAPS);
+if (scInR) console.log('  車' + RECALL_CAR + ' 位置推定 (6 台レース中・周回内＝同じ周で較正): RMSE ' + scInR.per.map((x) => `lap${x.lap} ${x.rms.toFixed(2)}`).join(' / ') + ' bin＝記録（集団の中の車は地図がぶれる）');
 // 判定の検出力: 推定を壊した行に同じ判定を当てて、**狙った判定が**赤になること（判定が空振り・恒真でないことを、判定ごとにゲート自身が見張る）。
 //   [差し替え, 赤になるべき判定の札]。「周ごとに原点」「1 周目だけ一様にずれる」は周回内では見えず、発散（別の周で較正した誤差の最大）だけが止める。
 //   「12 bin 刻み」は発散の上限の内側で、周回内だけが止める。
@@ -724,5 +729,72 @@ for (const [label, want, hit, tags] of POWER) if (!hit) fail('判定の検出力
 if (sc.beta.mae == null) fail('β 再挑戦 未測定');
 // ⑤ 演算予算: hard limit 200000 の ≪1% (StepLimit を投げない)。
 if (!(sc.budget.max < 20000)) fail('演算予算 max ' + sc.budget.max + ' ≥ hard limit の 10%');
+// ⑥ 【BH6・2026-10-05】利用者向けの説明に書いた数字 = この走りの実測。BH5 で、サンプルの説明（programs.js の learns・アプリ内の
+//   prog.comp_localize.learns 日英・physics_model §13.8 日英）の「他車5台混走でも約0.8bin・前方検知recall96%」が実測と合わないまま
+//   残っていたことが分かった（レースの展開が変わっても、説明の数字を見張るものが無かった）。∴ 説明の 5 か所から数字を抜き出し、
+//   ゲートが測った値（表示と同じ丸め）と突き合わせる。走りが変わって実測が動いたら、ここが赤になる＝説明も直す合図。
+{
+  const { scM, scIn, scR } = J6;
+  const meas = (scIn && scM && scR && scInR && scR.recall != null && scR.falseRate != null) ? [
+    Math.min(...scIn.per.map((x) => x.rms)).toFixed(2), Math.max(...scIn.per.map((x) => x.rms)).toFixed(2),   // 車0 の周回内 RMSE の最小・最大
+    scM.maxErr.toFixed(1),                                                                                  // 車0 の別の周で較正した誤差の最大
+    scInR.rmsMax.toFixed(1),                                                                                // 車4 の周回内 RMSE の最大
+    (scR.recall * 100).toFixed(0), (scR.falseRate * 100).toFixed(0),                                        // 車4 の前方検知・誤報率
+  ] : null;
+  const JA = /周回内([\d.]+)〜([\d.]+)binで発散なし\(別の周で合わせた誤差は最大([\d.]+)bin\)。ただし集団の中を走る車は地図がぶれ\(5番手スタートの車は周回内で最大([\d.]+)bin\)、前方の他車の検知は(\d+)%で、前に車がいないのに「他車あり」と出る割合が(\d+)%ある/;
+  const DOCS = [
+    ['programs.js comp_localize の learns', () => PROGRAMS.find((p) => p.key === 'comp_localize').learns, JA],
+    ['prog.comp_localize.learns (ja)', () => MESSAGES['prog.comp_localize.learns'].ja, JA],
+    ['prog.comp_localize.learns (en)', () => MESSAGES['prog.comp_localize.learns'].en, /stays at ([\d.]+)–([\d.]+) bin within a lap with no divergence \(calibrated on a different lap, the error is at most ([\d.]+) bin\)\. But a car running in the pack gets a smeared map \(the car starting fifth reaches up to ([\d.]+) bin within a lap\), detection of a car ahead is (\d+)%, and "car ahead" is raised (\d+)% of the time/],
+    ['docs/physics_model.md §13.8', () => readFileSync(new URL('./docs/physics_model.md', import.meta.url), 'utf8'), /周回内 ([\d.]+)〜([\d.]+) 区画で、別の周で合わせた誤差も最大 ([\d.]+) 区画に収まります。[^\n]*?5 番手スタートの車は周回内の誤差\(周ごとの RMSE\)が最大 ([\d.]+) 区画になり、前方の他車の検知\([^)]*\)は (\d+)%、前に車がいないのに「他車あり」と出る割合が (\d+)% あります/],
+    ['docs/physics_model.en.md §13.8', () => readFileSync(new URL('./docs/physics_model.en.md', import.meta.url), 'utf8'), /stays at ([\d.]+)–([\d.]+) bins within a lap, and its error calibrated on a different lap stays within ([\d.]+) bins\.[^\n]*?for the car starting fifth the within-lap error — the per-lap RMSE — reaches up to ([\d.]+) bins\); detection of a car ahead \([^)]*\) is (\d+)%, and "car ahead" is raised (\d+)% of the time/],
+  ];
+  if (!meas) fail('⑥ 説明の数字と突き合わせる実測が取れない');
+  else {
+    console.log('  ⑥ 利用者向けの説明に書く数字（実測）: 車0 周回内 ' + meas[0] + '〜' + meas[1] + ' bin・別の周で較正した誤差の最大 ' + meas[2] + ' bin／車' + RECALL_CAR + ' 周回内の最大 ' + meas[3] + ' bin・前方検知 ' + meas[4] + '%・誤報率 ' + meas[5] + '%');
+    for (const [label, get, re] of DOCS) {
+      let m = null; try { m = re.exec(get()); } catch (e) { m = null; }
+      if (!m) fail('⑥ ' + label + ': 数字を書いた文が見つからない（言い回しを変えたら、この照合の正規表現も合わせる）');
+      else if (m.slice(1).join('/') !== meas.join('/')) fail('⑥ ' + label + ': 説明の数字 ' + m.slice(1).join('/') + ' ≠ 実測 ' + meas.join('/') + '（説明を実測に合わせて直す）');
+    }
+    for (const [label, get] of DOCS) { let t = ''; try { t = get(); } catch (e) {} if (/recall\s*96%|前方検知 96%|forward detection 96%|96% forward-detection/.test(t)) fail('⑥ ' + label + ': 古い数字「前方検知 96%」が残っている'); }
+  }
+  // 単独走行の章の数字（周回内・絶対位置）も同じ形で照合する（層 4 の指摘: 上の 6 台の数字だけでは、同じ説明の中の単独走行の数字と
+  //   Q&A pm.s11.localize を見張れていなかった）。丸めは説明の書き方に合わせる（bin は小数 1〜2 桁・m は整数）。
+  if (sc && sc.gIn && sc.G && sc.dr) {
+    const md = () => readFileSync(new URL('./docs/physics_model.md', import.meta.url), 'utf8'), en = () => readFileSync(new URL('./docs/physics_model.en.md', import.meta.url), 'utf8');
+    const learns = () => PROGRAMS.find((p) => p.key === 'comp_localize').learns;
+    const m = (v) => String(Math.round(v * sc.binLenM));
+    const SOLO = [
+      ['単独走行の周回内 RMSE（小数 2 桁）', [sc.gIn.rms.toFixed(2)], [
+        ['docs/physics_model.md §13.8', md, /\(単独走行で ([\d.]+) 区画\)/], ['docs/physics_model.en.md §13.8', en, /\(([\d.]+) bins running alone\)/]]],
+      ['単独走行の周回内 RMSE（小数 1 桁）と距離 [m]', [sc.gIn.rms.toFixed(1), m(sc.gIn.rms)], [
+        ['programs.js comp_localize の learns', learns, /約([\d.]+)bin\(約(\d+)m\/1周2057m\)/], ['prog.comp_localize.learns (ja)', () => MESSAGES['prog.comp_localize.learns'].ja, /約([\d.]+)bin\(約(\d+)m\/1周2057m\)/],
+        ['prog.comp_localize.learns (en)', () => MESSAGES['prog.comp_localize.learns'].en, /about ([\d.]+) bin \(about (\d+) m over the 2057 m lap\)/]]],
+      ['絶対位置のぶれ（エンコーダ単独・bin と距離 [m]）', [sc.dr.rms.toFixed(1), m(sc.dr.rms)], [
+        ['programs.js comp_localize の learns', learns, /周ごとに約([\d.]+)bin\((\d+)m\)ブレる/], ['prog.comp_localize.learns (ja)', () => MESSAGES['prog.comp_localize.learns'].ja, /周ごとに約([\d.]+)bin\((\d+)m\)ブレる/],
+        ['prog.comp_localize.learns (en)', () => MESSAGES['prog.comp_localize.learns'].en, /drifts about ([\d.]+) bin \((\d+) m\) lap-to-lap/]]],
+      ['単独走行の周回内 RMSE（小数 1 桁・見出しの「~0.5 区画」）', [sc.gIn.rms.toFixed(1)], [
+        ['docs/physics_model.md §13.8', md, /\*\*周回内 ~([\d.]+) 区画\*\*の自己位置を出します/], ['docs/physics_model.en.md §13.8', en, /producing a within-lap position good to \*\*~([\d.]+) bins\*\*/]]],
+      ['絶対位置のぶれ（エンコーダ単独・bin）', [sc.dr.rms.toFixed(1)], [
+        ['docs/physics_model.md §13.8', md, /ループクロージャの原点精度\(~([\d.]+) 区画\)/], ['docs/physics_model.en.md §13.8', en, /loop-closure origin accuracy \(~([\d.]+) bins\)/]]],
+      ['絶対位置のぶれの幅（エンコーダ単独〜フィルタ・距離 [m] と bin）', [m(sc.dr.rms), m(sc.G.rms), sc.dr.rms.toFixed(1), sc.G.rms.toFixed(1)], [
+        ['pm.s11.localize (ja)', () => MESSAGES['pm.s11.localize'].ja, /(\d+)〜(\d+)m前後\(([\d.]+)〜([\d.]+)区画\)のブレ/],
+        ['pm.s11.localize (en)', () => MESSAGES['pm.s11.localize'].en, /roughly (\d+)–(\d+) m \(([\d.]+)–([\d.]+) bins\)/]]],
+    ];
+    for (const [what, want, places] of SOLO) for (const [label, get, re] of places) {
+      let mm = null; try { mm = re.exec(get()); } catch (e) { mm = null; }
+      if (!mm) fail('⑥ ' + label + ': ' + what + ' を書いた文が見つからない');
+      else if (mm.slice(1).join('/') !== want.join('/')) fail('⑥ ' + label + ': ' + what + ' の説明 ' + mm.slice(1).join('/') + ' ≠ 実測 ' + want.join('/'));
+    }
+    // 「周回内 ~0.5 区画」は解説の §10・§13.8 に 3 回ずつ出る。全部が実測（小数 1 桁）と同じであること（層 4: 太字の 1 か所だけでは残りを見逃す）。
+    for (const [label, get, re, nWant] of [['docs/physics_model.md', md, /周回内 ~([\d.]+) 区画/g, 3], ['docs/physics_model.en.md', en, /(?:within-lap accuracy ~|estimated to ~|good to \*\*~)([\d.]+) bins/g, 3]]) {
+      const vals = [...get().matchAll(re)].map((x) => x[1]);
+      if (vals.length !== nWant) fail('⑥ ' + label + ': 「周回内 ~x 区画」の出現が ' + vals.length + ' 回（' + nWant + ' 回のはず。言い回しを変えたら照合も合わせる）');
+      else if (vals.some((v) => v !== sc.gIn.rms.toFixed(1))) fail('⑥ ' + label + ': 「周回内 ~x 区画」 ' + vals.join('/') + ' ≠ 実測 ' + sc.gIn.rms.toFixed(1));
+    }
+    console.log('  ⑥ 単独走行の数字（実測）: 周回内 ' + sc.gIn.rms.toFixed(2) + ' bin＝' + m(sc.gIn.rms) + ' m／絶対位置 エンコーダ単独 ' + sc.dr.rms.toFixed(1) + ' bin＝' + m(sc.dr.rms) + ' m・フィルタ ' + sc.G.rms.toFixed(1) + ' bin＝' + m(sc.G.rms) + ' m');
+  }
+}
 console.log('\n' + (ok ? '✅ AO10 受け入れ基準 全合格 (CI-14 再スコープ後・within-lap 相対=実運用量で判定)' : '❌ AO10 受け入れ基準 不合格'));
 if (!ok) process.exit(1);

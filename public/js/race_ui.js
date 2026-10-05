@@ -27,7 +27,7 @@ import { fetchRace, listOfficialRaces, entrySubmission, clearListCache } from '.
 //   (BA1 の規則)。無ければ従来どおり (未作成と取得失敗を言い分けない・大会は eventId で探す)。
 import * as loaderNS from './loader.js';
 import * as ladderNS from './race_ladder.js';
-import { t, applyI18n } from './i18n.js';
+import { t, applyI18n, hasKey } from './i18n.js';
 import { course } from './state.js';
 
 // --- 依存注入スロット(initRaceUI で main.js から束縛。関数本文は bare 参照のまま=byte 不変) ---
@@ -180,21 +180,28 @@ function renderRaceResult(res, meta) {
     // dnf リスト (観測値) を idx で引く (race_engine.js は無改変・verifyHash 不変)。
     const dnfReasonByIdx = new Map((res.dnf || []).map((d) => [d.idx, d.reason]));
     for (const r of res.report) {
+      const marshalN = Number.isFinite(r.marshalCount) && r.marshalCount > 0 ? r.marshalCount : 0;   // BH5: 逆走の向き直しの回数
       let suit;
       if (r.finished) {
         // 完走は否定一辺倒にせず μ円ピークで段階表現 (無事故=好適 / >=150%=滑走多めだが破綻なし)
         suit = (r.muPeakPct != null && r.muPeakPct >= 150) ? t('race.suit.slip') : t('race.suit.finish');
       } else {
         const reason = dnfReasonByIdx.get(r.idx);
-        suit = reason === 'timeout' ? t('race.suit.timeout')
+        // BH6: 時間切れの車のうち、逆走して向きを直された車 (report.marshalCount・BH5) には「設定が過大」と言わない
+        //   (BH2 の実測: 進めていない理由は設定でなく逆走だった)。向き直しが働かないコース・規則では逆走を知る手段が無いので、
+        //   時間切れの文言そのものも「設定が過大か、途中で進めなくなっている」と断定しない形にした (messages.js)。
+        suit = reason === 'timeout' ? (marshalN > 0 && hasKey('race.suit.timeoutMarshal') ? t('race.suit.timeoutMarshal', { n: marshalN }) : t('race.suit.timeout'))
           : reason === 'crash' ? t('race.suit.crash')
           : t('race.suit.dnf');   // 理由不明時のフォールバック
       }
+      // BH6: 「クラッシュ」の欄は切り返し＋逆走の向き直しの合計 (公式レースのペナルティの回数)。向き直しがあれば内訳を添える。
+      //   古い race_engine.js (marshalCount が無い)・古い messages.js (鍵が無い) がキャッシュに残っていても従来の表示になる (BA1)。
+      const crashCell = (r.crashCount || 0) + (marshalN > 0 && hasKey('race.report.marshalOf') ? esc(t('race.report.marshalOf', { n: marshalN })) : '');
       html += '<tr>' +
         `<td><span class="race-dot" style="background:${colorOf(r.idx)}"></span>${esc(r.name)}</td>` +
         `<td>${r.muPeakPct != null ? r.muPeakPct + '%' : '—'}</td>` +
         `<td>${r.betaPeakDeg != null ? r.betaPeakDeg + '°' : '—'}</td>` +
-        `<td>${r.crashCount || 0}</td>` +
+        `<td>${crashCell}</td>` +
         `<td>${esc(suit)}</td>` +
         '</tr>';
     }
