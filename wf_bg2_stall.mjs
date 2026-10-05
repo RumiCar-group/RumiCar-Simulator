@@ -607,6 +607,10 @@ console.log('\nD) 部品の単体検査');
 judgeParts(partsChecks(P), true);
 
 // ── E) 1 台走行の不変 ────────────────────────────────────────────────────────────
+// 【BH5・2026-10-05】逆走の向き直し（fleet.js の「BH5」）で変わる 3 本を刻み直した（利用者承認）。SOLO_RACE の ツイスティ・レイアウト|v2|true
+//   （e3c6f19d → a4e8a339。切り返しの後に向きが反転して逆走していた車が、5 車長で向きを直される）と、SOLO_LIVE の トライアングル|dynamic
+//   （369edf91 → e16c3004。120 秒の周回 3 → 5）・トライアングル|v2（d5567216 → 81538176。2 → 3）。ほかのレース 65 本・ライブ 25 本は
+//   向き直しが 1 回も働かず、改修前と同じ値（＝1 台走行は、逆走しない限り 1 ビットも変わらない）。
 const SOLO_RACE = {
   "オーバル|standard|false": "7c50a7d2",
   "オーバル|standard|true": "7c50a7d2",
@@ -637,7 +641,7 @@ const SOLO_RACE = {
   "ツイスティ・レイアウト|dynamic|false": "db6a3553",
   "ツイスティ・レイアウト|dynamic|true": "54963869",
   "ツイスティ・レイアウト|v2|false": "eb919443",
-  "ツイスティ・レイアウト|v2|true": "e3c6f19d",
+  "ツイスティ・レイアウト|v2|true": "a4e8a339",
   "峠① 中速ヘアピン (緩い下り)|standard|false": "3f52a788",
   "峠① 中速ヘアピン (緩い下り)|standard|true": "3f52a788",
   "峠① 中速ヘアピン (緩い下り)|dynamic|false": "6f56330d",
@@ -687,8 +691,8 @@ const SOLO_LIVE = {
   "丸の中の四角|dynamic": "92ec0b2a",
   "丸の中の四角|v2": "c139dd7f",
   "トライアングル|standard": "e7b2b6ec",
-  "トライアングル|dynamic": "369edf91",
-  "トライアングル|v2": "d5567216",
+  "トライアングル|dynamic": "e16c3004",
+  "トライアングル|v2": "81538176",
   "ツイスティ・レイアウト|standard": "6cf54317",
   "ツイスティ・レイアウト|dynamic": "a13d27ad",
   "ツイスティ・レイアウト|v2": "7a05d79e",
@@ -743,7 +747,7 @@ function structural(srcs) {
   if (!/^import \* as fleetParts from '\.\/fleet\.js';$/m.test(main)) v.push('main.js が fleet.js を名前空間 import していない（新しい名前の名前付き import は古い fleet.js で起動しなくなる＝BA1）');
   if (!/const fleetEdgesOf = \(sl\) => \(typeof fleetParts\.fleetEdges === 'function' \? fleetParts\.fleetEdges\(sl\) : sl\.map\(s => carEdges\(s\.car\)\)\);/.test(main)) v.push('main.js の fleetEdgesOf が「あれば使う」形でない');
   const live = bodyOf(main, 'function integrateLive(dt) {');
-  if (!/const e = fleetEdgesOf\(slots\);\s*slots\.forEach\(\(s, i\) => integrateSlot\(s, step, othersFor\(e, i, interact\), course\.walls, recover\)\);/.test(live)) v.push('main.js integrateLive のサブステップが fleetEdgesOf で他車エッジを作っていない（本ゲートの写しと違う）');
+  if (!/const e = fleetEdgesOf\(slots\);\s*slots\.forEach\(\(s, i\) => integrateSlot\(s, step, othersFor\(e, i, interact\), course\.walls, recover, slots\)\);/.test(live)) v.push('main.js integrateLive のサブステップが fleetEdgesOf で他車エッジを作っていない（本ゲートの写しと違う）');
   if (/carEdges\(/.test(live)) v.push('main.js integrateLive に carEdges の直呼びが残っている（外した車が相手に残る）');
   const frame = bodyOf(main, 'function frame(t) {');
   if (!/const edges = fleetEdgesOf\(slots\);/.test(frame)) v.push('main.js frame が fleetEdgesOf で他車エッジを作っていない（センサー・一時停止ステップ）');
@@ -753,7 +757,7 @@ function structural(srcs) {
   if ((race.match(/s\.retired = true;/g) || []).length !== 2) v.push('race_engine が完走と DNF の 2 か所で s.retired を立てていない');
   if (!/if \(bodies\[i\]\.ghost \|\| bodies\[j\]\.ghost\) continue;/.test(contact)) v.push('contact_v2 resolveFleetContacts が外した車の組を作らない形になっていない');
   if (!/ghost: isRetired\(slot\),/.test(fleet)) v.push('fleet.js integrateFleetV2 が body に ghost を立てていない');
-  if (!/if \(others\.length && isRetired\(slot\)\) others = \[\];/.test(bodyOf(fleet, 'export function integrateSlot(slot, dt, others, walls, recover) {'))) v.push('fleet.js integrateSlot が外した車の others を空にしていない');
+  if (!/if \(others\.length && isRetired\(slot\)\) others = \[\];/.test(bodyOf(fleet, 'export function integrateSlot(slot, dt, others, walls, recover, peers) {'))) v.push('fleet.js integrateSlot が外した車の others を空にしていない');
   return v;
 }
 const SRC_NAMES = ['main.js', 'race_engine.js', 'contact_v2.js', 'fleet.js'];

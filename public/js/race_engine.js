@@ -352,6 +352,10 @@ export function runRace(spec) {
     const bestLapMs = new Array(n).fill(null);
     const crashCount = new Array(n).fill(0);
     const prevRecoverT = new Array(n).fill(0);
+    // BH5: 逆走の向き直し (fleet.js marshalCheck) の回数。本番の開始時点の値を基準にする (試走の向き直しは数えない。
+    //   car.reset が 0 に戻すが、古い physics*.js がキャッシュに残っていても試走の分を持ち込まない)。
+    const prevMarshal = slots.map((s) => s.car._marshal || 0);
+    const marshalCount = new Array(n).fill(0);
     const prevLaps = new Array(n).fill(0);
     const netMax = trackNet ? new Array(n).fill(0) : null;   // AK7: spawn からの最大変位 (走り出せたか)
     const armMax = trackNet ? new Array(n).fill(0) : null;   // AK7: recoverN ピーク (リカバリ発散検査用)
@@ -397,7 +401,7 @@ export function runRace(spec) {
       // 従来の 1台ずつ原子棄却 (integrateSlot) を維持 (AO4 では byte 不変。BG2 で車どうしの ESCAPE/STUCK と完走・リタイア
       // 車の除外を足し、多台数の f0/f1 は刻み直した＝fleet.js の注記)。
       if (PHYSICS.mode === 'v2') integrateFleetV2(slots, RACE_DT, course.walls, recover, interact);
-      else slots.forEach((s, i) => integrateSlot(s, RACE_DT, othersFor(edges, i, interact), course.walls, recover));
+      else slots.forEach((s, i) => integrateSlot(s, RACE_DT, othersFor(edges, i, interact), course.walls, recover, slots));   // BH5: slots = 向き直しが相手のいまの姿勢を見る
 
       // AK7: spawn からの最大変位・recoverN ピークを観測 (容量判定/リカバリ検査用・読み取りのみ=verifyHash 不変)。
       if (trackNet) slots.forEach((s, i) => {
@@ -415,6 +419,12 @@ export function runRace(spec) {
           if (report && crashAt[i] == null) crashAt[i] = { x: s.car.x, y: s.car.y, tick };
         }
         prevRecoverT[i] = s.car.recoverT;
+        // BH5: 逆走の向き直しも切り返しと同じく 1 回と数える (利用者裁定 BH-4。車の回数の増分を読むだけ)。
+        {
+          const m = s.car._marshal || 0;
+          if (recover && m > prevMarshal[i]) { crashCount[i] += m - prevMarshal[i]; marshalCount[i] += m - prevMarshal[i]; }
+          prevMarshal[i] = m;
+        }
         // DNF (rejoin=false): crashed 遷移を1回だけ記録
         if (!recover && s.car.crashed && dnf[i] == null && finished[i] == null) {
           dnf[i] = { lapsCompleted: s.lap.laps, tick, reason: 'crash' };
@@ -548,6 +558,7 @@ export function runRace(spec) {
       betaPeakDeg: isDyn[i] ? Math.round(betaPeak[i]) : null,
       crashed: crashAt[i] != null,
       crashCount: recover ? crashCount[i] : (crashAt[i] != null ? 1 : 0),
+      marshalCount: marshalCount[i],   // BH5: crashCount のうち逆走の向き直しの回数 (残りが切り返し)
       crashX: crashAt[i] ? crashAt[i].x : null,
       crashY: crashAt[i] ? crashAt[i].y : null,
       finalX: s.car.x, finalY: s.car.y,

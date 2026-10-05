@@ -26,12 +26,18 @@
 //   F) 出荷の全周回コース＋投稿コースの写し: 側の判定（_signed）が直交するコースでは fx,fy の式とビット一致・中点の往復は
 //      0 周・線の外を回って戻れば 1 周・線分の端の壁の向こうで線の延長を横切っても借りは返らない。
 //   B) 往復するだけのプログラム（公式レース runRace・スピードウェイ／ロングオーバル × 3 エンジン）: 0 周（改修前は 3 周完走）。
-//   C) 出荷の公式サンプル大会: 巻き数 0 の車（Circuit-FR）が完走に入らない・どの車も回り切っていない計上が無い。
+//   C) 出荷の公式サンプル大会: どの車も回り切っていない計上・数え漏れが無い。巻き数 0 の車（Circuit-FR）が完走に入らないことは、
+//      同じ大会を「進行方向の分からない同じ形のコース」（中心線を落とした写し）で走らせて見る（【BH5】の注記）。
 //   D) 代表セル（四角の中の丸・動力学・6 台・ペナルティ復帰）: 回り切っていない計上も数え漏れも無い（改修前は巻き数 0 の車が
 //      2 位完走）。D3) 同じセルを角度の積算で測っても一致。
 //      D5) オーバル（動力学・6 台）: 多くの車が周回を重ねるセルで、測定①②とも毎 tick 一致。
 //      D4) モダン・レイアウト（クラシック・3 台）: フィニッシュ線分の内側の端が、折り返した内壁の頂点（壁が線の片側から触れる
 //          だけ）で、その先の線の延長を手前の区間が横切る。手前の区間の通過で借りが返らない（＝逆走した車を数えない）。
+//          逆走する車が要るので、中心線を落とした写しで走らせる（【BH5】の注記）。出荷のコースそのものでも数え方が合うことを併せて見る。
+// 【BH5・2026-10-05】逆走の向き直し（fleet.js marshalCheck）で、ペナルティ復帰の公式レースでは逆走が 5 車長で止まるようになった。
+//   C) と D4) は「逆走した車がいる走り」を材料にしていたので、**向き直しが働かない同じ形のコース**（course.centerline を落とした写し＝
+//   エディタで開いて適用したコースと同じ・壁もフィニッシュ線も同じ）で走らせる。この写しの走りは BH3 の時点と 1 ビットも変わらない
+//   （公式サンプルは verifyHash cb6afdeb のまま＝下で固定）。数え方（lap.js）の検査の中身は変えていない。
 //      D2) 小さいコース（舵角限界ベンチ・道幅 3.5 台分・1 台）: 回り切った tick に数える（改修前は武装距離に届かず遅れて数えた）。
 //   E) トライアングル（C 版 Apex Hunter・クラシック・1 台）: 完走し、数えた周回が測定①と一致（改修前は 0 周）。
 //   H) ライブの ▶ 走行の練習ベスト（localStorage の rumicar.practiceShape.*）: 往復するだけのプログラムでは 1 件も書かれない
@@ -564,13 +570,15 @@ console.log('\nC) 出荷の公式サンプル大会');
 {
   const { event, courseSpec } = SAMPLE;
   const entries = SAMPLE.entries.map((e) => (e.progKey && !e.program && !e.src) ? { ...e, src: P.programs.PROGRAM_BY_KEY[e.progKey].code, lang: P.programs.PROGRAM_BY_KEY[e.progKey].lang || 'c' } : e);
-  const course = P.course.buildFromSpec(courseSpec), field = P.raceEvent.frozenField(event, entries);
-  const obs = windObserver(P, course);
-  const r = P.race.runRace({ course, regime: event.regime, laps: event.laps, field, crashRule: event.crashRule, interact: true, maxSec: event.maxSec, physics: event.physicsMode, recon: null, wear: false, probe: obs.probe });
-  const fin = new Set(r.finishers.map((x) => x.idx));
-  const zero = obs.cars.map((o, i) => ({ o, i })).filter((x) => x.o.wMax === 0);
-  ok(zero.length >= 1 && zero.every((x) => !fin.has(x.i)), `巻き数 0 の車（${zero.map((x) => field[x.i].name).join('・') || 'なし'}）は完走に入らない（完走: ${r.finishers.map((x) => x.name).join('・') || 'なし'}）`);
-  ok(obs.cars.every((o) => o.over === 0 && o.late === 0), `どの車も回り切っていない計上・数え漏れが無い（数えた周回／巻き数の最大: ${obs.cars.map((o, i) => `${field[i].name} ${o.laps}/${o.wMax}`).join('・')}）`);
+  const full = P.course.buildFromSpec(courseSpec), field = P.raceEvent.frozenField(event, entries);
+  const { centerline: _cl, ...bare } = full;   // BH5: 進行方向の分からない同じ形のコース（向き直しが働かない＝BH3 の時点と同じ走り）
+  const run = (course) => { const obs = windObserver(P, course); const r = P.race.runRace({ course, regime: event.regime, laps: event.laps, field, crashRule: event.crashRule, interact: true, maxSec: event.maxSec, physics: event.physicsMode, recon: null, wear: false, probe: obs.probe }); return { obs, r, fin: new Set(r.finishers.map((x) => x.idx)) }; };
+  { const { obs, r, fin } = run(bare);
+    const zero = obs.cars.map((o, i) => ({ o, i })).filter((x) => x.o.wMax === 0);
+    ok(zero.length >= 1 && zero.every((x) => !fin.has(x.i)), `中心線を落とした写し: 巻き数 0 の車（${zero.map((x) => field[x.i].name).join('・') || 'なし'}）は完走に入らない（完走: ${r.finishers.map((x) => x.name).join('・') || 'なし'}）`);
+    ok(obs.cars.every((o) => o.over === 0 && o.late === 0) && r.verifyHash === 'cb6afdeb', `同: どの車も回り切っていない計上・数え漏れが無く、結果は BH3 の時点と同じ（verifyHash ${r.verifyHash}＝cb6afdeb・数えた周回／巻き数の最大: ${obs.cars.map((o, i) => `${field[i].name} ${o.laps}/${o.wMax}`).join('・')}）`); }
+  { const { obs, r, fin } = run(full);
+    ok(obs.cars.every((o) => o.over === 0 && o.late === 0) && obs.cars.every((o, i) => !fin.has(i) || o.wMax >= event.laps), `出荷の大会そのもの: どの車も回り切っていない計上・数え漏れが無く、完走した車は回り切っている（完走: ${r.finishers.map((x) => x.name).join('・') || 'なし'}・数えた周回／巻き数の最大: ${obs.cars.map((o, i) => `${field[i].name} ${o.laps}/${o.wMax}`).join('・')}）`); }
 }
 
 console.log('\nD) 代表セル（四角の中の丸・動力学・6 台・ペナルティ復帰・3 周）');
@@ -596,10 +604,13 @@ console.log('\nD5) 代表セル（オーバル・動力学・6 台・ペナル�
 
 console.log('\nD4) 代表セル（モダン・レイアウト・クラシック・3 台・ペナルティ復帰・3 周）');
 {
-  const p = P.programs.PROGRAM_BY_KEY.py_normal_fr, course = P.course.buildFromSpec(specOf('モダン・レイアウト'));
-  const obs = windObserver(P, course);
-  P.race.runRace({ course, regime: 'tabletop', laps: 3, field: Array.from({ length: 3 }, (_, i) => ({ name: 'C' + i, lang: p.lang, src: p.code, carType: p.carType })), crashRule: { rejoin: true, penaltySec: 3 }, interact: true, physics: 'standard', probe: obs.probe });
-  ok(obs.cars.every((o) => o.over === 0 && o.late === 0) && obs.cars.some((o) => o.rev > o.fwd), `逆走した車（線分の逆向きの通過が順方向より多い）を数えない・数え漏れも無い（数えた周回／巻き数の最大: ${obs.cars.map((o) => `${o.laps}/${o.wMax}`).join('・')}・順／逆 ${obs.cars.map((o) => `${o.fwd}/${o.rev}`).join('・')}）`);
+  const p = P.programs.PROGRAM_BY_KEY.py_normal_fr, full = P.course.buildFromSpec(specOf('モダン・レイアウト'));
+  const { centerline: _cl, ...bare } = full;   // BH5: 逆走する車が要るので、向き直しが働かない同じ形のコースで走らせる
+  const run = (course) => { const obs = windObserver(P, course); P.race.runRace({ course, regime: 'tabletop', laps: 3, field: Array.from({ length: 3 }, (_, i) => ({ name: 'C' + i, lang: p.lang, src: p.code, carType: p.carType })), crashRule: { rejoin: true, penaltySec: 3 }, interact: true, physics: 'standard', probe: obs.probe }); return obs; };
+  { const obs = run(bare);
+    ok(obs.cars.every((o) => o.over === 0 && o.late === 0) && obs.cars.some((o) => o.rev > o.fwd), `中心線を落とした写し: 逆走した車（線分の逆向きの通過が順方向より多い）を数えない・数え漏れも無い（数えた周回／巻き数の最大: ${obs.cars.map((o) => `${o.laps}/${o.wMax}`).join('・')}・順／逆 ${obs.cars.map((o) => `${o.fwd}/${o.rev}`).join('・')}）`); }
+  { const obs = run(full);
+    ok(obs.cars.every((o) => o.over === 0 && o.late === 0), `出荷のコースそのもの: 回り切っていない計上・数え漏れが無い（数えた周回／巻き数の最大: ${obs.cars.map((o) => `${o.laps}/${o.wMax}`).join('・')}・順／逆 ${obs.cars.map((o) => `${o.fwd}/${o.rev}`).join('・')}）`); }
 }
 
 console.log('\nD2) 代表セル（舵角限界ベンチ R_out/R_min=0.856〔道幅 3.5 台分〕・動力学・1 台・ペナルティ復帰・3 周）');

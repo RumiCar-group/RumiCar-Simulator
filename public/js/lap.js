@@ -402,6 +402,16 @@ export class LapTracker {
     return lapped;
   }
 
+  // 【BH5】基準点を (x,y) へ置き直すと、フィニッシュ線の線を順方向 (負側→正側) に越えるか。**読むだけ** (状態は変えない)。
+  //   update と同じ側の式 (_signed)・同じ「直前の位置」(prev) で答えるので、偽を返した位置で update を呼んでも順方向の分岐
+  //   (周回の計上・発走の通過・借りの返済・峠のゴール) には入らない。線分の外で線を越える場合も真。まだ update を 1 度も
+  //   呼んでいない・フィニッシュが無いときは偽。fleet.js の逆走の向き直しが、置き直す姿勢を選ぶために読む。
+  crossesForwardTo(x, y) {
+    if (!this.finish || this.prev == null) return false;
+    const s = this._signed(x, y);
+    return !Number.isFinite(s) || (this.prev.s < 0 && !(s < 0));
+  }
+
   // AP2: 新スキーマで書込（t/ver/cond）。cond は保存時点のライブ条件を捕捉（版跨ぎ比較の誤解を防ぐ）。
   // this.bestRec も現行版へ同期＝ベスト更新直後は「(当時 vX)」注記が消える（現行で樹立ゆえ）。
   _saveBest() {

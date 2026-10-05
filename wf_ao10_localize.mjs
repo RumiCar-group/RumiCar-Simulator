@@ -461,42 +461,50 @@ const cl = buildCenterline(circuit, CIRCUIT_SPEC);
 const localizeSrc = PROGRAMS.find((p) => p.key === 'comp_localize').code;
 const BLF = 380;
 
-function runLocalize({ field, laps = 3, interact = false, target = 0, recon = null }) {
-  const rows = [];
+// targets: 観測する車の番号（1 回の走りで複数の車を記録できる＝同じレースの別の車を比べるのに走り直さない）。rows は targets[0] の記録。
+//   【BH5・2026-10-05】行に run（その車が走行中＝完走・リタイアの後は 0）と near（走行中の他車が 22 m 以内にいる）を足し、
+//   carsAheadTrue は**走行中の他車**だけで数える（完走して外れた車はセンサーに映らない＝BG2）。
+function runLocalize({ field, laps = 3, interact = false, target = 0, targets = null, recon = null }) {
+  const T = targets || [target];
+  const rowsBy = new Map(T.map((t) => [t, []]));
   const hints = new Array(field.length).fill(null);
   const unwrap = new Array(field.length).fill(null);
   const probe = (tick, slots) => {
-    const s = slots[target];
-    const g = s.controller.interp.global.vars;
-    const pr = projectArc(cl, s.car.x, s.car.y, hints[target]);
-    hints[target] = pr.seg;
-    let uw = unwrap[target];
-    if (uw == null) { uw = { cum: 0, prev: pr.arc }; unwrap[target] = uw; }
-    let d = pr.arc - uw.prev; if (d < -cl.perim / 2) d += cl.perim; else if (d > cl.perim / 2) d -= cl.perim;
-    uw.cum += d; uw.prev = pr.arc;
-    let carsAheadTrue = 0;
-    for (let k = 0; k < slots.length; k++) {
-      if (k === target) continue;
-      const o = slots[k].car; const dx = o.x - s.car.x, dy = o.y - s.car.y;
-      if (Math.hypot(dx, dy) > 22) continue;
-      const fwd = Math.cos(s.car.theta) * dx + Math.sin(s.car.theta) * dy;
-      const lat = -Math.sin(s.car.theta) * dx + Math.cos(s.car.theta) * dy;
-      if (fwd > 0 && Math.abs(Math.atan2(lat, fwd)) < 0.35) carsAheadTrue = 1;
+    for (const target of T) {
+      const s = slots[target];
+      const g = s.controller.interp.global.vars;
+      const pr = projectArc(cl, s.car.x, s.car.y, hints[target]);
+      hints[target] = pr.seg;
+      let uw = unwrap[target];
+      if (uw == null) { uw = { cum: 0, prev: pr.arc }; unwrap[target] = uw; }
+      let d = pr.arc - uw.prev; if (d < -cl.perim / 2) d += cl.perim; else if (d > cl.perim / 2) d -= cl.perim;
+      uw.cum += d; uw.prev = pr.arc;
+      let carsAheadTrue = 0, near = 0;
+      for (let k = 0; k < slots.length; k++) {
+        if (k === target || !slots[k].running) continue;
+        const o = slots[k].car; const dx = o.x - s.car.x, dy = o.y - s.car.y;
+        if (Math.hypot(dx, dy) > 22) continue;
+        near = 1;
+        const fwd = Math.cos(s.car.theta) * dx + Math.sin(s.car.theta) * dy;
+        const lat = -Math.sin(s.car.theta) * dx + Math.cos(s.car.theta) * dy;
+        if (fwd > 0 && Math.abs(Math.atan2(lat, fwd)) < 0.35) carsAheadTrue = 1;
+      }
+      const tb = (Math.abs(s.car.u) > 0.03 || Math.abs(s.car.vlat) > 0.03) ? Math.atan2(s.car.vlat, s.car.u) * 180 / Math.PI : 0;
+      if (process.env.AO10_LAPDBG && target === 0 && g.lp === 0 && tick % 30 === 0) {
+        const frac = (((uw.cum - (unwrap[0]._u0 ?? (unwrap[0]._u0 = uw.cum))) / cl.perim) % 1 + 1) % 1;
+        if (frac > 0.90 || frac < 0.12) console.error(`  φ=${frac.toFixed(3)} sl=${Math.round(g.sl)} hdg=${Math.round(g.hdg)} match=${Math.round(g.mdbg)} armed=${g.armed} mmin=${Math.round(g.mmin)} lp=${g.lp}`);
+      }
+      rowsBy.get(target).push({ tick, laps: s.lap.laps, uarc: uw.cum, estb: g.estb, conf: g.conf, LAPBF: g.LAPBF, LAPLEN: g.LAPLEN,
+        lp: g.lp, s: g.s, sl: g.sl, carF: g.carF, betaEst: g.betaEst, betaN: g.betaN, trueBeta: tb,
+        steps: s.controller.interp.steps, carsAheadTrue, run: s.running ? 1 : 0, near });
     }
-    const tb = (Math.abs(s.car.u) > 0.03 || Math.abs(s.car.vlat) > 0.03) ? Math.atan2(s.car.vlat, s.car.u) * 180 / Math.PI : 0;
-    if (process.env.AO10_LAPDBG && target === 0 && g.lp === 0 && tick % 30 === 0) {
-      const frac = (((uw.cum - (unwrap[0]._u0 ?? (unwrap[0]._u0 = uw.cum))) / cl.perim) % 1 + 1) % 1;
-      if (frac > 0.90 || frac < 0.12) console.error(`  φ=${frac.toFixed(3)} sl=${Math.round(g.sl)} hdg=${Math.round(g.hdg)} match=${Math.round(g.mdbg)} armed=${g.armed} mmin=${Math.round(g.mmin)} lp=${g.lp}`);
-    }
-    rows.push({ tick, laps: s.lap.laps, uarc: uw.cum, estb: g.estb, conf: g.conf, LAPBF: g.LAPBF, LAPLEN: g.LAPLEN,
-      lp: g.lp, s: g.s, sl: g.sl, carF: g.carF, betaEst: g.betaEst, betaN: g.betaN, trueBeta: tb,
-      steps: s.controller.interp.steps, carsAheadTrue });
   };
   const r = runRace({ physics: 'v2', regime: 'fullscale', course: circuit, laps, interact,
     crashRule: { rejoin: true, penaltySec: 3 }, maxSec: 600, report: true, probe, field, recon });
-  return { r, rows };
+  return { r, rows: rowsBy.get(T[0]), rowsBy };
 }
-// 他車近接下の位置推定 (within-lap 相対・held-out) + 前方検知 recall + 発散なし を測る。
+// 6 台レース中の位置推定を「別の周で較正」して測る（較正＝本番の 2 周目 laps==1。採点＝それ以外の全部の周＝他車が近くにいる 1 周目を含む・
+//   走行中の行だけ）＋前方検知 recall／誤報率。周をまたぐずれ（原点が動く・真位置と無関係に進む）は、ここの誤差の最大に出る。
 function scoreMulti(rows, target) {
   const R = rows.filter((r) => r.lp === 1);
   if (!R.length) return null;
@@ -506,7 +514,7 @@ function scoreMulti(rows, target) {
   const circd = (a, b) => { let d = Math.abs(a - b) % 1; if (d > 0.5) d = 1 - d; return d; };
   const laps = [...new Set(R.map((r) => r.laps))].sort((a, b) => a - b);
   const calibLap = laps.find((l) => l >= 1);
-  const scoreLapSet = laps.filter((l) => l > calibLap);
+  const scoreLapSet = laps.filter((l) => l !== calibLap);   // 【BH5】1 周目 (laps==0) も採点する（それまでは較正の周より後だけ）
   if (!scoreLapSet.length) return null;
   const VX = new Array(LAPBF).fill(0), VY = new Array(LAPBF).fill(0), N = new Array(LAPBF).fill(0);
   for (const r of R) { if (r.laps !== calibLap) continue; const b = ((Math.floor(r.estb) % LAPBF) + LAPBF) % LAPBF;
@@ -516,15 +524,42 @@ function scoreMulti(rows, target) {
   for (let b = 0; b < LAPBF; b++) if (phi[b] == null) { for (let k = 1; k < LAPBF; k++) { const pj = ((b - k) % LAPBF + LAPBF) % LAPBF; if (phi[pj] != null) { phi[b] = phi[pj]; break; } } }
   const phiAt = (fb) => { const b0 = ((Math.floor(fb) % LAPBF) + LAPBF) % LAPBF; return phi[b0]; };
   const err = [];
-  let carTrue = 0, carHit = 0;
+  let carTrue = 0, carHit = 0, noCar = 0, falseHit = 0;
   for (const r of R) {
-    if (r.carsAheadTrue) { carTrue++; if (r.carF) carHit++; }
-    if (!scoreLapSet.includes(r.laps)) continue;
+    // 前方検知は走行中の tick だけで数える（完走後は carF が最後の値のまま止まる）。誤報率＝前に車がいない tick で carF が立つ割合（記録）。
+    if (r.run) { if (r.carsAheadTrue) { carTrue++; if (r.carF) carHit++; } else { noCar++; if (r.carF) falseHit++; } }
+    if (!r.run || !scoreLapSet.includes(r.laps)) continue;   // 完走後（推定が止まったまま惰行する）の行は採点しない
     const p = phiAt(r.estb); if (p != null) err.push(circd(p, trueFracOf(r)) * LAPBF);
   }
   const rms = err.length ? Math.sqrt(err.reduce((t, v) => t + v * v, 0) / err.length) : null;
   const maxErr = err.length ? Math.max(...err) : null;
-  return { rms, maxErr, binLenM: cl.perim / LAPBF, recall: carTrue ? carHit / carTrue : null, carTrue, LAPBF };
+  return { rms, maxErr, binLenM: cl.perim / LAPBF, recall: carTrue ? carHit / carTrue : null, carTrue, falseRate: noCar ? falseHit / noCar : null, noCar, LAPBF };
+}
+// 【BH5・2026-10-05】6 台レース中の **周回内** の位置推定: 同じ周で bin→真φ を較正して同じ周を採点する（単独走行の章の「周回内 相対位置」と
+//   同じ考え方＝原点の取り直しの精度に左右されない・lookahead に効く量。こちらは bin の中を補間せず、本番の全周を周ごとに出して最大を取る）。
+//   走行中の行だけ・10 秒に満たない周（端数）は採点しない。near＝採点した周で、走行中の他車が 22 m 以内にいた tick（「他車近接下」の実体）。
+//   ⚠ この測り方は、周をまたぐずれ（原点が周ごとに動く・その周の間じゅう一様にずれる）を見ない。それは scoreMulti の「別の周で較正した誤差の最大」で見る。
+function scoreMultiIn(rows, lapsTotal) {
+  const R = rows.filter((r) => r.lp === 1 && r.run);
+  if (!R.length) return null;
+  const LAPBF = R[0].LAPBF;
+  const uarc0 = rows[0].uarc;
+  const trueFracOf = (r) => (((r.uarc - uarc0) / cl.perim) % 1 + 1) % 1;
+  const circd = (a, b) => { let d = Math.abs(a - b) % 1; if (d > 0.5) d = 1 - d; return d; };
+  const binOf = (r) => ((Math.floor(r.estb) % LAPBF) + LAPBF) % LAPBF;
+  const per = [];
+  for (const lap of [...new Set(R.map((r) => r.laps))].sort((a, b) => a - b)) {
+    if (lap < 0 || lap > lapsTotal - 1) continue;
+    const Q = R.filter((r) => r.laps === lap);
+    if (Q.length < 600) continue;
+    const VX = new Array(LAPBF).fill(0), VY = new Array(LAPBF).fill(0);
+    for (const r of Q) { const b = binOf(r), a = 2 * Math.PI * trueFracOf(r); VX[b] += Math.cos(a); VY[b] += Math.sin(a); }
+    const err = [];
+    for (const r of Q) { const b = binOf(r); let a = Math.atan2(VY[b], VX[b]); if (a < 0) a += 2 * Math.PI; err.push(circd(a / (2 * Math.PI), trueFracOf(r)) * LAPBF); }
+    per.push({ lap, rms: Math.sqrt(err.reduce((t, v) => t + v * v, 0) / err.length), max: Math.max(...err), n: err.length, near: Q.reduce((t, r) => t + (r.near ? 1 : 0), 0) });
+  }
+  if (!per.length) return null;
+  return { per, rmsMax: Math.max(...per.map((x) => x.rms)), near: per.reduce((t, x) => t + x.near, 0), LAPBF };
 }
 
 // ───────────────────────── 4. スコアリング (frame 較正=held-out) ─────────────────────────
@@ -607,13 +642,58 @@ console.log('β 再挑戦 (地図事前分布):', sc.beta.mae != null ? `MAE ${s
 console.log('\n=== comp_localize 6台 interact (他車5台・recon2 で地図形成→混走) ===');
 const field6 = [];
 for (let i = 0; i < 6; i++) field6.push({ name: 'L' + i, lang: 'py', src: localizeSrc, carType: 'normal_ff', rear: false, encoder: true });
-const multi = runLocalize({ field: field6, laps: 4, interact: true, target: 0, recon: { laps: 2 } });
+const RACE_LAPS = 4, RECALL_CAR = 4;
+const IN_MAX = 2.0;        // 周回内 RMSE の上限 (bin)
+const DIVERGE_MAX = 10;    // 発散なし: 別の周で較正した誤差の最大の上限 (bin)。実測は 6 台 4.0・単独 4.6（原点の取り直しのずれ 2〜3 bin が律速）
+// 前方検知は、前に車がいる車で測る（車0 の前に車がいない走りでは検査が空振りする）。1 回の走りで車0 と車4 を両方記録する。
+const multi = runLocalize({ field: field6, laps: RACE_LAPS, interact: true, targets: [0, RECALL_CAR], recon: { laps: 2 } });
 console.log('finishers:', multi.r.finishers.length, '/ 6  ticks:', multi.r.ticks);
-const scM = scoreMulti(multi.rows, 0);
-if (scM) {
-  console.log('  車0 位置推定 (他車近接下・within-lap held-out): RMSE ' + scM.rms.toFixed(2) + ' bin (max ' + scM.maxErr.toFixed(1) + ' bin=' + (scM.maxErr * scM.binLenM).toFixed(0) + 'm・発散なし=max<LAPBF/2) / 基準 ≤2×BL');
-  console.log('  前方他車 検知 recall: ' + (scM.recall != null ? (scM.recall * 100).toFixed(0) + '% (真に前方車ありの tick=' + scM.carTrue + ') / 基準 ≥70%' : '— (前方車なし)'));
+// ③ の判定。失敗を { tag, msg } の配列で返す（tag: in＝周回内・div＝発散・nan＝測れない・near＝近接の空振り・recall＝前方検知）。
+//   下の「判定の検出力」で、推定を壊した行にも同じ判定を当てる。
+function judge6(rows0, rowsR) {
+  const out = [], bad = (tag, msg) => out.push({ tag, msg });
+  const scM = scoreMulti(rows0, 0), scIn = scoreMultiIn(rows0, RACE_LAPS), scR = scoreMulti(rowsR, RECALL_CAR);
+  if (!scIn) bad('nan', '6台 車0: lp==1 未到達（または採点できる周が無い）');
+  else {
+    if (!(scIn.per.length >= 3)) bad('in', '6台 車0 の採点できた周が ' + scIn.per.length + ' 周（3 周以上）');
+    if (!(scIn.rmsMax <= IN_MAX)) bad('in', '6台 車0 周回内の位置推定 RMSE ' + scIn.rmsMax.toFixed(2) + ' > ' + IN_MAX + '×BL');
+    if (!(scIn.near > 30)) bad('near', '6台 車0 の採点した周で、他車が 22 m 以内にいた tick が ' + scIn.near + '（30 以下＝「他車が近くにいる周」が空振り）');
+  }
+  if (!scM || scM.rms == null || !isFinite(scM.rms) || !isFinite(scM.maxErr)) bad('nan', '6台 車0: 別の周で較正した誤差が測れない（推定が有限でない・採点できる周が無い）');
+  else if (!(scM.maxErr <= DIVERGE_MAX)) bad('div', '6台 車0 が発散（別の周で較正した誤差の最大 ' + scM.maxErr.toFixed(1) + ' > ' + DIVERGE_MAX + ' bin）');
+  if (!scR) bad('recall', '6台 車' + RECALL_CAR + ' で lp==1 未到達');
+  else if (!(scR.carTrue > 30)) bad('recall', '前方検知: 車' + RECALL_CAR + ' の前に車がいた tick が ' + scR.carTrue + '（30 以下＝検査が空振り）');
+  else if (!(scR.recall >= 0.7)) bad('recall', '前方検知 recall ' + (scR.recall * 100).toFixed(0) + '% < 70%（車' + RECALL_CAR + '）');
+  return { out, scM, scIn, scR };
 }
+const rows0 = multi.rowsBy.get(0), rowsR = multi.rowsBy.get(RECALL_CAR);
+const J6 = judge6(rows0, rowsR);
+{ const { scM, scIn, scR } = J6;
+  if (scIn) console.log('  車0 位置推定 (6 台レース中・周回内＝同じ周で較正): RMSE ' + scIn.per.map((x) => `lap${x.lap} ${x.rms.toFixed(2)} (max ${x.max.toFixed(1)}・近接 ${x.near} tick)`).join(' / ') + ' bin / 基準 最大 ≤' + IN_MAX + '×BL・近接 tick > 30');
+  if (scM && scM.rms != null) {
+    console.log('  車0 位置推定 (別の周で較正＝原点の取り直しの精度に律速・1 周目を含む): RMSE ' + scM.rms.toFixed(2) + ' bin＝記録 ／ 最大 ' + scM.maxErr.toFixed(1) + ' bin (' + (scM.maxErr * scM.binLenM).toFixed(0) + ' m) / 基準 ≤' + DIVERGE_MAX + ' bin＝発散なし');
+    console.log('  車0 前方他車 検知 recall: ' + (scM.recall != null ? (scM.recall * 100).toFixed(0) + '% (前に車がいた tick=' + scM.carTrue + ')' : '— (前方車なし)') + ' ＝記録');
+  }
+  if (scR) console.log('  車' + RECALL_CAR + ' 前方他車 検知 recall: ' + (scR.recall != null ? (scR.recall * 100).toFixed(0) + '% (前に車がいた tick=' + scR.carTrue + ') / 基準 ≥70%・tick > 30' : '— (前方車なし)') + ' ／ 誤報率（前に車がいない tick で立つ割合）' + (scR.falseRate != null ? (scR.falseRate * 100).toFixed(0) + '% (' + scR.noCar + ' tick)' : '—') + '＝記録');
+}
+// 判定の検出力: 推定を壊した行に同じ判定を当てて、**狙った判定が**赤になること（判定が空振り・恒真でないことを、判定ごとにゲート自身が見張る）。
+//   [差し替え, 赤になるべき判定の札]。「周ごとに原点」「1 周目だけ一様にずれる」は周回内では見えず、発散（別の周で較正した誤差の最大）だけが止める。
+//   「12 bin 刻み」は発散の上限の内側で、周回内だけが止める。
+const POWER = [];
+{ let seed = 20261005; const rnd = () => { seed = (seed + 0x6D2B79F5) | 0; let x = Math.imul(seed ^ (seed >>> 15), 1 | seed); x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x; return ((x ^ (x >>> 14)) >>> 0) / 4294967296; };   // mulberry32
+  const LB = rows0.find((r) => r.lp === 1)?.LAPBF || 100;
+  const car0 = (fn) => [rows0.map((r) => ({ ...r, estb: fn(r) })), rowsR];
+  for (const [label, want, [r0, rR]] of [
+    ['車0 の推定を定数に', 'in', car0(() => 7)],
+    ['車0 の推定を乱数に', 'in', car0(() => rnd() * LB)],
+    ['車0 の推定を 12 bin 刻みに丸める', 'in', car0((r) => Math.floor(r.estb / 12) * 12)],
+    ['車0 の推定を、真位置と無関係に進む時間カウンタ (0.02 bin/tick) に', 'div', car0((r) => r.tick * 0.02)],
+    ['車0 の推定の原点が周ごとに 20 bin ずれる', 'div', car0((r) => r.estb + 20 * r.laps)],
+    ['車0 の推定が 1 周目だけ一様に 20 bin ずれる', 'div', car0((r) => r.estb + (r.laps === 0 ? 20 : 0))],
+    ['車0 の推定を NaN に', 'nan', car0(() => NaN)],
+    ['車' + RECALL_CAR + ' の前方検知の旗を常に 0 に', 'recall', [rows0, rowsR.map((r) => ({ ...r, carF: 0 }))]],
+  ]) { const tags = judge6(r0, rR).out.map((x) => x.tag); POWER.push([label, want, tags.includes(want), tags]); }
+  console.log('  判定の検出力（差し替え → 狙った判定が赤か）: ' + POWER.map(([l, w, hit]) => `${l} → ${w} ${hit ? '赤' : '緑'}`).join(' ／ ')); }
 
 // ───────────────────────── 6. アサート (CI-14 再スコープ後の受け入れ基準・人間承認 2026-07-04 Option1) ─────────────────────────
 // 主指標=周回内 相対位置 (lookahead に効く実運用量)。絶対は loop closure 原点精度が律速で docs に限界明記。
@@ -624,13 +704,22 @@ const fail = (m) => { ok = false; console.error('  ✗ ' + m); };
 if (!(sc.gIn && sc.gIn.rms <= 1.0)) fail('単独 within-lap フィルタ RMSE ' + (sc.gIn ? sc.gIn.rms.toFixed(2) : '-') + ' > 1×BL');
 // ② 絶対の限界は「記録」する (パスの条件にしない=CI-14 再スコープ・人間承認)。有限性のみ担保。
 if (!(sc.G && isFinite(sc.G.rms))) fail('絶対 RMSE 非有限');
-// ③ 他車6台: within-lap RMSE ≤ 2×BL・発散なし (max < LAPBF/2)・recall ≥ 0.7。
-if (!scM) fail('6台 interact で lp==1 未到達');
-else {
-  if (!(scM.rms <= 2.0)) fail('6台 車0 位置推定 RMSE ' + scM.rms.toFixed(2) + ' > 2×BL');
-  if (!(scM.maxErr < scM.LAPBF / 2)) fail('6台 車0 が発散 (max ' + scM.maxErr.toFixed(1) + ' ≥ LAPBF/2)');
-  if (scM.carTrue > 30 && !(scM.recall >= 0.7)) fail('前方検知 recall ' + (scM.recall * 100).toFixed(0) + '% < 70%');
-}
+// ③ 他車6台: 周回内 RMSE ≤ 2×BL（他車が近くにいた 1 周目を含む）・発散なし（別の周で較正した誤差の最大 ≤ 10 bin。1 周目を含む）・前方検知 recall ≥ 0.7（前に車がいる車で）。
+//   【BH5・2026-10-05 再スコープ・利用者承認】それまでは「別の周で較正した RMSE ≤ 2×BL」を車0 で判定していたが、同じ測り方は単独走行でも
+//   3.12 bin（②＝原点の取り直しの精度に律速なので 2026-07-04 から記録だけ）で、6 台の章の 2.0 は改修前の 1 本の走りで車0 だけが満たしていた値だった
+//   （同じ式でほかの車は 20〜49 bin）。逆走の向き直し（fleet.js の「BH5」）でレースの展開が変わると（全車 372 秒までに完走・改修前は車0 が 560 秒）、
+//   車0 は 2.60 bin になり、車0 の前に車がいなくなって前方検知の判定は空振りした（改修前 176 tick・78%）。∴ 位置推定は周回内（lookahead に効く
+//   実運用量）で判定し、別の周で較正した RMSE は記録にとどめる。前方検知は前に車がいる車（車4）で測り、前に車がいた tick が 30 以下なら赤。
+//   【同・層 4 の指摘で足したもの】(i) 従来の「発散なし (max < LAPBF/2)」は恒真だった（円環の距離は LAPBF/2 を超えない）→ 実効のある上限 10 bin に
+//   （実測 4.0・単独 4.6。既存のずれは原点の取り直しの 2〜3 bin）。周回内の測り方は周をまたぐずれを見ないので、これが「周ごとに原点が動く」
+//   「真位置と無関係に進む」を止める。採点は較正の周（本番の 2 周目）以外の全部＝他車が近くにいる 1 周目を含む。
+//   (ii) 周回内の採点にも 1 周目を入れ、採点した周で他車が近くにいた tick が 30 以下なら赤（「他車が近くにいる周」を空振りさせない）。
+//   (iii) 前方検知・採点とも走行中の tick だけ・相手は走行中の他車だけで数える。 (iv) 推定を壊した行に同じ判定を当て、狙った判定が赤になることを毎回確かめる。
+//   限界（記録）: ①位置と前方検知を別の車で見ている（車4 の位置推定は周回内 6 bin 超＝このサンプルは集団の中では地図がぶれる） ②前方検知の
+//   誤報率は判定していない ③ 1 周目の走りの展開に左右される（v9.0.0＝向き直しの前の木では、車0 が 1 周目に 0.58 周ぶん逆走して周回内 10.7 bin＝赤）
+//   ④発散の上限 10 bin より小さいずれ（同じ向きに約 6 bin・逆向きに約 9 bin まで）は通る。
+for (const m of J6.out) fail(m.msg);
+for (const [label, want, hit, tags] of POWER) if (!hit) fail('判定の検出力: 「' + label + '」で ' + want + ' の判定が赤にならない（赤になった判定: ' + (tags.join(',') || 'なし') + '）');
 // ④ β 再挑戦: go/no-go を「記録」(J-1 基準)。NO-GO でも失敗にしない (成果として記録=§13-4)。
 if (sc.beta.mae == null) fail('β 再挑戦 未測定');
 // ⑤ 演算予算: hard limit 200000 の ≪1% (StepLimit を投げない)。

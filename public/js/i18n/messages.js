@@ -870,6 +870,7 @@ export const MESSAGES = {
   'sim.crash.recover':  { ja: '【衝突】後退して切り返し中…', en: '[Crash] backing up and turning…' },
   'sim.crash.recoverGiveUp': { ja: '【衝突】袋小路で切り返せません(待機)', en: '[Crash] stuck in a dead end (waiting)' },
   'sim.crash.stopped':  { ja: '【衝突】停止しました', en: '[Crash] stopped' },
+  'sim.marshal':        { ja: '【逆走】向きを進行方向へ直しました', en: '[Wrong way] turned back to face the course direction' },
   'sim.goal':           { ja: '【ゴール】到達タイム {t} 秒', en: '[Goal] finish time {t} s' },
   'sim.runtimeErr':     { ja: '【実行時エラー】{e}', en: '[Runtime error] {e}' },
 

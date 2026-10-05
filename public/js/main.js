@@ -499,7 +499,7 @@ function integrateLive(dt) {
   while (rem > 1e-6) {
     const step = Math.min(max, rem);
     const e = fleetEdgesOf(slots);   // BG2: ゴールした車は相手にしない (fleet.js isRetired)
-    slots.forEach((s, i) => integrateSlot(s, step, othersFor(e, i, interact), course.walls, recover));
+    slots.forEach((s, i) => integrateSlot(s, step, othersFor(e, i, interact), course.walls, recover, slots));   // BH5: slots = 向き直しが相手のいまの姿勢を見る
     rem -= step;
   }
 }
@@ -522,7 +522,7 @@ function frame(t) {
         slots.forEach((s, i) => tickSlot(s, othersFor(edges, i, interact)));
         applyStartGate(slots, interact);   // Stage AK7: 一時停止ステップ実行でも発走順次化を一貫適用
         if (PHYSICS.mode === 'v2') integrateFleetV2(slots, 1 / SIM.loopHz, course.walls, recover, interact);
-        else slots.forEach((s, i) => integrateSlot(s, 1 / SIM.loopHz, othersFor(edges, i, interact), course.walls, recover));
+        else slots.forEach((s, i) => integrateSlot(s, 1 / SIM.loopHz, othersFor(edges, i, interact), course.walls, recover, slots));
       }
     } else {
       slots.forEach((s, i) => {

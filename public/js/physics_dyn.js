@@ -213,6 +213,7 @@ export class DynCar {
     //   (旧: どちらも reset で消えず、走行を押し直すと前の走行の計時を持ち越した＝BG1 層 4 L5)。_stuckT=0 なら次の
     //   積分で窓の始点 (_stuckX/_stuckY) を取り直すので、新しく作った車と同じ状態になる。
     this._ccOn = false; this._ccT = 0; this._ccX = 0; this._ccY = 0; this._stuckT = 0;
+    this._wrongB = 0; this._marshal = 0; // BH5: 逆走の向き直し (fleet.js marshalCheck)。逆へ進んだ距離と、向きを直した回数。reset で消す
     this.slip = 0;            // 描画互換: 後軸の飽和度 0..1 (スモーク)
     this.slipSign = 1;
     this.steerAngle = 0;

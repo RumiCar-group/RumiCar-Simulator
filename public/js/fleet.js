@@ -384,6 +384,7 @@ export function makeSlot({ i, lang, src, course, slotCount, logFor, persist }) {
   car.steerSet = slot.world.steerSet;   // AS12: 全エンジン (Car/DynCar/CarV2 が共通で持つ)
   if (car.engine === 'v2') { car.tireSet = slot.world.tire; car.wear = slot.world.wear; car.gearSet = slot.world.gear; car.suspSet = slot.world.susp; car.brakeSet = slot.world.brake; }
   slot._road = roadFrame(course);   // AP11/AS10: 道追従の路面フレーム (勾配+カント。平坦コース=null=no-op)
+  slot._dirF = dirFrame(course);    // BH5: 進行方向の場 (逆走の向き直し。進行方向が分からないコース=null=no-op)
   slot.hostEnv = buildApi(slot.world);
   return slot;
 }
@@ -421,6 +422,7 @@ export function rebuildSpawns(slots, course, grid, lapOpts) {
   const memo = {};   // BE2: 全車が同じ course なので、練習記録の指紋はこの呼び出しで 1 回だけ計算する (lap.js loadBestRec の memo)
   const occupied = [];
   const road = roadFrame(course);   // AP11/AS10: コース適用時に路面フレームを更新 (平坦=null)
+  const dirF = dirFrame(course);    // BH5: 進行方向の場も同じ時点で更新 (進行方向が分からないコース=null)
   const stMeta = roadMeta(course.start);   // AV1: 路面属性は roadMeta へ集約 (キー順・値とも従来と同一)
   slots.forEach((s, i) => {
     const g = grid && grid[i];
@@ -428,6 +430,7 @@ export function rebuildSpawns(slots, course, grid, lapOpts) {
     occupied.push(sp);
     s.spawn = sp;
     s._road = road;
+    s._dirF = dirF;
     s.world.walls = course.walls;
     s.world.start = sp;
     s.world._others = [];
@@ -537,11 +540,13 @@ export function roadFrame(course) {
   return { cl, n, nSeg, closed, dir, wn, bank, kMax };
 }
 
-// 車の位置における路面フレームを car へ書き込む (毎サブステップ)。rf=null は呼ばない (完全 no-op)。
-export function applyRoadFrame(car, rf) {
+// 点 (px,py) に最も近い中心線のセグメント (添字 _near.i・セグメント内の位置 _near.t・そこまでの距離 _near.d) を求める。路面フレーム
+// (applyRoadFrame) と進行方向 (BH5 の dirAt) が共用する (BH5 で applyRoadFrame から取り出した。式・走査順は同じ)。
+// 同じ距離のセグメントが 2 つあれば添字の小さい方。
+const _near = { i: 0, t: 0, d: 0 };
+function nearestSeg(rf, px, py) {
   const cl = rf.cl, nSeg = rf.nSeg, n = rf.n;
   let best = Infinity, bi = 0, bt = 0;
-  const px = car.x, py = car.y;
   for (let i = 0; i < nSeg; i++) {
     const a = cl[i], b = cl[(i + 1) % n];
     const dx = b[0] - a[0], dy = b[1] - a[1];
@@ -554,10 +559,179 @@ export function applyRoadFrame(car, rf) {
     const d = Math.hypot(px - (a[0] + t * dx), py - (a[1] + t * dy));
     if (d < best) { best = d; bi = i; bt = t; }
   }
+  _near.i = bi; _near.t = bt; _near.d = best;
+}
+
+// 車の位置における路面フレームを car へ書き込む (毎サブステップ)。rf=null は呼ばない (完全 no-op)。
+export function applyRoadFrame(car, rf) {
+  nearestSeg(rf, car.x, car.y);
+  const bi = _near.i, bt = _near.t, n = rf.n;
   car.slopeDir = rf.dir[bi];
   // 頂点曲率をセグメント内で線形補間 (道に沿って連続)。bank=0 なら gLatOf が 0 を返す。
   const w = rf.wn[bi] + (rf.wn[(bi + 1) % n] - rf.wn[bi]) * bt;
   car.gLat = gLatOf(DYN.g, rf.bank, w);
+}
+
+// ── BH5 (2026-10-04): 逆走の向き直し ─────────────────────────────────────────────────────────
+// プログラムは前方 3 センサーだけで走るのでコースの進行方向を知れず、切り返し・接触・自分の後退や操舵で向きが反転すると
+// そのまま逆向きに走り続けた (BH2 実測: 公式レースのペナルティ復帰で逆走した車 動力学 6.3%・クラシック 4.6%・精密 v2 23.4%。
+// 4 割は走行の終わりまで逆向きのまま)。裁定 (BH-4) で、自動復帰の一部として**コース係が車を置き直すのと同じ**ことをする:
+//   自動復帰 ON (ライブ)／ペナルティ復帰 (公式レース) で走行中の車が、車体の向きが進行方向と逆のまま、進行方向と逆へ
+//   MARSHAL_L 車長ぶん進んだら、その場で向きを進行方向へ直して止める (速度 0 から走り直す)。公式レースでは切り返しと同じく
+//   1 回と数える (race_engine.js のペナルティ)。リタイア規則・自動復帰 OFF・走行していない車・発走待ち (held) の車では働かない。
+// **働くのは進行方向が分かるコースだけ** (dirFrame):
+//   ・中心線 course.centerline を持つコース (出荷の track と峠＝course.js が組み立てたコース)。
+//   ・中心線は無いが、壁が「内周と外周の輪 2 本を、共通の中心から等しい角度で刻んだ形」(course.js buildAnnulus の作り方)
+//     であるコース (annulusMidline が壁から見分ける)。進行方向は中心のまわりを回る向き。出荷の annulus 4 本と、その壁を
+//     そのまま写したコース。
+//   それ以外 (自作・投稿コース) は従来どおり＝1 ビットも変わらない。コースオブジェクトには何も足さない (形の指紋
+//   course_digest.js・lap.js practiceCourseId は不変。同じ中身のコースは同じ挙動)。
+// 逆走の形は BH2 で固定した測定述語と同じ形: 向きが逆 = cos(θ−φ) < 0 (φ = 基準点 (後輪軸の中心) での進行方向 dirAt)・
+//   逆へ進んだ距離 = その間の −Σ(Δx·cos φ＋Δy·sin φ) (正味。向きが戻れば 0・0 より下へは積まない)。切り返しの後退は向きが
+//   進行方向のまま・スピンで向きだけ反転して進行方向へ滑る間は増えない・動けない車は 0 なので、どれも届かない。
+//   (測定述語との違い: φ は頂点の近くでなだらかにつないだ向き＝dirAt の注記・距離は 0 で下げ止める。測定は区間の向きそのまま・
+//    下げ止めなしなので、鋭い角の近くと、向きが逆のまま進行方向へ動いた後では、2 つの値が違う。)
+// 精密 v2 では、車が内側の壁を抜けて走路の外へ出ることがある (改修前からの未決)。走路の外 (基準線の最近点まで壁を横切らずに
+//   見通せない所) では向きを直さない。置き直す先も壁を越えない (下の marshalCheck の条件) ので、向き直しで走路の中へ戻ることも
+//   外へ出ることも無い。
+const MARSHAL_L = 5;       // 逆へ進んだ正味の距離がこの車長倍 (CAR.length＝その走行の実効寸法) に届いたら向きを直す
+const MARSHAL_COS = 0.9;   // 直した後の向きと、その位置の進行方向の一致 (cos) の下限
+
+// 壁が annulus の形なら、対になる頂点の中点列 mid (閉じた基準線・添字順は壁の並びのまま)・中心 (cx,cy)・添字順の回る向き turn
+// (+1=反時計回り) を返す。違えば null。
+//   条件 (全部): 壁がちょうど 2n 本 (n ≥ ANNULUS_MIN_N)・前半 n 本と後半 n 本がそれぞれ頂点を共有して閉じた輪・対 i (前半の i 番目と
+//   後半の i 番目の始点) が共通の 1 点から出る同じ半直線の上にあり、前半の方が遠い・半直線は添字順に等しい角度 (2π/n) で並ぶ。
+//   中心線を左右へずらして作った壁 (track・多くの投稿コース) も「輪 2 本・頂点が同数」だが、対は道の法線の方向なので
+//   1 点に集まらない＝ここで外れる (上流の投稿 2 本で実測)。
+//   n の下限 16: 8 方位 (45° 刻み) の輪はコースエディタの格子の上に手で描ける (角と辺の中点を結んだ四角い輪 2 本など) ので、
+//   自作コースに当たらないよう外す。16 方位以上の等角の半直線は格子点を通らない (tan 22.5° が無理数)。出荷の annulus は n=120・140。
+const ANNULUS_MIN_N = 16;
+function annulusMidline(course) {
+  const w = course.walls;
+  if (!Array.isArray(w) || w.length < 2 * ANNULUS_MIN_N || w.length % 2 !== 0) return null;
+  const n = w.length / 2;
+  for (let o = 0; o <= n; o += n) for (let i = 0; i < n; i++) {
+    const a = w[o + i], b = w[o + (i + 1) % n];
+    if (!a || !b || a.x2 !== b.x1 || a.y2 !== b.y1) return null;
+    if (!Number.isFinite(a.x1) || !Number.isFinite(a.y1)) return null;
+  }
+  // 共通の中心 = 対 0 と対 k (1/4 周先) を通る 2 直線の交点
+  const k = Math.round(n / 4);
+  const ax = w[0].x1, ay = w[0].y1, bx = w[n].x1 - ax, by = w[n].y1 - ay;
+  const cx0 = w[k].x1, cy0 = w[k].y1, dx = w[n + k].x1 - cx0, dy = w[n + k].y1 - cy0;
+  const den = bx * dy - by * dx;
+  if (!(Math.abs(den) > 1e-12)) return null;
+  const s = ((cx0 - ax) * dy - (cy0 - ay) * dx) / den;
+  const cx = ax + s * bx, cy = ay + s * by;
+  const r0 = Math.hypot(ax - cx, ay - cy);
+  if (!(r0 > 1e-9)) return null;
+  const e0x = (ax - cx) / r0, e0y = (ay - cy) / r0;
+  const turn = (e0x * (w[1].y1 - cy) - e0y * (w[1].x1 - cx)) >= 0 ? 1 : -1;   // 添字順の回る向き
+  const TOL = 1e-9, mid = [];
+  for (let i = 0; i < n; i++) {
+    const ang = turn * 2 * Math.PI * i / n, c = Math.cos(ang), sn = Math.sin(ang);
+    const ex = e0x * c - e0y * sn, ey = e0x * sn + e0y * c;   // 対 i が乗るはずの半直線の向き
+    const ox = w[i].x1 - cx, oy = w[i].y1 - cy, ix = w[n + i].x1 - cx, iy = w[n + i].y1 - cy;
+    const ro = ox * ex + oy * ey, ri = ix * ex + iy * ey;
+    if (!(ri > 0 && ro > ri)) return null;
+    if (Math.abs(ox * ey - oy * ex) > TOL * ro || Math.abs(ix * ey - iy * ex) > TOL * ro) return null;
+    mid.push([(w[i].x1 + w[n + i].x1) / 2, (w[i].y1 + w[n + i].y1) / 2]);
+  }
+  return { mid, cx, cy, turn };
+}
+
+// 進行方向の場。null = このコースでは向き直しは働かない。**export は検証用** (常設ゲート wf_bh5_marshal.mjs が本物を呼ぶ)。
+//   向き = 中心線のあるコースは、中心線の最近傍セグメント (AP11 の道追従と同じ探し方) の向きを、**頂点の近くでは隣の区間の向きへ
+//   なだらかにつないだ**もの (dirAt)。annulus は**中心のまわりを回る向き** (中心から見た方位に直角。中点列の折れ線の向きは、外周が
+//   角ばったコースの角で回る向きから 30° 余り外れ、頂点で折れる＝BH5 の実測で、直した後の向きが実際の走りの向きから最大 72° ずれた)。
+//   基準線 cl は、annulus でも「走路の上にいるか」の見通し (marshalCheck) に使う。
+//   基準線の添字順が周回の向き (lap.js が周回を数える向き＝フィニッシュ線を順方向に越える向き) と逆なら反転する (rev)。
+//   向きを決められない (下の注記) なら null。
+export function dirFrame(course) {
+  const f = course && course.finish;
+  if (!f) return null;
+  let cl = course.centerline, ring = null;
+  if (!Array.isArray(cl) || cl.length < 2) { ring = course.touge ? null : annulusMidline(course); cl = ring && ring.mid; }
+  if (!cl) return null;
+  const n = cl.length, nSeg = course.touge ? n - 1 : n;
+  const closed = !course.touge;
+  const dir = new Float64Array(nSeg), len = new Float64Array(nSeg);   // 区間の向きと長さ
+  for (let i = 0; i < nSeg; i++) {
+    const a = cl[i], b = cl[(i + 1) % n];
+    dir[i] = Math.atan2(b[1] - a[1], b[0] - a[0]); len[i] = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    if (!(len[i] > 1e-9)) return null;   // 長さ 0 の区間 (頂点の重複)・非有限の座標がある基準線では向きを決められない
+  }
+  // 頂点 v (区間 v−1 と v の継ぎ目) の折れ角 turn と tan(|turn|/2)。開いた基準線の両端は 0。折れ角が 150° を超える頂点
+  //   (ほぼ折り返し) がある基準線では場を作らない: 180° に近づくと tan が発散し、つなぐ範囲がその区間の全長に広がる。頭打ちに
+  //   すると、こんどは隣り合う 2 区間の境目で向きが飛ぶ (層 4 の実測: 160° で 42°)。出荷の折れ角の最大は 120° (トライアングル)。
+  const turn = new Float64Array(n), tanH = new Float64Array(n);
+  for (let v = 0; v < n; v++) {
+    if (!closed && (v === 0 || v >= nSeg)) continue;
+    let a = dir[v % nSeg] - dir[(v - 1 + nSeg) % nSeg];
+    while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI;
+    if (Math.abs(a) > 5 * Math.PI / 6) return null;
+    turn[v] = a; tanH[v] = Math.tan(Math.abs(a) / 2);
+  }
+  const df = { cl, n, nSeg, dir, len, turn, tanH, rev: false, ring };
+  // 基準線の添字順は周回の向きと同じか (rev)。**フィニッシュ線の法線** (正方向 fx,fy の側＝lap.js が周回を数える向き) と、フィニッシュ線の
+  //   中点に最も近い基準線の区間の向きの内積で決める。出荷の track はフィニッシュ線の中点が中心線の頂点そのもの＝どちらの区間が
+  //   最近傍になるかは丸め次第なので、最近点が頂点 (区間の端から 1e-6 m 以内) なら、そこに集まる両側の区間を両方見る。
+  //   どれかの内積の大きさが 0.3 以下 (フィニッシュ線が基準線とほぼ平行)・符号がそろわなければ、向きを決められない＝null。
+  //   annulus は回る向きの接線で見る。正方向 fx,fy そのものでなく法線を使うのは、出荷「トライアングル」のように正方向が法線から
+  //   60° ずれたコースでも、線を順方向に越える向き (lap.js と同じ) で決めるため。
+  //   前提: フィニッシュ線の中点が基準線の上 (か、すぐそば) にある。出荷の track は中心線の頂点 0・峠は中心線の上の点なので成り立つ。
+  //   courses.json で finish を明示して中点が基準線から横へ外れると、ヘアピンの近くでは「中点に最も近い区間」が向かいの区間になり、
+  //   場なし・逆向きになりうる (層 4 の合成: 道幅の 2 割ずらした 22,356 通りで 逆向き 36・場なし 362)。そういうコースを足したときは
+  //   常設ゲート wf_bh5_marshal.mjs A) (基準線を添字順にたどると lap.js が 1 周と数える) が赤にする。
+  const ex = f.x2 - f.x1, ey = f.y2 - f.y1, el = Math.hypot(ex, ey), fl = Math.hypot(f.fx, f.fy);
+  if (!(el > 1e-9) || !(fl > 0)) return null;
+  let nx = -ey / el, ny = ex / el;
+  const across = (nx * f.fx + ny * f.fy) / fl;
+  if (!(Math.abs(across) > 1e-4)) return null;   // 正方向がフィニッシュ線とほぼ平行 (lap.js も線の向きを決められない)
+  if (across < 0) { nx = -nx; ny = -ny; }
+  const mx = (f.x1 + f.x2) / 2, my = (f.y1 + f.y2) / 2;
+  const dots = [];
+  if (ring) { const a = Math.atan2(my - ring.cy, mx - ring.cx) + ring.turn * Math.PI / 2; dots.push(Math.cos(a) * nx + Math.sin(a) * ny); }
+  else {
+    nearestSeg(df, mx, my);
+    const i = _near.i, t = _near.t, at = (j) => dots.push(Math.cos(dir[j]) * nx + Math.sin(dir[j]) * ny);
+    at(i);
+    if (t * len[i] <= 1e-6 && (closed || i > 0)) at((i - 1 + nSeg) % nSeg);
+    if ((1 - t) * len[i] <= 1e-6 && (closed || i < nSeg - 1)) at((i + 1) % nSeg);
+  }
+  if (!dots.every((d) => Math.abs(d) > 0.3 && (d < 0) === (dots[0] < 0))) return null;
+  df.rev = dots[0] < 0;
+  return df;
+}
+// 位置 (x,y) の進行方向 (rad)。
+//   中心線のコース: 最近傍の区間 i の向きに、両端の頂点の折れ角の半分までを足す。重みは、頂点までの (区間に沿った) 距離 a と、
+//   基準線からの距離 d で決める: u = a / (d·tan(|折れ角|/2)) として 0.5·clamp((3 − u)/2, 0, 1)。u = 1 は 2 つの区間から等距離の所
+//   (内側)＝そこまでと外側の扇形の中ではちょうど中間の向きで、**隣り合う** 2 区間をまたいでも向きが飛ばない。u ≥ 3・基準線の上
+//   (d=0) では区間の向きそのまま (＝折れ角の小さい滑らかな中心線では、頂点のごく近くを除いて区間の向きと同じ)。
+//   残る飛び: ①隣り合わない区間の境目 (ヘアピンの内側の曲率の中心。道幅が曲率半径より広いコースでは走路の中にある) では、
+//   最近傍の区間が入れ替わるぶん向きが飛ぶ (出荷の polyline の track で 70〜137°)。滑らかに走る車がそこを通っても積もる距離は
+//   1 車長未満 (層 4 の実測: 車体 0.5× で最大 0.8 車長)。向かい合う 2 区間のあいだに壁が無い所 (ヘアピンの手前で走路がつながる所) を、
+//   手前の区間の向きのまま向かいの側に寄って走ると「向かいの区間の逆走」として積もるが、そういう所の道に沿った長さは出荷で最大 約 0.42 m
+//   (＝車体 1× で 2.2 車長・ライブの車体スケールの下限 0.5× で 4.4 車長) なので 5 車長に届かない (0.44× 未満なら幾何の上では届きうるが、
+//   UI のスライダーの下限は 0.5×・公式レースは 1× で走る)。②区間が短く両端の頂点のつなぐ範囲が重なる所では、頂点の折れ角ぶん以下の
+//   飛びが残る (出荷で最大 17°)。③基準線の頂点そのもの (d=0) では、近づく向きで値が変わる。
+//   なぜ要るか: 区間の向きのままだと、鋭い角 (出荷「トライアングル」は 120°) の手前で向きを変え始めた車は、まだ手前の区間に近いので
+//   場の向きから 90° 超ずれ、正しく走っているのに「向きが逆」と見えて距離が積もった (BH5 の層 4 の実測: 車体 1× で 1.9 車長・
+//   0.5× で 2.6 車長・0.4× では 5 車長に届いて向きを直してしまった)。逆走する車も角で向きが飛ばないので、角ごとに距離が 0 に戻らない。
+export function dirAt(df, x, y) {
+  let a;
+  if (df.ring) a = Math.atan2(y - df.ring.cy, x - df.ring.cx) + df.ring.turn * Math.PI / 2;
+  else {
+    nearestSeg(df, x, y);
+    const i = _near.i, d = _near.d;
+    a = df.dir[i];
+    if (d > 0) {
+      const vS = i, vE = (i + 1) % df.n, aS = _near.t * df.len[i], aE = (1 - _near.t) * df.len[i];
+      if (df.turn[vE] !== 0) a += 0.5 * df.turn[vE] * Math.max(0, Math.min(1, (3 - aE / (d * df.tanH[vE])) / 2));
+      if (df.turn[vS] !== 0) a -= 0.5 * df.turn[vS] * Math.max(0, Math.min(1, (3 - aS / (d * df.tanH[vS])) / 2));
+    }
+  }
+  return df.rev ? a + Math.PI : a;
 }
 
 // ── BG2 (2026-10-02): ゴール・完走・リタイアした車を他車の相手から外す ─────────────────────────
@@ -612,7 +786,8 @@ function polyArea2(p) {   // 符号付き面積の 2 倍 (靴ひも公式)
   for (let i = 0; i < p.length; i++) { const a = p[i], b = p[(i + 1) % p.length]; s += a.x * b.y - b.x * a.y; }
   return s;
 }
-function overlapArea(a, b) {
+// (export は検証用。BH5: 向き直しの直後の重なりを常設ゲート wf_bh5_marshal.mjs が同じ量で測る)
+export function overlapArea(a, b) {
   const sgn = polyArea2(b) >= 0 ? 1 : -1;   // b の巻き向き (内側の判定の符号)
   let poly = a;
   for (let k = 0; k < b.length && poly.length; k++) {
@@ -664,12 +839,68 @@ function carContact(car, px, py, pth, others) {
   return { escape: false, ahead };
 }
 
+// BH5: 逆走の向き直し (冒頭の注記)。積分の後・ラップ計測の前に 1 台ずつ呼ぶ。(px,py) = この呼び出しの前の基準点・
+// polysOf() = 重なりを見る相手の車体の 4 隅の配列 (向きを直すときにだけ呼ぶ)。
+//   **その場で**向きを直す。姿勢の候補を順に試し、最初に通ったものを採る (どちらも車は 1 車長より小さくしか動かない):
+//     A 車体の中心を保って回す (向き = いまの基準点の進行方向)
+//     B 基準点 (後輪軸の中心) を保って回す (A で回した後の基準点で進行方向が大きく変わる角の近くでも、こちらは向きが合う)
+//   (試作にあった「基準線の最近点へ寄せる」は入れていない: 実走の約 1,300 回の向き直しで 2 回しか要らず、離れた所へ動かす分だけ
+//    他車・壁との確認が増える。A・B が通らない車は下のとおり見送って待つ。)
+//   前提: 走路の上にいる (車体の中心から基準線の最近点まで壁を横切らずに見通せる)。
+//   通る条件 (全部): 壁と交差しない (A は中心が動かない・B は基準点のまわりに回すだけ＝壁を挟めばここで落ちる)・どの相手とも重なりの面積を
+//     増やさない・直した後の向きが、その基準点の進行方向と cos > MARSHAL_COS・基準点がフィニッシュ線の線を順方向に越えない
+//     (lap.js crossesForwardTo＝置き直しで周回・発走の通過・借りの返済を起こさない。逆方向に越えた分は、この後の lap.update が
+//     通常どおり借りにする＝周回の数は位置の巻き数と合ったまま)。
+//   どれも通らなければ今回は見送る (積んだ距離は残る＝次の呼び出しでまた試す)。切り返し中は終わるまで待つ。
+function marshalCheck(slot, walls, recover, px, py, polysOf) {
+  const car = slot.car, df = slot._dirF;
+  if (!df || !recover || !slot.running || car.crashed || car.held) { car._wrongB = 0; return; }
+  const phi = dirAt(df, car.x, car.y);
+  if (!(Math.cos(car.theta - phi) < 0)) { car._wrongB = 0; return; }
+  // 0 より下へは積まない: 向きが逆のまま進行方向へ動いた分 (バックで進む・他車に押される・スピンして滑る) を、その後の逆走の
+  //   「貯金」にしない (貯金にすると、その分だけ余計に逆走してからでないと向きを直さない。フルスケールで 70 車長の実例)。
+  car._wrongB = Math.max(0, (car._wrongB || 0) - ((car.x - px) * Math.cos(phi) + (car.y - py) * Math.sin(phi)));
+  if (!(car._wrongB >= MARSHAL_L * CAR.length) || car.recoverT > 0) return;
+  const off = (CAR.length - CAR.rearToBack) - CAR.length / 2;   // 基準点から車体の中心まで (向きに沿って前へ)
+  const ox = car.x, oy = car.y, oth = car.theta;
+  const cx = ox + off * Math.cos(oth), cy = oy + off * Math.sin(oth);
+  // 走路の上にいること: 車体の中心から基準線の最近点まで、壁を横切らずに見通せる。見通せない所 (精密 v2 で壁を抜けて走路の外へ
+  //   出た車・壁の向こうの区間が最近傍になる所) では進行方向の場が当てにならないので、向きを直さない (距離は残る＝見通せる所で試す)。
+  nearestSeg(df, cx, cy);
+  const qa = df.cl[_near.i], qb = df.cl[(_near.i + 1) % df.n];
+  if (!segClearNear(cx, cy, qa[0] + _near.t * (qb[0] - qa[0]), qa[1] + _near.t * (qb[1] - qa[1]), walls)) return;
+  const before = car.corners(), polys = polysOf(), tol = 1e-9 * CAR.length * CAR.width;
+  const base = polys.map((p) => overlapArea(before, p));
+  const tryPose = (x, y, th) => {
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(th)) return false;
+    if (!(Math.cos(th - dirAt(df, x, y)) > MARSHAL_COS)) return false;
+    if (typeof slot.lap.crossesForwardTo === 'function' && slot.lap.crossesForwardTo(x, y)) return false;   // 古い lap.js なら見ない (BA1)
+    car.x = x; car.y = y; car.theta = th;
+    let ok = !checkCollision(car, walls);
+    if (ok && polys.length) { const now = car.corners(); ok = polys.every((p, i) => !(overlapArea(now, p) > base[i] + tol)); }
+    if (!ok) { car.x = ox; car.y = oy; car.theta = oth; }
+    return ok;
+  };
+  let done = tryPose(cx - off * Math.cos(phi), cy - off * Math.sin(phi), phi);       // A
+  if (!done) done = tryPose(ox, oy, phi);                                           // B
+  if (!done) return;
+  car.halt();
+  car._wrongB = 0; car._marshal = (car._marshal || 0) + 1;
+  car._ccOn = false; car._stuckT = 0;   // 車どうしの STUCK の窓・v2 のスタック検出の窓は置き直した位置から取り直す
+  slot.world.log(t('sim.marshal'));
+}
+
 // 物理積分 + 衝突 + ラップ (1 台分)。
 // 壁との衝突: recover=ON なら「後退して切り返し復帰」を試みる / OFF なら従来どおりクラッシュ(恒久停止)。
 // 他車との接触 = 移動を取り消してその場で止まる (クラッシュではない)。ただし重なりから抜ける動きは通し (ESCAPE)、
 // 自動復帰 ON で動けないまま STUCK_WINDOW 秒たてば切り返す (STUCK)。外した車 (isRetired) は他車と当たらない。
-export function integrateSlot(slot, dt, others, walls, recover) {
+// peers (任意・BH5): 全スロットの配列。渡すと、逆走の向き直しが相手の車の**いまの姿勢**を見る (others は呼び出し側が tick／サブステップの
+//   冒頭に作った車体エッジ＝先に動いた車・先に置き直した車の姿勢は古い)。渡さない呼び出し (古い main.js／race_engine.js・治具) は others で見る。
+//   衝突の判定そのものは従来どおり others で見るので、先の車が向きを直した同じ tick に、後の車が直した後の車体へ 1 回の移動ぶんだけ
+//   入り込むことはある (層 4 の作り込みで 公式レース 11 mm・ライブのサブステップ 26 mm。車どうしが同じ tick に動くときの従来の古さと同じ)。
+export function integrateSlot(slot, dt, others, walls, recover, peers) {
   const car = slot.car;
+  const mpx = car.x, mpy = car.y;   // BH5: この呼び出しの前の基準点 (逆走の距離の積算)
   if (others.length && isRetired(slot)) others = [];   // BG2: ゴール・完走・リタイアした車は他車と当たらない
   if (!car.crashed && dt > 0 && !car.held) {
     // 諦め(袋小路)中は一定時間 待避して他車を塞がない → クールダウン後に再挑戦 (周囲の渋滞が動けば抜ける)。
@@ -748,6 +979,16 @@ export function integrateSlot(slot, dt, others, walls, recover) {
       }
     }
   }
+  // BH5: 逆走の向き直し。相手 = 他車を相手にする走り (others が空でない) のときだけ。peers があれば、外していない他車のいまの姿勢
+  //   (同じ tick に先に置き直した車は置き直した後の姿勢)。無ければ渡された others (1 台 4 本・各辺の始点が 4 隅＝carContact と同じ約束。
+  //   約束が崩れていたら相手を確かめられないので向きを直さない)。
+  if (others.length % 4 === 0) marshalCheck(slot, walls, recover, mpx, mpy, () => {
+    if (!others.length) return [];
+    if (Array.isArray(peers)) return peers.filter((o) => o !== slot && !isRetired(o)).map((o) => o.car.corners());
+    const ps = [];
+    for (let k = 0; k < others.length; k += 4) ps.push([0, 1, 2, 3].map((j) => ({ x: others[k + j].x1, y: others[k + j].y1 })));
+    return ps;
+  });
   const lapped = slot.lap.update(dt, car.x, car.y, slot.running && !car.crashed);
   // 峠モード: ゴール到達でその車を停止 (駆動解除)。
   if (lapped && slot.lap.touge && slot.lap.finished) {
@@ -810,6 +1051,7 @@ export function integrateFleetV2(slots, dt, walls, recover, interact) {
   const eps = stuckEps();
   const h = 1 / SIM.physicsHz;
   let rem = dt;
+  const mprev = slots.map((s) => [s.car.x, s.car.y]);   // BH5: この呼び出しの前の基準点 (逆走の距離の積算)
   // レース/卓上ベンチは dt=1/60=ちょうど1サブステップ (ループ1回)。ライブは sdt を h 刻みへ分割 (レースと同一粒度)。
   while (rem > 1e-6) {
     const s = Math.min(h, rem); rem -= s;
@@ -872,9 +1114,13 @@ export function integrateFleetV2(slots, dt, walls, recover, interact) {
       }
     }
   }
-  // ── 4. ラップ計測 (全車・integrateSlot と同型) ＋ 峠ゴール停止 ──
-  for (const slot of slots) {
+  // ── 4. 逆走の向き直し (BH5) ＋ ラップ計測 (全車・integrateSlot と同型) ＋ 峠ゴール停止 ──
+  //   向き直しの相手 = 接触を作る車 (interact ON・外した車を除く) のいまの姿勢 (先に置き直した車は置き直した後の姿勢)。
+  for (let k = 0; k < slots.length; k++) {
+    const slot = slots[k];
     const car = slot.car;
+    marshalCheck(slot, walls, recover, mprev[k][0], mprev[k][1], () => (interact && !isRetired(slot)
+      ? slots.filter((o) => o !== slot && !isRetired(o)).map((o) => o.car.corners()) : []));
     const lapped = slot.lap.update(dt, car.x, car.y, slot.running && !car.crashed);
     if (lapped && slot.lap.touge && slot.lap.finished) {
       slot.running = false;

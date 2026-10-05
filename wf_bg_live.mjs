@@ -78,7 +78,7 @@ export function liveFrame(L, sdt) {
     while (rem > 1e-6) {
       const step = Math.min(max, rem);
       const e = fleetEdgesOf(M, slots);
-      slots.forEach((s, i) => fleet.integrateSlot(s, step, fleet.othersFor(e, i, true), course.walls, true));
+      slots.forEach((s, i) => fleet.integrateSlot(s, step, fleet.othersFor(e, i, true), course.walls, true, slots));
       rem -= step;
     }
   }

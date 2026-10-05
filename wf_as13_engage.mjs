@@ -67,7 +67,10 @@ ok(toolExit === 0 && !!manifest.canonicalNode.resultSha256,
 // 【BH3・2026-10-04】凍結値を c731ecce → cb6afdeb へ刻み直した（利用者承認）。周回の数え方の是正（lap.js の【BH3】）で、
 //   1 位だった Circuit-FR（25.65 秒）が完走から外れる: 14.25 秒にフィニッシュ線を逆向きに通り、25.63 秒に通り直しただけで、
 //   コースを 1 周していなかった（BH2 の実測）。完走は Circuit-FF 71.88 秒・Circuit-AWD 115.02 秒の 2 台。
-ok(real.verifyHash === 'cb6afdeb', `B2 正準サンプルの verifyHash が凍結値 cb6afdeb のまま (実測 ${real.verifyHash})`);
+// 【BH5・2026-10-05】凍結値を cb6afdeb → e9f1da0b へ刻み直した（利用者承認）。逆走の向き直し（fleet.js の「BH5」）で、時間切れだった
+//   3 台目 Circuit-FR が 177.08 秒で完走する（逆走のたびに向きを直される。ペナルティ 57 秒）。1 位 Circuit-FF 71.88 秒・
+//   2 位 Circuit-AWD 115.02 秒は変わらない。
+ok(real.verifyHash === 'e9f1da0b', `B2 正準サンプルの verifyHash が凍結値 e9f1da0b のまま (実測 ${real.verifyHash})`);
 
 // ---- 実データのレース束 (正準サンプルの event + entries + いま生成した result) ----
 const bundle = JSON.parse(readFileSync(join(HERE, 'docs/phase_w/official_sample_event.json'), 'utf8'));

@@ -29,6 +29,7 @@ export class Car {
     this.recoverN = 0; this.recoverX = 0; this.recoverY = 0; this.gaveUp = false; this.recoverCooldownT = 0; // Stage AK4/D5: 後退リカバリの袋小路ガード
     this.held = false; this.released = false; // Stage AK7: 発走の順次化(anti-pile-up)。前方に他車が居る間 held=発走保留・空けば released(ラッチ)
     this._ccOn = false; this._ccT = 0; this._ccX = 0; this._ccY = 0; // BG2: 車どうしの STUCK の窓 (fleet.js integrateSlot)。reset で消す (BG1 層 4 L5)
+    this._wrongB = 0; this._marshal = 0; // BH5: 逆走の向き直し (fleet.js marshalCheck)。逆へ進んだ距離と、向きを直した回数。reset で消す
     this.slip = 0;       // ドリフト状態 0..1 (滑り具合。立ち上がり/収束はプロファイルのレート依存)
     this.slipSign = 1;   // 滑り方向 (+1=左旋回で右へ流れる)。舵を戻しても滑り終わるまで保持
     this.steerAngle = 0; // 実際の操舵角(rad)。steerRate で目標へ有限速度で動く (サーボ模擬)

@@ -25,6 +25,8 @@ const ccSrc = prog('comp_circuit').src;   // Circuit Racer (再チューン済 v
 const csSrc = prog('comp_slip').src;       // Slip Attack (ドリフト FR)
 // f2: 3車種 (FF/FR/AWD) が Circuit Racer で独立走行 (interact:false)・normal タイヤ・1周・rejoin。
 //     FF は清潔に周回・FR/AWD はオーバーステアでスピン (実車スケールの安定性レッスン=course desc)。
+//     【BH5・2026-10-05】スピンで逆を向いて逆走した FR/AWD は、5 車長で向きを直されて完走する (fleet.js の「BH5」。v9.0.0 までは
+//     逆走のまま時間切れ＝完走 1 台)。完走 3 台: FF 72.3 秒・AWD 97.4 秒 (向き直し 2 回)・FR 135.2 秒 (同 3 回)。凍結値 af5a68bd → d4e169d2。
 const r2 = runRace({ report:true, physics:'v2', regime:'fullscale', course:circuit, laps:1, interact:false,
   field:['normal_ff','normal_fr','normal_awd'].map((ct,i)=>({ name:'C'+i, lang:'c', src:ccSrc, carType:ct, rear:false, encoder:false })),
   crashRule:{rejoin:true,penaltySec:3}, maxSec:200 });
