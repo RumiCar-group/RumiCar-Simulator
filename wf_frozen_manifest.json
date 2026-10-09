@@ -2,7 +2,7 @@
   "_doc": "凍結回帰ハッシュの中央マニフェスト (Stage AP3・単一の真実源)。物理を意図的に変えた版では wf_refreeze.mjs で刻み直す (実行→差分→人間承認→書込・CI-11)。意図せぬ変化は 5 参照ゲート (ab8_bench/ak5_robustness/ao5_calib/collision_model/recover_model) が exit 1 で検出する。AP-0 方針: 卓上 byte 不変は 2026-07-10 に緩和され、f0〜f3 は『絶対不変ゲート』から『版付き回帰記録』へ降格 (旧版値は当時のエンジン版・条件の時点記録として history に保持)。",
   "schemaVersion": 1,
   "current": {
-    "appVersion": "v9.0.0",
+    "appVersion": "v10.0.0",
     "stampedAt": "2026-10-05",
     "hashes": {
       "f0": "d3267904",
@@ -20,15 +20,15 @@
   "canonicalNode": {
     "node": "22.22.1",
     "v8": "12.4.254.21-node.35",
-    "resultSha256": "b57a39dbc675066f71c9ac641ba64e02f7ba4b4d36131e5f782c2a4ca48cd7a8",
-    "pinnedAt": "2026-10-05",
+    "resultSha256": "b51d0947aca270bdffcc7bab27f393b21b4e1e41dd52b556aa2410944d78a727",
+    "pinnedAt": "2026-10-09",
     "eventId": "official-sample-circuit",
-    "appVersion": "v9.0.0",
-    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=e9f1da0b 照合で検証済。理由: Stage BH / BH5: 逆走の向き直しで公式サンプルの 3 台目 Circuit-FR が時間切れ → 177.083 秒で完走（verifyHash cb6afdeb → e9f1da0b）。1 位・2 位は不変。利用者承認 2026-10-05。"
+    "appVersion": "v10.0.0",
+    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=e9f1da0b 照合で検証済。理由: BH4: Stage BH 結了の版バンプ v9.0.0 → v10.0.0（MAJOR・利用者裁定 2026-10-10）。appVersion が engineFingerprint 経由で resultSha256 を変えるための再ピン。verifyHash e9f1da0b は BH5 の値のまま（物理は BH5 から不変）。"
   },
   "history": [
     {
-      "appVersion": "v9.0.0",
+      "appVersion": "v10.0.0",
       "stampedAt": "2026-10-05",
       "hashes": {
         "f0": "d3267904",
@@ -36,7 +36,7 @@
         "f2": "d4e169d2",
         "f3": "6bb96b8a"
       },
-      "reason": "Stage BH / BH5: 逆走の向き直し（fleet.js marshalCheck）。f2（競技サーキット 精密 v2 3 台）は、逆走していた 2 台が向きを直されて完走 1 → 3 台。f0・f1・f3 は不変。利用者承認 2026-10-05。"
+      "reason": "Stage BH / BH5: 逆走の向き直し（fleet.js marshalCheck）。f2（競技サーキット 精密 v2 3 台）は、逆走していた 2 台が向きを直されて完走 1 → 3 台。f0・f1・f3 は不変。利用者承認 2026-10-05。 値を刻んだのは 2026-10-05（開発中の版名 v9.0.0 のまま）で、Stage BH 結了（BH4）の版 v10.0.0 で初めて公開したので版スタンプは v10.0.0（手で書き換え・ハッシュ値不変・2026-10-10）。"
     },
     {
       "appVersion": "v9.0.0",
