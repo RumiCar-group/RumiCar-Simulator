@@ -120,12 +120,84 @@ export function formField(event, entries) {
 // ============================================================================
 // W5 (GitHub 公式開催) — 締切時の確定エントリー列から「再実行用フィールド」を決定論的に組む。
 // イベント schema (W_spec §1) のエントリー {name, author, program:{src,lang}, carDef, submittedAt} を
-// runRace の field 形 {name, lang, src, carType, carDef} へ正規化し、**グリッド=エントリー順** を
-// submittedAt 昇順 (タイブレーク author→name) で復元 → validateEntry でクラス規定違反を弾き →
-// formField で filler 補充。**純関数・決定論** (Math.random/Date 不使用) なので、ブラウザの
-// 「ローカル再実行 (参考)」と pinned Node の「公式検証」が必ず同一 field を再構成する
-// (= 誰でも同じ入力から同じ結果を再現できる＝公式記録が成立する根拠・W_spec §5/§7)。
+// runRace の field 形 {name, lang, src, carType, carDef} へ正規化し、**締切 (entryWindow.close) より後の
+// submittedAt を除き** → **グリッド=エントリー順** を submittedAt 昇順 (タイブレーク author→name→本文) で復元 →
+// validateEntry でクラス規定違反を弾き → formField で filler 補充。**純関数・決定論** (Math.random/Date 不使用・
+// ロケールにもタイムゾーンにも依存しない) なので、ブラウザの「ローカル再実行 (参考)」と pinned Node の「公式検証」が
+// 必ず同一 field を再構成する (= 誰でも同じ入力から同じ結果を再現できる＝公式記録が成立する根拠・W_spec §5/§7)。
+//
+// 【BI1・2026-10-11】フィールド構成の決定論を 3 点直した (常設ゲート wf_bi1_field.mjs が見張る):
+//   ① 並べ替えの比較を、ロケール依存の照合から文字列の `<`/`>` (UTF-16 の符号単位の大小) へ変えた。旧実装は
+//      同時刻 submittedAt のタイブレーク (author) を検証する人の既定ロケールで並べていたため、同じ entries から
+//      別のグリッドができえた (実測: LANG=tr_TR では 'i'/'I'/'ı'/'İ' の並びが LANG=C・ja_JP と異なる)。
+//      このファイルではロケール・タイムゾーン・実行環境に依存する API を使わない (ゲートの A 章が語を数える)。
+//   ② タイブレークを author→name→本文まで延ばした。旧実装は (submittedAt, author||name) が同じエントリーを
+//      **入力順のまま**残したので、エントリーの取得順 (ブラウザ=GitHub の一覧順・Node=束の並び) が違えば
+//      グリッドが変わりえた。いまは内容が完全に同じエントリーどうしだけが入力順に残る (同じ車なので入れ替わっても同じ)。
+//   ③ entryWindow.close より後の submittedAt のエントリーを field に入れない (W_spec §1「締切時の確定エントリー列」)。
+//      close と同時刻は入る。close が未記載 (欄が無い・空文字) なら従来どおり全件。時刻は下の parseInstant が
+//      **タイムゾーン付きの ISO 8601 だけ**を読む (オフセット無しの日時は実行環境の地方時で解釈が変わるので読まない)。
+//      close があるとき、時刻として読めない submittedAt のエントリーは「締切までに出した」と言えないので入れない。
+//      close が書かれているのに読めない event は、生成側 (wf_official_result.mjs) が受け付けない (exit 2)。
+//      ここ (frozenField) では未記載と同じに扱う (ブラウザの開催状態 raceStatus も Date.parse で読めない close を
+//      「締切なし」と見る。オフセット無しの close だけは raceStatus が地方時で読むので解釈が分かれるが、生成側が
+//      受け付けないので公式記録にはならない)。
 // ============================================================================
+
+// 文字列の大小 (UTF-16 の符号単位の順)。ロケールに依存しない。
+const cmpStr = (x, y) => (x < y ? -1 : (x > y ? 1 : 0));
+
+// タイムゾーン付きの ISO 8601 日時 → { ms: UTC の整数ミリ秒, sub: ミリ秒より下の桁 (末尾の 0 を除いた数字列) }。
+// 読めなければ null。日付と時刻は値の範囲まで検査する (2 月 30 日・24 時・60 秒・オフセット 24 時間以上は読まない)。
+// 暦の計算は整数演算 (先発グレゴリオ暦の日数) で行い、組込の日付 API を使わない＝どの実行環境でも同じ値になる。
+const ISO_INSTANT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:(Z)|([+-])(\d{2}):(\d{2}))$/;
+function daysFromCivil(y, m, d) {
+  const yy = y - (m <= 2 ? 1 : 0);
+  const era = Math.floor(yy / 400);
+  const yoe = yy - era * 400;
+  const doy = Math.floor((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1;
+  const doe = yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy;
+  return era * 146097 + doe - 719468;   // 1970-01-01 からの日数
+}
+function parseInstant(s) {
+  if (typeof s !== 'string') return null;
+  const m = ISO_INSTANT.exec(s);
+  if (!m) return null;
+  const Y = Number(m[1]), Mo = Number(m[2]), D = Number(m[3]), h = Number(m[4]), mi = Number(m[5]);
+  const sec = m[6] != null ? Number(m[6]) : 0;
+  if (Mo < 1 || Mo > 12 || D < 1 || h > 23 || mi > 59 || sec > 59) return null;
+  const leap = (Y % 4 === 0 && Y % 100 !== 0) || Y % 400 === 0;
+  const dim = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][Mo - 1];
+  if (D > dim) return null;
+  let off = 0;
+  if (!m[8]) {
+    const oh = Number(m[10]), om = Number(m[11]);
+    if (oh > 23 || om > 59) return null;
+    off = (m[9] === '-' ? -1 : 1) * (oh * 60 + om);
+  }
+  const frac = m[7] || '';
+  const msFrac = Number((frac + '000').slice(0, 3));
+  const sub = frac.slice(3).replace(/0+$/, '');
+  const ms = ((daysFromCivil(Y, Mo, D) * 24 + h) * 60 + mi - off) * 60000 + sec * 1000 + msFrac;
+  return { ms, sub };
+}
+function cmpInstant(a, b) {
+  if (a.ms !== b.ms) return a.ms < b.ms ? -1 : 1;
+  const n = Math.max(a.sub.length, b.sub.length);
+  return cmpStr(a.sub.padEnd(n, '0'), b.sub.padEnd(n, '0'));
+}
+
+// 締切 (event.entryWindow.close) の解釈。
+//   { kind: 'none' }           … 未記載 (entryWindow が無い・close が無い／null／空文字) ＝ 全件 (後方互換)
+//   { kind: 'at', at }         … タイムゾーン付きの ISO 8601 日時 ＝ これより後の submittedAt を除く
+//   { kind: 'invalid', raw }   … 書かれているが読めない (生成側 wf_official_result.mjs はこの event を受け付けない)
+export function entryClose(event) {
+  const w = event && event.entryWindow;
+  const raw = (w && typeof w === 'object') ? w.close : undefined;
+  if (raw == null || raw === '') return { kind: 'none' };
+  const at = parseInstant(raw);
+  return at ? { kind: 'at', at } : { kind: 'invalid', raw };
+}
 
 // エントリー (W_spec §1 schema) → runRace field エントリー形へ正規化。
 function normEntry(e) {
@@ -140,10 +212,25 @@ function normEntry(e) {
   };
 }
 
+// グリッド順: submittedAt (書かれた文字列のまま) → author (無ければ name) → name → 本文 (lang・src・carType・carDef)。
+// 最初の 2 段は旧実装と同じ鍵 (比較だけをロケール非依存にした)。submittedAt を時刻へ直さずに文字列で比べるのは
+// 旧実装と同じで、エントリー画面が書く toISOString() の形 (UTC・ミリ秒 3 桁・Z) どうしなら時刻順と一致する。
+const tieKey = (e) => JSON.stringify([e.lang, e.src, e.carType, e.carDef == null ? null : e.carDef]);
+function cmpEntry(a, b) {
+  return cmpStr(String(a.submittedAt), String(b.submittedAt))
+    || cmpStr(String(a.author || a.name || ''), String(b.author || b.name || ''))
+    || cmpStr(String(a.name == null ? '' : a.name), String(b.name == null ? '' : b.name))
+    || cmpStr(tieKey(a), tieKey(b));
+}
+
 export function frozenField(event, entries) {
-  const ordered = [...(entries || [])].map(normEntry).sort((a, b) =>
-    String(a.submittedAt).localeCompare(String(b.submittedAt)) ||
-    String(a.author || a.name || '').localeCompare(String(b.author || b.name || '')));
+  const close = entryClose(event);
+  const onTime = (e) => {
+    if (close.kind !== 'at') return true;            // 未記載 (と読めない close) は全件
+    const t = parseInstant(e.submittedAt);
+    return t != null && cmpInstant(t, close.at) <= 0;   // 締切と同時刻は入る・時刻として読めない submittedAt は入らない
+  };
+  const ordered = [...(entries || [])].map(normEntry).filter(onTime).sort(cmpEntry);
   const valid = ordered.filter((e) => validateEntry(event, e).ok);
   return formField(event, valid);
 }

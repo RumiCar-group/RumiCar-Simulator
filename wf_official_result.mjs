@@ -20,7 +20,7 @@ import { dirname, join, resolve, isAbsolute } from 'path';
 import { createHash } from 'crypto';
 import { buildFromSpec } from './public/js/course.js';
 import { runRace, engineFingerprint } from './public/js/race_engine.js';
-import { frozenField } from './public/js/race_event.js';
+import { frozenField, entryClose } from './public/js/race_event.js';
 import { PROGRAM_BY_KEY } from './public/js/programs.js';
 import { APP_VERSION } from './public/js/config.js';
 
@@ -51,6 +51,15 @@ function loadBundle(path) {
   const { event, entries, courseSpec } = bundle;
   if (!event || !Array.isArray(entries) || !courseSpec) {
     console.error(`✗ イベント束の必須欄が欠落 (event / entries[] / courseSpec): ${path}`); process.exit(2);
+  }
+  // BI1: 締切 (entryWindow.close) が書かれているのに時刻として読めない event は受け付けない。frozenField は読めない
+  //   close を「締切なし」と同じに扱う (全件) ので、そのまま走らせると締切後のエントリーが黙って公式記録に入る。
+  //   読めるのはタイムゾーン付きの ISO 8601 だけ (オフセット無しの日時は実行環境の地方時で解釈が変わる＝決定論にならない)。
+  const close = entryClose(event);
+  if (close.kind === 'invalid') {
+    console.error(`✗ event.entryWindow.close を時刻として読めない: ${JSON.stringify(close.raw)}`);
+    console.error('  タイムゾーン付きの ISO 8601 日時で書く (例 "2026-07-14T23:59:59Z" / "2026-07-15T08:59:59+09:00")。締切が無いなら欄ごと消すか空文字にする。');
+    process.exit(2);
   }
   const expanded = entries.map((e) => {
     if (e.progKey && !e.program && !e.src) {
@@ -84,11 +93,14 @@ function runOfficial(bundle, grid = null) {
   return { res, course, field, event };
 }
 
-// runRace 出力 → W_spec §6 result.json schema へ整形。author は field から name 一致で引く。
+// runRace 出力 → W_spec §6 result.json schema へ整形。author は runRace が返す idx (= field の添字) で引く。
+// 【BI1】旧実装は車名で引いていた (field.find(x => x.name === name)) ため、同名のエントリーが 2 件あると 2 台とも
+//   グリッドで先に並んだ方の author になった (実測: 'Twin' alice / 'Twin' bob の束で bob の行が alice になった)。
+//   filler (author を持たない) は null (旧実装と同じ)。
 function buildResult(bundle, runOut) {
   const { event } = bundle;
   const { res, field } = runOut;
-  const authorOf = (name) => { const f = field.find((x) => x.name === name); return (f && f.author) || null; };
+  const authorAt = (idx) => { const f = Number.isInteger(idx) ? field[idx] : undefined; return (f && f.author) || null; };
   return {
     eventId: event.id,
     engineVer: APP_VERSION,
@@ -97,13 +109,13 @@ function buildResult(bundle, runOut) {
     regime: event.regime || null,
     laps: Math.max(1, Math.round(event.laps || 3)),
     finishers: res.finishers.map((f) => ({
-      rank: f.rank, name: f.name, author: authorOf(f.name), carType: f.carType,
+      rank: f.rank, name: f.name, author: authorAt(f.idx), carType: f.carType,
       totalTimeMs: Math.round(f.totalTimeMs),
       bestLapMs: f.bestLapMs != null ? Math.round(f.bestLapMs) : null,
       penaltiesSec: f.penaltiesSec,
     })),
     dnf: res.dnf.map((d) => ({
-      name: d.name, author: authorOf(d.name), carType: d.carType,
+      name: d.name, author: authorAt(d.idx), carType: d.carType,
       lapsCompleted: d.lapsCompleted, reason: d.reason,
     })),
     grid: res.grid,   // AD1: 凍結グリッド (算法非依存の忠実再現に使う)

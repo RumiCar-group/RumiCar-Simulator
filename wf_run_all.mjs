@@ -176,6 +176,11 @@ const GATES = [
   //   Python 版サンプルと C 版の走りの違い）。説明を直さずに走りや定数を変えると赤になる。自己位置推定サンプルの数字は、実測を持つ
   //   wf_ao10_localize.mjs の ⑥ が同じ形で見張る。所要は本ホスト実測 約 7s（単独・2026-10-05）。
   'wf_bh6_docs.mjs',
+  // BI1: 公式レースのフィールド構成の決定論（race_event.js frozenField・wf_official_result.mjs の帰属）。グリッド順がロケールと入力順に
+  //   依存しない（LANG/TZ を変えた node 3 起動で並びの sha256 一致・改修前の原文を陰性対照に）・entryWindow.close より後の submittedAt を
+  //   除き同時刻は入れる・close 未記載は全件（Date.parse 基準 400 組とも一致）・同名エントリーの author を field の添字で引く（生成側を
+  //   子プロセスで実行して result.json を照合）・読めない close は生成側が exit 2・変異試験。所要は本ホスト実測 約 13s（単独・2026-10-11）。
+  'wf_bi1_field.mjs',
 ].map((name) => ({ name, args: [] }));
 
 // official_result は決定論2回照合→result.json 再検証→Node pin 照合の複合ゲート (AP20)。
