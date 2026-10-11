@@ -20,11 +20,11 @@
   "canonicalNode": {
     "node": "22.22.1",
     "v8": "12.4.254.21-node.35",
-    "resultSha256": "b51d0947aca270bdffcc7bab27f393b21b4e1e41dd52b556aa2410944d78a727",
-    "pinnedAt": "2026-10-09",
+    "resultSha256": "8c555241d3ca5a661d1ef358e6015f7a3dfcbd10043fc0542b0f7d6930009153",
+    "pinnedAt": "2026-10-11",
     "eventId": "official-sample-circuit",
-    "appVersion": "v10.0.0",
-    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=e9f1da0b 照合で検証済。理由: BH4: Stage BH 結了の版バンプ v9.0.0 → v10.0.0（MAJOR・利用者裁定 2026-10-10）。appVersion が engineFingerprint 経由で resultSha256 を変えるための再ピン。verifyHash e9f1da0b は BH5 の値のまま（物理は BH5 から不変）。"
+    "appVersion": "v10.1.0",
+    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=e9f1da0b 照合で検証済。理由: BI4: Stage BI 結了の版バンプ v10.0.0 → v10.1.0（MINOR・走行物理は無改変・正準サンプルの verifyHash 不変）。appVersion が engineFingerprint 経由で resultSha256 を変えるための再ピン。verifyHash e9f1da0b は BH5 の値のまま（BI1〜BI3 で pin b51d0947… 不変を確認済み）。"
   },
   "history": [
     {
