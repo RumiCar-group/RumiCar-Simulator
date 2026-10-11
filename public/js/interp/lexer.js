@@ -19,13 +19,16 @@ function isDigit(ch) { return /[0-9]/.test(ch); }
 //   是正前は全て「次の文字」だった（"a\tb" → "atb"）。8 進/16 進/Unicode のエスケープは扱わない（\x41 → "x41"・\012 → NUL＋"12"）。
 const ESCAPES = { n: '\n', t: '\t', r: '\r', '\\': '\\', '"': '"', "'": "'", '0': '\0' };
 function unescapeChar(c) { return Object.prototype.hasOwnProperty.call(ESCAPES, c) ? ESCAPES[c] : c; }
+// BJ2: f-string の埋め込み式を py モードで字句解析したときに落とすトークン（式の中では意味を持たない）。
+const FSTR_DROP = new Set(['EOF', 'NEWLINE', 'INDENT', 'DEDENT']);
 
 // AP8: C プリプロセッサ `#define`（オブジェクト形式マクロのみ）。
 // macros[name] = 置換トークン列。使用箇所で単純にトークンを差し込む（テキスト置換相当）。
 // 関数形式マクロ `#define SQ(x) ...` は未対応＝明示エラー（サイレント読み飛ばしを廃す）。
-export function tokenize(src, mode, macros = Object.create(null)) {
+// BJ2: line0＝開始行（f-string の埋め込み式を字句解析するとき、字句エラーの行番号を外側の行にするため。既定 1＝従来どおり）。
+export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
   const toks = [];
-  let i = 0, line = 1;
+  let i = 0, line = line0;
   const n = src.length;
   // Python のインデントスタック
   const indentStack = [0];
@@ -61,25 +64,34 @@ export function tokenize(src, mode, macros = Object.create(null)) {
     i += 2;
   }
 
-  // AP9: f-string の内容 raw を `( STR + (exprtoks) + STR ... )` へ展開して現在の行番号で push する。
-  function emitFString(raw) {
+  // AP9: f-string の内容を `( STR + (exprtoks) + STR ... )` へ展開して現在の行番号で push する。
+  // BJ2: 内容は 1 文字ずつの組 {ch: エスケープ解除後の文字, raw: 本文の生テキスト（`\n` なら 2 文字）} の列 units で受ける。
+  //   波括弧の判定と文字列部分は ch で行い（是正前と同じ）、埋め込み式は raw を連結して **py モード**で字句解析する。
+  //   是正前は式もエスケープ解除後の文字から切り出し C モードで字句解析していた＝①`f"{7//2}"` の `//` 以降が C の行コメントに
+  //   なり "7"（python3 は "3"）②`f"{'\\n'}"` の式 `'\\n'` が外側と内側で 2 回エスケープ解除されて LF 1 文字（python3 は
+  //   `\` と `n` の 2 文字）。py モードの字句解析は行頭の字下げ（`{ x }` の空白）を INDENT に、末尾を NEWLINE にするので、
+  //   式の中では意味を持たない NEWLINE/INDENT/DEDENT は落とす（EOF も従来どおり落とす）。
+  //   式の中の `\"`（例 `f"{d[\"k\"]}"`）は Python では SyntaxError で、本処理系も字句エラー「不明な文字 '\'」になる（是正前は通っていた）。
+  //   字句エラーの行番号は外側の行（tokenize の line0）。
+  function emitFString(units) {
     const parts = [];   // {lit:string} | {expr:string}
     let lit = '', k = 0;
-    while (k < raw.length) {
-      const c = raw[k];
+    const chAt = (j) => (j < units.length ? units[j].ch : undefined);
+    while (k < units.length) {
+      const c = units[k].ch;
       if (c === '{') {
-        if (raw[k + 1] === '{') { lit += '{'; k += 2; continue; }
+        if (chAt(k + 1) === '{') { lit += '{'; k += 2; continue; }
         parts.push({ lit }); lit = ''; k++;
         let depth = 1, etext = '';
-        while (k < raw.length) {
-          const d = raw[k];
+        while (k < units.length) {
+          const d = units[k].ch;
           if (d === '{') depth++;
           else if (d === '}') { depth--; if (depth === 0) break; }
-          etext += d; k++;
+          etext += units[k].raw; k++;
         }
         k++;                                   // 閉じ '}' を消費
         parts.push({ expr: stripFormatSpec(etext) });
-      } else if (c === '}' && raw[k + 1] === '}') { lit += '}'; k += 2; }
+      } else if (c === '}' && chAt(k + 1) === '}') { lit += '}'; k += 2; }
       else { lit += c; k++; }
     }
     parts.push({ lit });
@@ -93,7 +105,7 @@ export function tokenize(src, mode, macros = Object.create(null)) {
       } else {
         plus();
         pushTok('PUNC', '(');
-        for (const t of tokenize(p.expr, 'c').filter(t => t.type !== 'EOF')) pushTok(t.type, t.value);
+        for (const t of tokenize(p.expr, 'py', undefined, line).filter(t => !FSTR_DROP.has(t.type))) pushTok(t.type, t.value);
         pushTok('PUNC', ')');
       }
     }
@@ -112,6 +124,22 @@ export function tokenize(src, mode, macros = Object.create(null)) {
                (j + 2 >= s.length || s[j + 2] === ':')) return s.slice(0, j);
     }
     return s;
+  }
+
+  // 文字列リテラル（通常・f-string 共通）の中身を 1 単位読む。i は単位の先頭を指し、読んだ分だけ進める。
+  //   ch＝値に入る文字（BJ1 の実エスケープ）・raw＝本文の生テキスト（f-string の埋め込み式は raw から組む・BJ2）。
+  //   BJ2: CRLF（Windows の改行・ファイル取込/GitHub 取込は本文をそのまま渡す）を LF に正規化する＝文字列の中に改行を含む
+  //   本文（`"a` CRLF `b"`・三重引用符 `"""a` CRLF `b"""` の中身）の値と AST が LF 版と一致する。是正前は値に `\r` が残った。
+  //   `\` ＋ CRLF も `\` ＋ LF と同じ（従来どおり `\` を落とした LF 1 文字）。CR 単独は従来どおりそのまま。
+  function strUnit() {
+    if (src[i] === '\\') {
+      if (src[i + 1] === '\r' && src[i + 2] === '\n') { i += 3; return { ch: '\n', raw: '\\\n' }; }
+      const u = { ch: unescapeChar(src[i + 1]), raw: src.slice(i, i + 2) };
+      i += 2; return u;
+    }
+    if (src[i] === '\r' && src[i + 1] === '\n') { i += 2; return { ch: '\n', raw: '\n' }; }
+    const c = src[i++];
+    return { ch: c, raw: c };
   }
 
   function handlePyIndent() {
@@ -196,22 +224,16 @@ export function tokenize(src, mode, macros = Object.create(null)) {
     //   は先頭のトップレベル `:`/`!` 以降を切り捨てる (簡易・値は素の str 化)。`{{`/`}}` は素の波括弧。
     if (mode === 'py' && (ch === 'f' || ch === 'F') && (src[i + 1] === '"' || src[i + 1] === "'")) {
       const quote = src[i + 1]; i += 2;
-      let raw = '';
-      while (i < n && src[i] !== quote) {
-        if (src[i] === '\\') { raw += unescapeChar(src[i + 1]); i += 2; }   // BJ1: 実エスケープ
-        else raw += src[i++];
-      }
+      const units = [];
+      while (i < n && src[i] !== quote) units.push(strUnit());   // BJ1: 実エスケープ・BJ2: 生テキストも保持＋CRLF→LF
       i++;
-      emitFString(raw);
+      emitFString(units);
       continue;
     }
     // 文字列
     if (ch === '"' || ch === "'") {
       const quote = ch; let s = ''; i++;
-      while (i < n && src[i] !== quote) {
-        if (src[i] === '\\') { s += unescapeChar(src[i + 1]); i += 2; }       // BJ1: 実エスケープ
-        else s += src[i++];
-      }
+      while (i < n && src[i] !== quote) s += strUnit().ch;         // BJ1: 実エスケープ・BJ2: CRLF→LF
       i++;
       pushTok('STR', s);
       continue;

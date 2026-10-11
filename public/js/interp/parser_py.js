@@ -108,6 +108,10 @@ export function parsePy(src) {
     const first = expr();
     // BJ1: 複合代入に `%=`・`//=`・`**=` を追加（評価器 execMassign は op.slice(0,-1) を applyBin へ渡す＝'%'・'//'・'**' は既存）。
     if (isOp('=') || (peek().type === 'OP' && ['+=', '-=', '*=', '/=', '%=', '//=', '**='].includes(peek().value))) {
+      // BJ2: 複合代入の左辺は 1 つだけ（Python も `a, b += 1` は SyntaxError）。是正前は通って先頭の a だけ更新していた
+      //   （execMassign の複合代入は targets[0] しか見ない＝黙って b を無視）。括弧付き `(a, b) += 1` も同じ tuple ノード。
+      if (!isOp('=') && first && first.t === 'tuple')
+        err(`複合代入 '${peek().value}' の左辺に複数の変数（a, b のようなタプル）は書けません（1 つずつ代入してください）`);
       const op = next().value;
       const targets = [first];
       // タプル代入の左辺は first が 'tuple' の場合あり (下の expr で処理しないため簡易対応)
@@ -175,19 +179,26 @@ export function parsePy(src) {
     while (isOp('+') || isOp('-')) { const op = next().value; a = { t: 'bin', op, a, b: multiplicative() }; }
     return a;
   }
+  // BJ2: Python の優先順位（言語リファレンス 6.5「べき乗演算子」・6.17）に合わせる:
+  //   term   = factor (('*' | '/' | '%' | '//') factor)*
+  //   factor = ('-' | '+') factor | power        … 単項は ** より弱い（-2**2 = -(2**2) = -4・-x**2 = -(x**2)）
+  //   power  = postfix ['**' factor]             … 右辺は factor＝単項を許し（2**-1 = 0.5）右結合（2**3**2 = 2**9）
+  //   是正前は multiplicative → power → unary の順で単項が ** より強く結合し、-2**2 が (-2)**2 = 4 だった。
+  //   AST が変わるのは単項 ± が ** の左の被演算子に付く式（-a**b・+a**b・a**-b**c）だけで、それ以外（-x・a*-b・a**b・a**-b・a**b**c）は
+  //   是正前と同じ（BJ2 で実測。出荷サンプルの AST 指紋は wf_bj1_pysem E 章が見張る）。
   function multiplicative() {
-    let a = power();
-    while (peek().type === 'OP' && ['*', '/', '%', '//'].includes(peek().value)) { const op = next().value; a = { t: 'bin', op, a, b: power() }; }
-    return a;
-  }
-  function power() {
     let a = unary();
-    if (isOp('**')) { next(); return { t: 'bin', op: '**', a, b: power() }; }
+    while (peek().type === 'OP' && ['*', '/', '%', '//'].includes(peek().value)) { const op = next().value; a = { t: 'bin', op, a, b: unary() }; }
     return a;
   }
   function unary() {
     if (isOp('-') || isOp('+')) { const op = next().value; return { t: 'un', op, a: unary() }; }
-    return postfix();
+    return power();
+  }
+  function power() {
+    const a = postfix();
+    if (isOp('**')) { next(); return { t: 'bin', op: '**', a, b: unary() }; }
+    return a;
   }
   function postfix() {
     let e = primary();

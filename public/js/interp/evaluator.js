@@ -177,7 +177,7 @@ export class Interp {
       const tgt = targets[0];
       const cur = this.evalExpr(tgt, scope);
       const rhs = this.evalExpr(values[0], scope);
-      const v = applyBin(op.slice(0, -1), cur, rhs, this.curLine);
+      const v = applyBin(op.slice(0, -1), cur, rhs, this.curLine, this.lang);
       this.assignTo(tgt, v, scope); return;
     }
     let vals;
@@ -247,14 +247,14 @@ export class Interp {
         const op = node.op;
         if (op === '&&') return truthy(this.evalExpr(node.a, scope)) ? this.evalExpr(node.b, scope) : false;
         if (op === '||') { const a = this.evalExpr(node.a, scope); return truthy(a) ? a : this.evalExpr(node.b, scope); }
-        return applyBin(op, this.evalExpr(node.a, scope), this.evalExpr(node.b, scope), this.curLine);
+        return applyBin(op, this.evalExpr(node.a, scope), this.evalExpr(node.b, scope), this.curLine, this.lang);
       }
       case 'compare': {
         // AP16: Python 連鎖比較 (a<b<c = (a<b) and (b<c)・中間 b は1回評価・短絡)。
         let left = this.evalExpr(node.first, scope);
         for (const seg of node.rest) {
           const right = this.evalExpr(seg.right, scope);
-          if (!applyBin(seg.op, left, right, this.curLine)) return false;
+          if (!applyBin(seg.op, left, right, this.curLine, this.lang)) return false;
           left = right;
         }
         return true;
@@ -271,7 +271,7 @@ export class Interp {
       case 'assignexpr': {
         let v;
         if (node.op === '=') v = this.evalExpr(node.value, scope);
-        else { const cur = this.evalExpr(node.target, scope); v = applyBin(node.op.slice(0, -1), cur, this.evalExpr(node.value, scope), this.curLine); }
+        else { const cur = this.evalExpr(node.target, scope); v = applyBin(node.op.slice(0, -1), cur, this.evalExpr(node.value, scope), this.curLine, this.lang); }
         this.assignTo(node.target, v, scope); return v;
       }
       case 'preincr': { const cur = this.evalExpr(node.a, scope); const v = node.op === '++' ? cur + 1 : cur - 1; this.assignTo(node.a, v, scope); return v; }
@@ -389,8 +389,26 @@ function pyPercentFormat(fmt, args) {
   });
 }
 
+// BJ2: Python の剰余（床剰余）。結果の符号は除数に従う（-7 % 2 = 1・7 % -2 = -1・-7.5 % 2 = 0.5）。
+//   CPython の float 剰余と同じ手順: fmod（＝JS の %・切り捨て剰余）の符号が除数と違えば除数を足す。
+//   余りが 0 のときは +0 を返す（Python の int は符号付きゼロを持たない。本処理系は int と float を区別しない）。
+//   // は従来どおり Math.floor(a / b)（PLAN BJ2。整数では Python と一致・1 // 0.1 のような浮動小数の端は Python の 9.0 に対し 10）。
+function pyMod(a, b) {
+  const r = a % b;
+  if (r === 0) return 0;
+  return (r < 0) !== (b < 0) ? r + b : r;
+}
+// BJ2: Python の ==。bool と数の組は数として比べる（True == 1・False == 0・True == 1.0 は真・True != 0 も真）。
+//   それ以外は従来どおり ===（"1" == 1 は偽・数同士・bool 同士・文字列同士は値で一致）。リスト等の構造比較は対象外（従来どおり同一性）。
+function pyEq(a, b) {
+  if ((typeof a === 'boolean' && typeof b === 'number') || (typeof a === 'number' && typeof b === 'boolean')) return Number(a) === Number(b);
+  return a === b;
+}
+
 // line = 直近実行文の行 (ゼロ除算/未対応演算子エラーに付与)。AP17: i18n キー化 (interp.err.*)。
-function applyBin(op, a, b, line) {
+// BJ2: lang = 'py' | 'c'（Interp.load が ast.lang から決める this.lang）。py だけ % を床剰余・== / != を pyEq にする。
+//   C は無改変（C の % は切り捨て剰余＝JS の % と同じ・== は === のまま）。
+function applyBin(op, a, b, line, lang) {
   const divErr = () => new RuntimeError('divZero', {}, line);   // AP16→AP17: /0 → 行番号付き i18n 実行時エラー
   switch (op) {
     case '+': return a + b;
@@ -410,7 +428,7 @@ function applyBin(op, a, b, line) {
     case '%':
       if (typeof a === 'string') return pyPercentFormat(a, b);
       if (b === 0) throw divErr();
-      return a % b;
+      return lang === 'py' ? pyMod(a, b) : a % b;
     case '**': return Math.pow(a, b);
     case '//':
       if (b === 0) throw divErr();
@@ -420,8 +438,8 @@ function applyBin(op, a, b, line) {
     case '^': return a ^ b;
     case '<<': return a << b;
     case '>>': return a >> b;
-    case '==': return a === b;
-    case '!=': return a !== b;
+    case '==': return lang === 'py' ? pyEq(a, b) : a === b;
+    case '!=': return lang === 'py' ? !pyEq(a, b) : a !== b;
     case '<': return a < b;
     case '<=': return a <= b;
     case '>': return a > b;
