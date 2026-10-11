@@ -30,6 +30,22 @@
 //      （f"{7//2}" → "3"）二重のエスケープ解除をしない（f"{'\\n'}" → `\` と n の 2 文字）・文字列リテラルの中の CRLF を
 //      LF に正規化・タプル左辺の複合代入（a, b %= 3）を構文エラーに。
 //
+// BJ3（スコープと制御フロー）— 是正前（HEAD ae61111）の値は G 章の見出しに書いた。`--root <是正前の木>` で回すと G 章が赤になる（A〜F は緑）。
+//   G) py の for（forrange／forin）はスコープを作らない: ループ変数は囲むスコープへ直接置き（関数の中の for i は同名のグローバル i を
+//      書き換えない）、本体の新しい変数もループ後に残る・0 回のループはループ変数を作らない（G-1・python3 と照合）。是正前は
+//      `for i in range(3): last = i` の後の last と i が「未定義の変数/名前」・関数の中の for i の後の i がグローバルの値（100 100）。
+//      C の for はブロックスコープのまま（G-2）。人間判断①（global 宣言なしの関数内代入は既存のグローバルを書き換える）は維持し、
+//      python3 との差（python3 は -1）を定数で持つ。Model B（トップレベルの while True:）の本体の直下の continue＝その tick を終える・
+//      break＝以降の tick は何もしない（人間判断②・G-3。本番の tickSlot で running とログを見る。是正前は「【実行時エラー】[object Object]」
+//      で停止）。ループの外の break／continue（loop()／setup()／ユーザー関数の直下・トップレベル・Model C）と関数の外の return は行番号付きの
+//      i18n 実行時エラー breakOutside／continueOutside／returnOutside（G-4／G-5。是正前は `[object Object]`、ループの中から呼んだ関数の
+//      直下の break／continue は呼び出し側のループに黙って効いた）。range のステップ 0 は rangeStepZero（G-6。是正前は start <= end で
+//      黙って 0 回・start > end でステップ上限エラー）。G-7 は配線（runner.js・evaluator.js に throw new Error( 0 件・新キーの ja/en）。
+//      層 4 の指摘で追加: Model B で break したらループの後ろの文をその tick で 1 回だけ走らせて終える（G-3。是正前は [object Object]）・
+//      ユーザー関数から戻ったら curLine を呼び出し元の文の行へ戻す（G-8。是正前は `x = 10 / f()` のゼロ除算・`for c in f():` の
+//      notIterable などが呼ばれた関数の最後の文の行を指した）・関数の中の for x の後の x = 10 が関数ローカルになったこと・仮引数や
+//      ホストの名前と同名のループ変数（G-1）。未是正の差（global x を宣言した関数の中の for x）は今の値と python3 の値を定数で持つ。
+//
 // 使い方: node wf_bj1_pysem.mjs              … 検査
 //         node wf_bj1_pysem.mjs --root <dir>  … <dir>/public/js の product で回す（改修前の木で赤になることの確認用）
 // exit: 0=全緑 / 1=いずれか赤。
@@ -53,6 +69,9 @@ const { DynCar } = await imp('physics_dyn.js');
 const { PROGRAMS } = await imp('programs.js');
 const { SAMPLES } = await imp('samples.js');
 const { setLang } = await imp('i18n.js');
+const { MESSAGES } = await imp('i18n/messages.js');
+const { makeSlot, tickSlot } = await imp('fleet.js');
+const { CONST } = await imp('config.js');
 setLang('ja');
 
 let pass = 0, fail = 0;
@@ -451,6 +470,220 @@ for (const [label, src, want] of [['a, b = 1, 2', 'a, b = 1, 2\nprint(a, b)', ['
   ok(!r.err && linesEq(r.out, want), `F-5 ${label} → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ${J(want)}）`);
   checkPy3(`F-5 ${label}`, src, want);
 }
+
+// ── G) BJ3 スコープと制御フロー ────────────────────────────────────────────────
+console.log('\nG) BJ3 スコープと制御フロー — 是正前: for 本体の変数とループ変数がループ後に「未定義」・ループの外の break/continue/return が [object Object]・' +
+  '呼び出し先の continue/break が呼び出し側のループに黙って効く・range(a,b,0) が黙って 0 回・関数を呼んだ文のエラーの行が呼ばれた関数の行');
+const JP_RE = /[぀-ヿ一-龯]/;   // ひらがな/カタカナ/漢字（en の文言に日本語が混ざらない）
+// python3 で同じ本文を走らせるときの形: Model A は setup()／loop() を 1 回ずつ呼ぶ・Model B は while True: を 1 回（ticks 回）の for にする。
+const asPy3 = (src, ticks) => (!ticks ? src : /def loop/.test(src) ? src + '\nsetup()\n' + 'loop()\n'.repeat(ticks) : src.replace('while True:', `for _ in range(${ticks}):`));
+// G-1 py の for はスコープを作らない。[ラベル, 本文, 期待する出力, tick 数]。python3 も同じ出力（checkPy3）。
+const G_SCOPE = [
+  ['for i in range(3): last = i の後の last と i', 'for i in range(3):\n  last = i\nprint(last, i)', ['2 2']],
+  ['for ch in "ab": seen = ch の後の seen と ch', 'for ch in "ab":\n  seen = ch\nprint(seen, ch)', ['b b']],
+  ['for x in [5, 6]（list）', 'for x in [5, 6]:\n  y = x * 2\nprint(x, y)', ['6 12']],
+  ['for k in d（dict のキー）', 'd = {"a": 1, "b": 2}\nfor k in d:\n  v = d[k]\nprint(k, v)', ['b 2']],
+  ['break で抜けたループ変数', 'for i in range(10):\n  if i == 4:\n    break\nprint(i)', ['4']],
+  ['continue を含むループの後', 'for i in range(4):\n  if i % 2 == 0:\n    continue\n  odd = i\nprint(i, odd)', ['3 3']],
+  ['入れ子の for', 'for a in range(2):\n  for b in range(3):\n    c = a * 10 + b\nprint(a, b, c)', ['1 2 12']],
+  ['range(5,1,-1)（従来どおり 5,4,3,2）', 'for i in range(5,1,-1):\n  print(i)', ['5', '4', '3', '2']],
+  ['ループ変数と同名のグローバル（関数の中の for i は書き換えない）', 'i = 100\ndef f():\n  for i in range(3):\n    pass\n  return i\nprint(f(), i)', ['2 100']],
+  ['ループ変数と同名のグローバル（関数の中の for c in … も書き換えない）', 'c = "z"\ndef f():\n  for c in "ab":\n    pass\n  return c\nprint(f(), c)', ['b z']],
+  // 層 4 F1／F6（BJ-8）: 関数の中の for のループ変数は関数ローカルなので、ループの後の同名の代入も関数ローカル（是正前は人間判断①で
+  //   既存のグローバルを書き換えて 10）。仮引数と同名のループ変数（是正前 9）・ホストの名前（random）と同名のトップレベルの
+  //   ループ変数はループの後も残る（是正前はループの中だけで、ループの後は random がホストのオブジェクトに戻った）。どれも python3 と同じ。
+  ['関数の中の for x の後の x = 10 は関数ローカル（是正前は既存のグローバルを書き換えて 10）', 'x = 0\ndef f():\n  for x in range(3):\n    pass\n  x = 10\nf()\nprint(x)', ['0']],
+  ['仮引数と同名のループ変数（是正前は f(9) が 9）', 'def f(i):\n  for i in range(3):\n    pass\n  return i\nprint(f(9))', ['2']],
+  ['ホストの名前と同名のトップレベルのループ変数（是正前はループの後 random がホストのオブジェクト）', 'for random in range(2):\n  pass\nprint(random)', ['1']],
+  ['トップレベルの for は同名の既存のグローバルを書き換える（是正前は 100 のまま）', 'i = 100\nfor i in range(3):\n  pass\nprint(i)', ['2']],
+  ['0 回のループは既存の値を変えない', 'i = 5\nfor i in range(0):\n  pass\nprint(i)', ['5']],
+  ['0 回の for … in も既存の値を変えない', 'c = "z"\nfor c in "":\n  pass\nprint(c)', ['z']],
+  ['関数の中の for 本体の新しい変数は関数ローカル', 'def f():\n  for i in range(3):\n    tmp = i\n  return tmp\nprint(f())', ['2']],
+  ['関数の中の for から return', 'def f():\n  for i in range(5):\n    if i == 3:\n      return i\n  return -1\nprint(f())', ['3']],
+  ['関数の中のループの break（呼び出し側のループは続く）', 'def f():\n  for j in range(5):\n    if j == 2:\n      break\n  return j\nfor i in range(2):\n  print(f())', ['2', '2']],
+  ['while True: の本体の for（Model B・1 tick）', 'while True:\n  for i in range(3):\n    last = i\n  print(last, i)', ['2 2'], 1],
+  ['def loop() の中の for（Model A・1 tick）', 'def setup():\n  pass\ndef loop():\n  for i in range(3):\n    last = i\n  print(last, i)', ['2 2'], 1],
+];
+for (const [label, src, want, ticks] of G_SCOPE) {
+  const r = run(src, 'py', ticks || 0);
+  ok(!r.err && linesEq(r.out, want), `G-1 ${label} → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ${J(want)}）`);
+  checkPy3(`G-1 ${label}`, asPy3(src, ticks), want);
+}
+{ // 関数の中の for で代入した変数・ループ変数はグローバルへ漏れない（関数が終わった後の interp.global.vars に無い）
+  const r = run('def f():\n  for i in range(3):\n    tmp = i\n  return tmp\nr = f()', 'py');
+  const vars = r.vars || {};
+  ok(!r.err && vars.r === 2 && !('tmp' in vars) && !('i' in vars),
+    `G-1 関数の中の for の tmp と i はグローバルに無い（実 ${r.err ? 'ERR ' + r.err : 'r=' + J(vars.r) + ' tmp∈global=' + ('tmp' in vars) + ' i∈global=' + ('i' in vars)}）`);
+  checkPy3('G-1 関数の中の for の tmp と i はグローバルに無い', 'def f():\n  for i in range(3):\n    tmp = i\n  return tmp\nr = f()\nprint(r, "tmp" in globals(), "i" in globals())', ['2 False False']);
+}
+{ // 人間判断①: global 宣言なしの関数内の代入は既存のグローバルを書き換える（for の本体でも同じ）。python3 は -1（BJ4 で文書化）。
+  const src = 'last = -1\ndef f():\n  for i in range(3):\n    last = i\nf()\nprint(last)';
+  const r = run(src, 'py');
+  ok(!r.err && J(r.out) === J(['2']), `G-1 人間判断①: 関数の中の for 本体の last = i は既存のグローバル last を書き換える → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ["2"]）`);
+  checkPy3('G-1 人間判断①の差（python3 は関数ローカル＝-1）', src, ['-1']);
+}
+{ // 層 4 F1（未是正・DRIFT＝決定ログ BJ-8 ②）: `global x` を宣言した関数の中で x をループ変数にすると、ループ変数は関数ローカルに置かれ
+  //   （global 文は parser_py が読み飛ばす＝是正するには AST を変える）、ループの後の x = 10 も関数ローカルに入る。是正前は 10（python3 と同じ）。
+  //   ここでは今の値 0 と python3 の値 10 を定数で持ち、差を見張る（是正したら両方を 10 にする）。
+  const src = 'x = 0\ndef f():\n  global x\n  for x in range(3):\n    pass\n  x = 10\nf()\nprint(x)';
+  const r = run(src, 'py');
+  ok(!r.err && J(r.out) === J(['0']), `G-1 未是正の差: global x を宣言した関数の中の for x の後の x = 10 はグローバルに届かない → ${r.err ? 'ERR ' + r.err : J(r.out)}（今の値 ["0"]・是正前と python3 は 10）`);
+  checkPy3('G-1 未是正の差（python3 は global x でグローバル＝10）', src, ['10']);
+}
+for (const [label, src, name] of [['for j in range(0) の後の j', 'for j in range(0):\n  pass\nprint(j)', 'j'], ['for c in "" の後の c', 'for c in "":\n  pass\nprint(c)', 'c']]) {
+  const r = run(src, 'py');
+  ok(r.key === 'interp.err.undefName' && r.line === 3 && r.err === `未定義の変数/名前: ${name} (行 3)`, `G-1 0 回のループはループ変数を作らない: ${label} → ${r.err ? r.err : '走った ' + J(r.out)}`);
+  checkPy3Err(`G-1 ${label}`, src, new RegExp(`^NameError: name '${name}' is not defined`));
+}
+// G-2 C の for は従来どおりブロックスコープ（ループ後に i も本体の last も未定義）。AST は是正前 HEAD ae61111 の実測と byte 一致（parser_c 無改修）。
+{
+  const cfor = (v) => `void setup(){\n  for (int i = 0; i < 3; i++) { int last = i; }\n  Serial.println(${v});\n}\nvoid loop(){}`;
+  for (const v of ['last', 'i']) {
+    const r = run(cfor(v), 'c');
+    ok(r.key === 'interp.err.undefName' && r.line === 3 && r.err === `未定義の変数/名前: ${v} (行 3)`, `G-2 C の for の後の ${v} → 未定義（行 3）のまま（実 ${r.err ? r.err : '走った ' + J(r.out)}）`);
+  }
+  const a = sha(astOf(cfor('last'), 'c'));
+  ok(a === '00de1dc209da6f4aa14e1c20814afb32492c44af1f038fcf00f7f1bba83f3a5d', `G-2 C の for の AST が是正前と byte 一致（実 ${a.slice(0, 16)}…）`);
+}
+// G-3 Model B（トップレベルの while True:）の continue／break を本番の tickSlot で（running と実況ログを見る）。
+function runSlot(code, ticks, each) {
+  const logs = [];
+  const slot = makeSlot({ i: 0, lang: 'py', src: code, course, slotCount: 1, logFor: () => (m) => logs.push(String(m)) });
+  slot.controller = buildController(slot.src, slot.lang, slot.hostEnv || buildApi(slot.world));
+  slot.controller.setup();
+  slot.running = true;
+  for (let k = 0; k < ticks; k++) { tickSlot(slot, []); if (each) each(slot, k); }
+  return { logs, slot, vars: slot.controller.interp.global.vars };
+}
+{
+  const src = 'n = 0\nwhile True:\n  n += 1\n  if n % 2 == 0:\n    continue\n  print(n)';
+  const { logs, slot, vars } = runSlot(src, 6);
+  ok(slot.running === true && J(logs) === J(['1', '3', '5']) && vars.n === 6,
+    `G-3 Model B の continue はその tick を終えて次の tick も動く: 6 tick で running=${slot.running}・ログ ${J(logs)}・n=${vars.n}（期待 true・["1","3","5"]・6・エラー 0 行）`);
+  checkPy3('G-3 Model B の continue', asPy3(src, 6), ['1', '3', '5']);
+}
+{
+  const src = 'n = 0\nwhile True:\n  n += 1\n  rc_drive(FORWARD, 100 + n)\n  rc_steer(LEFT)\n  if n == 3:\n    break\n  print(n)';
+  const cmd = (s) => J([s.car.driveDir, s.car.pwm, s.car.steer, s.car.steerAmt]);
+  let atBreak = null; const after = [];
+  const { logs, slot, vars } = runSlot(src, 23, (s, k) => { if (k === 2) atBreak = cmd(s); else if (k > 2) after.push(cmd(s)); });
+  ok(slot.running === true && J(logs) === J(['1', '2']) && vars.n === 3 && after.length === 20 && after.every((c) => c === atBreak) && slot.car.pwm === 103,
+    `G-3 Model B の break で以降の tick は無動作: running=${slot.running}・ログ ${J(logs)}・n=${vars.n}・pwm=${slot.car.pwm}・break 後 20 tick の指令が break 時と同じ ${after.filter((c) => c === atBreak).length}/20（期待 true・["1","2"]・3・103・20/20）`);
+  checkPy3('G-3 Model B の break（python3 は 23 回の for で n=3 のまま）', asPy3(src, 23).replace(/rc_drive\(FORWARD, 100 \+ n\)\n  rc_steer\(LEFT\)\n  /, '') + '\nprint(n)', ['1', '2', '3']);
+}
+{ // C の Model B（トップレベルの while (1)）でも同じ。
+  const r = run('int n = 0;\nwhile (1) {\n  n++;\n  if (n == 2) break;\n  Serial.println(n);\n}', 'c', 5);
+  ok(!r.err && J(r.out) === J(['1']) && r.vars && r.vars.n === 2, `G-3 C の while (1) の break → 出力 ${r.err ? 'ERR ' + r.err : J(r.out)}・n=${r.vars && r.vars.n}（期待 ["1"]・2・エラー無し）`);
+}
+// 層 4 F2: break でループを抜けたら、ループの後ろの文をその tick の中で 1 回だけ走らせてプログラムを終える（Python と同じ）。以降の tick は何もしない（人間判断②）。
+{
+  const src = 'n = 0\nwhile True:\n  n += 1\n  if n == 2:\n    break\nprint("after", n)';
+  const { logs, slot, vars } = runSlot(src, 5);
+  ok(slot.running === true && J(logs) === J(['after 2']) && vars.n === 2,
+    `G-3 Model B の break の後ろの文はその tick で 1 回だけ走る: 5 tick で running=${slot.running}・ログ ${J(logs)}・n=${vars.n}（期待 true・["after 2"]・2。是正前は「【実行時エラー】[object Object]」）`);
+  checkPy3('G-3 Model B の break の後ろの文', asPy3(src, 5), ['after 2']);
+}
+{
+  const src = 'while True:\n  rc_drive(FORWARD, 200)\n  break\nrc_drive(BRAKE, 0)';
+  const cmd = (s) => J([s.car.driveDir, s.car.pwm]);
+  const after = [];
+  const { logs, slot } = runSlot(src, 21, (s, k) => { if (k > 0) after.push(cmd(s)); });
+  ok(slot.running === true && logs.length === 0 && slot.car.driveDir === CONST.BRAKE && slot.car.pwm === 0 && after.length === 20 && after.every((c) => c === cmd(slot)),
+    `G-3 Model B の break の後ろの停止の指令が最後の指令になる: running=${slot.running}・ログ ${J(logs)}・指令 ${cmd(slot)}・以降 20 tick で同じ ${after.filter((c) => c === cmd(slot)).length}/20（期待 BRAKE・0・20/20）`);
+}
+{ // 後ろの文の中の return は関数の外＝エラー（execTop）。後ろに 2 つ目の while True: があると 1 tick の中で回り切ろうとしてステップ上限エラー
+  //   （Model B のループは先頭の 1 つだけ＝未対応・決定ログ BJ-8。python3 は 2 つ目のループを回し続ける）。
+  const r1 = run('while True:\n  break\nreturn', 'py', 1);
+  ok(r1.key === 'interp.err.returnOutside' && r1.line === 3, `G-3 Model B の break の後ろの return → returnOutside（行 3）（実 ${r1.err ? r1.err : '走った'}）`);
+  const r2 = run('while True:\n  break\nn = 0\nwhile True:\n  n += 1', 'py', 2);
+  ok(r2.key === 'interp.err.stepLimit' && r2.line === 5, `G-3 未対応: Model B の break の後ろの 2 つ目の while True: → ステップ上限エラー（行 5）（実 ${r2.err ? r2.err : '走った'}）`);
+}
+// G-4／G-5 ループの外の break／continue と関数の外の return、range のステップ 0。ja と en の両方で走らせ、キー・行・文言を見る
+//   （ja は「… (行 N)」・en は「… (line N)」で日本語を含まない・どちらも [object Object] を含まない）。
+function okErr(label, code, lang, ticks, key, line, wantOut) {
+  setLang('en'); const en = run(code, lang, ticks); setLang('ja');
+  const ja = run(code, lang, ticks);
+  const good = ja.key === 'interp.err.' + key && ja.line === line && en.key === ja.key && en.line === line
+    && typeof ja.err === 'string' && ja.err.endsWith(` (行 ${line})`) && ja.err.length > ` (行 ${line})`.length
+    && typeof en.err === 'string' && en.err.endsWith(` (line ${line})`) && !JP_RE.test(en.err)
+    && !ja.err.includes('[object Object]') && !en.err.includes('[object Object]')
+    && (!wantOut || J(ja.out) === J(wantOut));
+  ok(good, `${label} → ${key}（行 ${line}）${wantOut ? '・出力 ' + J(wantOut) : ''}（実 ja ${J(ja.err)}${ja.err ? '' : ' 出力 ' + J(ja.out)}・en ${J(en.err)}）`);
+}
+const G_ERR = [
+  // [ラベル, 本文, 言語, tick 数, キー, 行, 期待する出力（null＝見ない）, python3 も止まる正規表現（null＝照合しない）]
+  ['G-4 py def loop(): 直下の break', 'def setup():\n  pass\ndef loop():\n  x = 1\n  break', 'py', 1, 'breakOutside', 5, null, /^SyntaxError: 'break' outside loop/],
+  ['G-4 py def loop(): 直下の continue', 'def setup():\n  pass\ndef loop():\n  x = 1\n  continue', 'py', 1, 'continueOutside', 5, null, /^SyntaxError: 'continue' not properly in loop/],
+  ['G-4 py def setup(): 直下の break', 'def setup():\n  break\ndef loop():\n  pass', 'py', 0, 'breakOutside', 2, null, /^SyntaxError: 'break' outside loop/],
+  ['G-4 py ループの中から呼んだ関数の直下の continue', 'def f():\n  continue\ndef loop():\n  for i in range(2):\n    f()\n    print(i)', 'py', 1, 'continueOutside', 2, [], /^SyntaxError: 'continue' not properly in loop/],
+  ['G-4 py ループの中から呼んだ関数の直下の break', 'def f():\n  break\ndef loop():\n  for i in range(2):\n    f()\n    print(i)', 'py', 1, 'breakOutside', 2, [], /^SyntaxError: 'break' outside loop/],
+  ['G-4 py トップレベルのループから呼んだ関数の if の中の break', 'def f(i):\n  if i == 1:\n    break\nfor i in range(3):\n  f(i)\n  print(i)', 'py', 0, 'breakOutside', 3, ['0'], /^SyntaxError: 'break' outside loop/],
+  ['G-4 C void loop(){ break; }', 'void setup(){}\nvoid loop(){\n  break;\n}', 'c', 1, 'breakOutside', 3, null, null],
+  ['G-4 C void loop(){ continue; }', 'void setup(){}\nvoid loop(){\n  continue;\n}', 'c', 1, 'continueOutside', 3, null, null],
+  ['G-4 C loop() のループから呼んだ void f(){ continue; }', 'void f(){\n  continue;\n}\nvoid setup(){}\nvoid loop(){\n  for (int i = 0; i < 2; i++) { f(); Serial.println(i); }\n}', 'c', 1, 'continueOutside', 2, [], null],
+  ['G-4 C loop() のループから呼んだ void f(){ break; }', 'void f(){\n  break;\n}\nvoid setup(){}\nvoid loop(){\n  for (int i = 0; i < 2; i++) { f(); Serial.println(i); }\n}', 'c', 1, 'breakOutside', 2, [], null],
+  ['G-4 C switch の外（loop() 直下の if の中）の break', 'void setup(){}\nvoid loop(){\n  int k = 1;\n  if (k) { break; }\n}', 'c', 1, 'breakOutside', 4, null, null],
+  ['G-5 Model A のトップレベルの break', 'x = 1\nbreak\ndef loop():\n  pass', 'py', 0, 'breakOutside', 2, null, /^SyntaxError: 'break' outside loop/],
+  ['G-5 Model A のトップレベルの return', 'return 5\ndef loop():\n  pass', 'py', 0, 'returnOutside', 1, null, /^SyntaxError: 'return' outside function/],
+  ['G-5 Model B の while True: より前の continue', 'x = 1\ncontinue\nwhile True:\n  pass', 'py', 0, 'continueOutside', 2, null, /^SyntaxError: 'continue' not properly in loop/],
+  ['G-5 Model B の while True: 直下の return', 'n = 0\nwhile True:\n  n += 1\n  return', 'py', 1, 'returnOutside', 4, null, /^SyntaxError: 'return' outside function/],
+  ['G-5 Model C（1 回だけ実行）の break', 'x = 1\nbreak', 'py', 0, 'breakOutside', 2, null, /^SyntaxError: 'break' outside loop/],
+  ['G-5 Model C の continue', 'x = 1\ncontinue', 'py', 0, 'continueOutside', 2, null, /^SyntaxError: 'continue' not properly in loop/],
+  ['G-5 Model C の return', 'x = 1\nreturn', 'py', 0, 'returnOutside', 2, null, /^SyntaxError: 'return' outside function/],
+  ['G-5 Model C の if の中の break', 'if 1:\n  break', 'py', 0, 'breakOutside', 2, null, /^SyntaxError: 'break' outside loop/],
+  ['G-5 関数を呼ぶ return の行は return の行（呼ばれた関数の行ではない）', 'def f():\n  x = 1\n  return 2\nreturn f()', 'py', 0, 'returnOutside', 4, null, /^SyntaxError: 'return' outside function/],
+  ['G-5 C のトップレベルの break（Model A）', 'int x = 1;\nbreak;\nvoid setup(){}\nvoid loop(){}', 'c', 0, 'breakOutside', 2, null, null],
+  // range のステップ 0（BJ-4）。是正前は前者が黙って 0 回・後者がステップ上限エラー。
+  ['G-6 range(1,5,0)', 'for i in range(1,5,0):\n  print(i)', 'py', 0, 'rangeStepZero', 1, [], /^ValueError: range\(\) arg 3 must not be zero/],
+  ['G-6 range(5,1,0)（行 2）', 'x = 1\nfor i in range(5,1,0):\n  print(i)', 'py', 0, 'rangeStepZero', 2, [], /^ValueError: range\(\) arg 3 must not be zero/],
+  ['G-6 range(1,5,False)', 'for i in range(1,5,False):\n  print(i)', 'py', 0, 'rangeStepZero', 1, [], /^ValueError: range\(\) arg 3 must not be zero/],
+  ['G-6 ステップの式が関数を呼んでも行は for の行', 'def z():\n  a = 0\n  return a\nfor i in range(1, 5, z()):\n  pass', 'py', 0, 'rangeStepZero', 4, [], /^ValueError: range\(\) arg 3 must not be zero/],
+  ['G-6 def loop() の中の range(0,3,0)（Model A・1 tick）', 'def setup():\n  pass\ndef loop():\n  for i in range(0, 3, 0):\n    print(i)', 'py', 1, 'rangeStepZero', 4, [], /^ValueError: range\(\) arg 3 must not be zero/],
+];
+for (const [label, src, lang, ticks, key, line, wantOut, py3re] of G_ERR) {
+  okErr(label, src, lang, ticks, key, line, wantOut);
+  if (py3re) checkPy3Err(label, asPy3(src, ticks), py3re);
+}
+{ // 正常系の対照: C の switch の中の break と、ループの中の break/continue は従来どおりエラーにならない。
+  const r = run('void setup(){}\nvoid loop(){\n  int k = 1;\n  switch (k) { case 1: Serial.println(1); break; default: Serial.println(0); }\n  for (int i = 0; i < 5; i++) { if (i == 1) continue; if (i == 3) break; Serial.println(i + 10); }\n  Serial.println(2);\n}', 'c', 1);
+  ok(!r.err && J(r.out) === J(['1', '10', '12', '2']), `G-4 C の switch の break・for の continue/break は従来どおり → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ["1","10","12","2"]）`);
+}
+{ // 配線: runner.js と evaluator.js に生の throw new Error( が無い（全て RuntimeError＝i18n キー＋行番号）・新しいキーの ja/en が非空。
+  const raw = ['runner.js', 'interp/evaluator.js'].map((f) => (readFileSync(join(ROOT, 'public/js', f), 'utf8').match(/throw new Error\(/g) || []).length);
+  ok(raw[0] === 0 && raw[1] === 0, `G-7 runner.js・evaluator.js の throw new Error( は 0 件（実 ${raw.join('・')}）`);
+  const keys = ['breakOutside', 'continueOutside', 'returnOutside', 'rangeStepZero'].map((k) => 'interp.err.' + k);
+  const bad = keys.filter((k) => !(MESSAGES[k] && MESSAGES[k].ja && MESSAGES[k].en));
+  ok(bad.length === 0, `G-7 interp.err の新しいキー 4 個の ja/en が非空${bad.length ? '（欠け ' + bad.join(', ') + '）' : ''}`);
+}
+// G-8 層 4 F3／F4: ユーザー関数から正常に戻ったら curLine（エラーの行・実行位置ハイライトの line()）は呼び出し元の文の行に戻る。
+//   是正前は呼ばれた関数の最後の文の行が残り、同じ文の続きで出るエラーの行がずれた（下の「是正前」）。関数の中で出たエラーは
+//   関数の中の行のまま（例外のときは戻さない）。[ラベル, 本文, 言語, tick 数, キー, 行, python3 の例外の正規表現（null＝照合しない）]
+function runLine(code, lang, ticks) {
+  const world = { car: new DynCar(course.start), walls: course.walls, start: course.start, log: () => {}, _sensors: [], _pendingDelay: 0, _others: [] };
+  let c = null;
+  try { c = buildController(code, lang, buildApi(world)); c.setup(); for (let i = 0; i < ticks; i++) c.tick(); return { cur: c.line() }; }
+  catch (e) { return { err: e.message || String(e), key: e.i18nKey, line: e.line, cur: c ? c.line() : null }; }
+}
+const G_LINE = [
+  ['for c in f():（notIterable・是正前は行 3）', 'def f():\n  a = 1\n  return 5\nfor c in f():\n  pass', 'py', 0, 'notIterable', 4, /^TypeError: 'int' object is not iterable/],
+  ['関数の外の return f()（是正前は [object Object]・line() は 3）', 'def f():\n  x = 1\n  return 2\nreturn f()', 'py', 0, 'returnOutside', 4, /^SyntaxError: 'return' outside function/],
+  ['x = 10 / f()（ゼロ除算・是正前は行 3）', 'def f():\n  a = 1\n  return 0\nx = 10 / f()', 'py', 0, 'divZero', 4, /^ZeroDivisionError/],
+  ['y = f() + zz（未定義の名前・是正前は行 2）', 'def f():\n  return 1\ny = f() + zz', 'py', 0, 'undefName', 3, /^NameError: name 'zz' is not defined/],
+  ['nope(f())（未定義の関数・是正前は行 2）', 'def f():\n  return 1\nnope(f())', 'py', 0, 'undefFunc', 3, /^NameError: name 'nope' is not defined/],
+  ['x //= f()（複合代入・是正前は行 2）', 'def f():\n  return 0\nx = 5\nx //= f()', 'py', 0, 'divZero', 4, /^ZeroDivisionError/],
+  ['C int x = 10 / f();（是正前は行 2）', 'int f(){\n  return 0;\n}\nvoid setup(){}\nvoid loop(){\n  int x = 10 / f();\n}', 'c', 1, 'divZero', 6, null],
+  ['関数の中で出たエラーは関数の中の行のまま（是正前後で同じ）', 'def f():\n  a = 1\n  return 1 / 0\nx = f()', 'py', 0, 'divZero', 3, /^ZeroDivisionError/],
+];
+for (const [label, src, lang, ticks, key, line, py3re] of G_LINE) {
+  const r = runLine(src, lang, ticks);
+  ok(r.key === 'interp.err.' + key && r.line === line && r.cur === line, `G-8 ${label} → ${key}（行 ${line}・line() ${line}）（実 ${r.err ? r.err : '走った'}・line() ${r.cur}）`);
+  if (py3re) checkPy3Err(`G-8 ${label}`, src, py3re);
+}
+{ // 正常系の実行位置: loop() の最後の文が関数を呼ぶと、tick の後の line() はその文の行（是正前は呼ばれた関数の最後の文の行 3）。
+  const r = runLine('def g():\n  a = 1\n  return a\ndef setup():\n  pass\ndef loop():\n  x = g()', 'py', 1);
+  ok(!r.err && r.cur === 7, `G-8 loop() の最後の文 x = g() の後の line() は 7（実 ${r.err ? r.err : r.cur}・是正前は 3）`);
+}
+
 
 console.log(`\n  python3 との突き合わせ: ${PY3 ? py3Checked + ' 件' : '0 件（python3 不在）'}`);
 console.log(`[結果] pass=${pass} fail=${fail}`);

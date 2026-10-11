@@ -2,9 +2,10 @@
 import { SIM } from '../config.js';
 import { t } from '../i18n.js';
 
-class ReturnSignal { constructor(v) { this.v = v; } }
-class BreakSignal {}
-class ContinueSignal {}
+// BJ3: 制御の信号は投げた文の行を持つ（ループの外・関数の外まで届いたとき、その行で i18n 実行時エラーにするため・Interp.outside）。
+class ReturnSignal { constructor(v, line) { this.v = v; this.line = line; } }
+class BreakSignal { constructor(line) { this.line = line; } }
+class ContinueSignal { constructor(line) { this.line = line; } }
 
 // AP17: 実行時エラーを i18n キー (interp.err.<sub>) ＋発生行つきで表す。
 //   message は throw 時点の言語で翻訳済み＝表示層 (fleet/main/race) は従来どおり e.message を使う。
@@ -52,13 +53,43 @@ export class Interp {
   rt(sub, params) { return new RuntimeError(sub, params, this.curLine); }
 
   // 関数呼び出し (ユーザー定義)。fresh ローカルスコープ。
+  // BJ3: 関数の本体から出た break／continue（関数の中のループに捕まらなかった＝loop()／setup() やユーザー関数の直下）は
+  //   行番号付きの i18n 実行時エラー。是正前は素通りし、loop() の直下なら `[object Object]` で停止、ループの中から呼んだ
+  //   関数の直下なら呼び出し側のループに黙って効いていた（Python・C ともに関数の境界を越える break／continue は無い）。
   callUser(name, args) {
     const fn = this.funcs[name];
     const scope = { vars: Object.create(null), parent: this.global };
     (fn.params || []).forEach((p, i) => { scope.vars[p] = args[i]; });
     try { this.execBlock(fn.body, scope); }
-    catch (e) { if (e instanceof ReturnSignal) return e.v; throw e; }
+    catch (e) { if (e instanceof ReturnSignal) return e.v; throw this.outside(e); }
     return undefined;
+  }
+
+  // BJ3: ループの外まで届いた break／continue と関数の外まで届いた return を、その文の行の i18n 実行時エラーにする
+  //   （それ以外の例外はそのまま返す）。是正前は信号オブジェクトがそのまま表示層へ届き、`e.message || e` で
+  //   `[object Object]` と表示されていた（fleet.js tickSlot の sim.runtimeErr・main.js の log.err.setup）。
+  outside(e) {
+    if (e instanceof BreakSignal) return new RuntimeError('breakOutside', {}, e.line);
+    if (e instanceof ContinueSignal) return new RuntimeError('continueOutside', {}, e.line);
+    if (e instanceof ReturnSignal) return new RuntimeError('returnOutside', {}, e.line);
+    return e;
+  }
+  // BJ3: 関数の外の文（トップレベル。Model A の setup 前の初期化・Model B の while True: より前・Model C の全体）を走らせる。
+  //   ここまで届いた break／continue／return は、外側にループも関数も無い＝エラー（Python も SyntaxError）。
+  execTop(stmts) {
+    try { this.execBlock(stmts, this.global); }
+    catch (e) { throw this.outside(e); }
+  }
+  // BJ3: Model B（トップレベルの while True:）の本体を 1 回走らせる。continue＝この回を終える（false）・break＝ループを
+  //   抜ける（true を返す。runner が以降の tick を無動作にする＝人間判断②）。return は関数の外＝エラー。
+  execLoopPass(stmts) {
+    try { this.execBlock(stmts, this.global); }
+    catch (e) {
+      if (e instanceof ContinueSignal) return false;
+      if (e instanceof BreakSignal) return true;
+      throw this.outside(e);
+    }
+    return false;
   }
 
   // ===== スコープ =====
@@ -84,9 +115,10 @@ export class Interp {
       case 'var': { const v = node.init ? this.evalExpr(node.init, scope) : 0; scope.vars[node.name] = v; return; }
       case 'exprstmt': this.evalExpr(node.expr, scope); return;
       case 'massign': return this.execMassign(node, scope);
-      case 'return': throw new ReturnSignal(node.value ? this.evalExpr(node.value, scope) : undefined);
-      case 'break': throw new BreakSignal();
-      case 'continue': throw new ContinueSignal();
+      // BJ3: 値の式が関数を呼んでも、戻った時点で curLine は return の行に戻っている（evalCall）＝信号の行は return の行。
+      case 'return': throw new ReturnSignal(node.value ? this.evalExpr(node.value, scope) : undefined, this.curLine);
+      case 'break': throw new BreakSignal(this.curLine);
+      case 'continue': throw new ContinueSignal(this.curLine);
       case 'if': {
         if (truthy(this.evalExpr(node.cond, scope))) this.execBlock(node.then, scope);
         else if (node.els) this.execBlock(node.els, scope);
@@ -134,25 +166,31 @@ export class Interp {
         }
         return;
       }
+      // BJ3: py の for（forrange／forin。どちらも parser_py だけが作る＝C の for は上の 'for' でブロックスコープのまま）は
+      //   Python と同じくスコープを作らない。ループ変数は囲むスコープへ直接置き（setVar を通さない＝関数の中の `for i` は
+      //   同名のグローバル i を書き換えない・Python と同じ）、本体は囲むスコープで走る（本体の代入は従来どおり setVar＝
+      //   人間判断①）。∴ 本体で新しく代入した変数もループ変数もループ後に最後の値で残る。0 回のループはループ変数を作らない。
+      //   是正前は for ごとに新しいスコープを作り、ループ変数（ループの前に start を置いた）と本体の新しい変数をそこへ置いて
+      //   ループ後に捨てていた（`for i in range(3): last = i` の後の last が「未定義の変数/名前」）。
       case 'forrange': {
-        const fs = { vars: Object.create(null), parent: scope };
-        let i = this.evalExpr(node.start, fs);
-        const end = this.evalExpr(node.end, fs);
-        const step = this.evalExpr(node.step, fs);
-        fs.vars[node.var] = i;
+        let i = this.evalExpr(node.start, scope);
+        const end = this.evalExpr(node.end, scope);
+        const step = this.evalExpr(node.step, scope);
+        // BJ3: ステップ 0 は Python と同じくエラー（ValueError）。是正前は start <= end なら黙って 0 回・start > end なら
+        //   ステップ上限エラー（無限ループ）。引数の式が関数を呼んでも curLine は for の行に戻っている（evalCall）。
+        if (step === 0 || step === false) throw this.rt('rangeStepZero');
         while (step > 0 ? i < end : i > end) {
           this.tick();
-          fs.vars[node.var] = i;
-          try { this.execBlock(node.body, fs); }
+          scope.vars[node.var] = i;
+          try { this.execBlock(node.body, scope); }
           catch (e) { if (e instanceof BreakSignal) break; if (e instanceof ContinueSignal) {} else throw e; }
           i += step;
         }
         return;
       }
       case 'forin': {
-        // AP9: list はその要素、str は各文字、dict はキーを走査 (Python 意味論)。
-        const fs = { vars: Object.create(null), parent: scope };
-        const it = this.evalExpr(node.iter, fs);
+        // AP9: list はその要素、str は各文字、dict はキーを走査 (Python 意味論)。BJ3: スコープは forrange と同じ。
+        const it = this.evalExpr(node.iter, scope);
         let seq;
         if (Array.isArray(it)) seq = it;
         else if (typeof it === 'string') seq = it.split('');
@@ -160,8 +198,8 @@ export class Interp {
         else throw this.rt('notIterable');
         for (let k = 0; k < seq.length; k++) {
           this.tick();
-          fs.vars[node.var] = seq[k];
-          try { this.execBlock(node.body, fs); }
+          scope.vars[node.var] = seq[k];
+          try { this.execBlock(node.body, scope); }
           catch (e) { if (e instanceof BreakSignal) break; if (e instanceof ContinueSignal) {} else throw e; }
         }
         return;
@@ -299,7 +337,17 @@ export class Interp {
     }
     if (callee.t === 'var') {
       const name = callee.name;
-      if (this.funcs[name]) return this.callUser(name, args);
+      if (this.funcs[name]) {
+        // BJ3: ユーザー関数から正常に戻ったら curLine を呼び出し元の文の行へ戻す。是正前は呼ばれた関数の最後の文の行が残り、
+        //   同じ文の続きで出るエラー（ゼロ除算・未定義の名前・for … in の notIterable・rangeStepZero・関数の外の return ほか）の
+        //   行と実行位置ハイライト（runner の line()）が呼ばれた関数の中を指していた（`for c in f():` が f の return の行）。
+        //   例外で抜けたときは戻さない（エラーの出た行を指したまま）。runner が直接呼ぶ setup()／loop() はこの経路を通らない＝
+        //   tick の後の line() は loop() の本体で最後に実行した文の行（その文が呼んだ関数の中の行ではない）。
+        const ln = this.curLine;
+        const v = this.callUser(name, args);
+        this.curLine = ln;
+        return v;
+      }
       if (name in this.host && typeof this.host[name] === 'function') return this.host[name](...args);
       throw this.rt('undefFunc', { name });
     }

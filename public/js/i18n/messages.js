@@ -894,6 +894,12 @@ export const MESSAGES = {
   'interp.err.stepLimit':  { ja: '評価ステップ上限超過 (無限ループの可能性)', en: 'Evaluation step limit exceeded (possible infinite loop)' },
   // AS4: 文字列からの配列初期化は未対応 (従来は長さ0の配列を黙って作っていた=エラーが出ない罠)。
   'interp.err.strArrayInit': { ja: '文字列で配列を初期化する書き方 (char s[] = "…") は未対応です。1文字ずつ {\'a\',\'b\'} と書くか、文字列は変数にそのまま入れてください', en: 'Initializing an array from a string (char s[] = "…") is not supported. Write it element by element as {\'a\',\'b\'}, or keep the string in a plain variable' },
+  // BJ3: ループの外の break／continue・関数の外の return（是正前は制御の信号がそのまま表示層へ届いて [object Object]、または
+  //   ループの中から呼んだ関数の直下の break／continue が呼び出し側のループに黙って効いた）と range のステップ 0（Python は ValueError）。
+  'interp.err.breakOutside':    { ja: 'break はループ (for / while。C は switch も) の中に書いてください。loop() 関数そのものはループではありません。関数の中の break は、その関数を呼んだループには効きません', en: '\'break\' must be inside a loop (for / while, or a switch in C). The loop() function itself is not a loop, and a break inside a function does not affect the loop that called it' },
+  'interp.err.continueOutside': { ja: 'continue はループ (for / while) の中に書いてください。loop() 関数そのものはループではありません (その回の loop() を終えるなら return)。関数の中の continue は、その関数を呼んだループには効きません', en: '\'continue\' must be inside a loop (for / while). The loop() function itself is not a loop (use return to end this pass of loop()), and a continue inside a function does not affect the loop that called it' },
+  'interp.err.returnOutside':   { ja: 'return は関数の中に書いてください。関数の外では使えません (while True: の 1 回分を終えるなら continue、ループを抜けるなら break)', en: '\'return\' must be inside a function; it cannot be used outside one (to end one pass of while True: use continue; to leave the loop use break)' },
+  'interp.err.rangeStepZero':   { ja: 'range() のステップ (3 番目の引数) に 0 は使えません', en: 'range() step (3rd argument) must not be zero' },
 
   // ---- loader.js: 取込/共有の操作系エラーメッセージ ----
   'loader.urlEmpty':    { ja: 'URL が空です', en: 'URL is empty' },
