@@ -40,12 +40,23 @@
 //      G3 正準サンプルから maxSec と regime を落とした束を本番の wf_official_result.mjs で生成（①② 合格・③ は exit 3）→
 //      --verify exit 0・result.json に実効の regime／maxSec／laps が刻まれる／G4 検出力（写しを壊す変異 11 件）。
 //      ※ maxSec は resultSha256 の canon に入れない（正準サンプルの pin は wf_official_result.mjs が見る）。
+//   H) 【BI3・2026-10-11】予算クラスのコスト判定（race_event.js costOf）は、公式レースが登録する定義（config.js
+//      registerRaceCarTypes → _putCarType）と同じ純関数 config.js fillCarDef で埋めた定義で測る。BI3 の前は maxSpeed の無い
+//      carDef を key の車種表の値か既定車（ノーマル FR）へ落とし、表に無い key なら既定車のコストで受理していた（レースは
+//      FR 土台とマージした定義で走る）。H1 構造（両側が fillCarDef を呼ぶ・race_event.js は名前空間 import＝BA1）／
+//      H2 再現→是正（budget.total 100 で、超えない carDef と超える carDef を 1 つずつ。改修前の写しでは両方とも既定車の 58 で受理。
+//      key の無い carDef はレースで登録されず carType の車で走るので carType で測る）／
+//      H3 判定の定義と registerRaceCarTypes が CAR_TYPE_BY_KEY に入れる定義が custom を除き deep-equal・コストも一致／
+//      H4 回帰（組込 6 車種の key 文字列・FILLER_POOL・carDefForEntry の同梱形・未知 key・完全な独自 carDef のコストが改修前の
+//      値表と一致）／H5 検出力（写しを壊す変異 4 件）。
 //
 // 見張れていないもの（限界）: ①submittedAt はエントリー側が自分で書く値（PR のマージ時刻ではない）。締切前の時刻を偽って書いた
 //   エントリーは除けない。②並べ替えは submittedAt を書かれた文字列のまま比べる（旧実装と同じ鍵）ので、表記の違う時刻（Z と +09:00
 //   など）が混ざると時刻順にならない（エントリー画面が書く toISOString() の形どうしなら時刻順）。③ブラウザの UI（開催状態の表示・
 //   👻 の作者引き・殿堂入りの作者引き）は測らない（👻 と殿堂入りは author で entries を引く＝同じ作者が 2 件出すと先の 1 件になる）。
-// 所要: 本ホスト実測 約 55 秒（単独・2026-10-11・BI2 の G3 が約 40 秒＝既定を落とした束は卓上の領域で全車が上限 1800 秒まで走る）。
+//   ④（BI3）予算判定はエントリーごと。同じ key の carDef を 2 件出すと、レースは後に登録した定義で両方の車を走らせ（後勝ち）、drift 未指定の
+//   2 件目は 1 件目の drift を継承する＝各エントリーの判定の定義と走る定義が分かれうる（field 全体を見る判定は持たない）。
+// 所要: 本ホスト実測 約 56 秒（単独・2026-10-11・BI2 の G3 が約 40 秒＝既定を落とした束は卓上の領域で全車が上限 1800 秒まで走る・BI3 の H 章は 1 秒未満）。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -71,7 +82,7 @@ const tmps = [];
 const mkTmp = (tag) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), `wf_bi1_${tag}_`)); tmps.push(d); return d; };
 
 console.log('='.repeat(78));
-console.log('BI1 公式レースのフィールド構成の決定論（グリッド順・締切・同名エントリーの帰属）＋ BI2 既定値の集約');
+console.log('BI1 公式レースのフィールド構成の決定論（グリッド順・締切・同名エントリーの帰属）＋ BI2 既定値の集約 ＋ BI3 予算判定の定義');
 console.log('='.repeat(78));
 
 // ── A) 構造 ──────────────────────────────────────────────────────────────────
@@ -233,9 +244,10 @@ report('B) 違反', checkB(real));
 const reDir = mkTmp('re');
 function writeRe(name, text) {
   const jsUrl = pathToFileURL(JS_ROOT).href + '/';
-  // BI2: race_event.js は race_engine.js（computeRaceTimeout）も import する＝向け直す相対 import は 3 本。
+  // BI2: race_event.js は race_engine.js（computeRaceTimeout）も import する。BI3: config.js を名前空間でも import する
+  //   （fillCarDef・BA1）＝向け直す相対 import は 4 本（config 2・programs・race_engine）。
   const out = text.replace(/from '\.\/(config|programs|race_engine)\.js'/g, (m, f) => `from '${jsUrl}${f}.js'`);
-  if ((out.match(/from 'file:/g) || []).length !== 3) throw new Error('写しの import を向け直せない（race_event.js の import が変わった）');
+  if ((out.match(/from 'file:/g) || []).length !== 4) throw new Error('写しの import を向け直せない（race_event.js の import が変わった）');
   const p = path.join(reDir, name + '.js');
   fs.writeFileSync(p, out);
   return pathToFileURL(p).href;
@@ -539,10 +551,151 @@ report('G3) 既定を落とした束の生成と再検証', checkG3());
   report('G4) 適用できなかった変異（パターン腐り）', noop);
 }
 
+// ── H) BI3: 予算クラスのコスト判定は走る車と同じ定義（config.js fillCarDef）で ───────────────────────────
+console.log('\n  H) BI3: 予算クラスのコスト判定は、レースが登録する定義と同じ fillCarDef で埋めた定義で測る');
+const CFG_PATH = path.join(JS_ROOT, 'config.js');
+const RAW_CFG = fs.readFileSync(CFG_PATH, 'utf8');
+const cfg = await import(pathToFileURL(CFG_PATH).href);
+const reMod = await import(pathToFileURL(RE_PATH).href);
+// H1) 構造: 判定側と登録側が同じ関数を呼ぶ。race_event.js は fillCarDef を名前付き import しない（BA1）。
+function checkH1(re, cfgText) {
+  const v = [];
+  const reCode = stripComments(re), cfgCode = stripComments(cfgText);
+  const need = [
+    [reCode, /import \* as configNS from '\.\/config\.js';/g, 1, 'race_event.js が config.js を名前空間で import する'],
+    [reCode, /return configNS\.fillCarDef\(carRef, CAR_TYPE_BY_KEY\);/g, 1, 'race_event.js の resolveCar が fillCarDef(carRef, CAR_TYPE_BY_KEY) を返す'],
+    [reCode, /const cost = costOf\(\(def && typeof def === 'object' && def\.key\) \? def : entry\.carType\);/g, 1, 'validateEntry の予算判定が costOf を通る（key の無い carDef は carType で測る）'],
+    [cfgCode, /export function fillCarDef\(def, byKey\) \{/g, 1, 'config.js が fillCarDef を export する'],
+    [cfgCode, /const t = fillCarDef\(def, CAR_TYPE_BY_KEY\);\n  t\.custom = true;/g, 1, 'config.js の _putCarType が fillCarDef(def, CAR_TYPE_BY_KEY) で埋めて custom を付ける'],
+    [cfgCode, /if \(def && def\.key\) _putCarType\(def\);/g, 1, 'registerRaceCarTypes が _putCarType を通る'],
+  ];
+  for (const [code, re2, want, what] of need) { const n = (code.match(re2) || []).length; if (n !== want) v.push(`${what}: ${n} 件（期待 ${want}）`); }
+  if (/import\s*\{[^}]*\bfillCarDef\b[^}]*\}\s*from\s*'\.\/config\.js'/.test(re)) v.push('race_event.js が fillCarDef を名前付き import している（BA1）');
+  if (typeof cfg.fillCarDef !== 'function') v.push('config.js に fillCarDef が無い（resolveCar が従来の解決へ落ちる）');
+  return v;
+}
+report('H1) 判定側と登録側が同じ関数を通らない', checkH1(RAW_RE, RAW_CFG));
+// H2) 再現→是正: maxSpeed の無い carDef（表に無い key）を budget.total 100 で判定する。
+const H_EV = { class: 'budget', budget: { total: 100 } };
+const H_UNDER = { key: 'bi3_x', accel: 1.40, us: 0.05, mass: 1000 };                       // FR 土台で 81（≤ 100）
+const H_OVER = { key: 'bi3_y', accel: 1.40, us: 0.05, mass: 1000, brake: 1.25, drift: {} };   // FR 土台＋drift で 102（> 100）
+const H_KEYLESS = { mass: 1500, accel: 0.85, brake: 0.85, maxSpeed: 0.85, us: 0.5, os: 0.3 };   // コスト 0 の完全 def（key 無し）
+const H_DEFAULT_COST = 58;   // 既定車（ノーマル FR）のコスト＝改修前の判定が落ちた先（H4 の値表と同じ）
+function checkH2(mod) {
+  const v = [];
+  const u = mod.validateEntry(H_EV, { carDef: H_UNDER, carType: H_UNDER.key });
+  const o = mod.validateEntry(H_EV, { carDef: H_OVER, carType: H_OVER.key });
+  console.log(`     超えない carDef ${JSON.stringify(H_UNDER)} → ${JSON.stringify(u)}`);
+  console.log(`     超える carDef   ${JSON.stringify(H_OVER)} → ${JSON.stringify(o)}`);
+  if (!(u.ok === true && u.cost === 81 && u.total === 100)) v.push(`超えない carDef の判定 ${JSON.stringify(u)}（期待 ok・cost 81）`);
+  if (!(o.ok === false && o.reason === 'budget' && o.cost === 102 && o.total === 100)) v.push(`超える carDef の判定 ${JSON.stringify(o)}（期待 reject budget・cost 102）`);
+  if (u.cost === H_DEFAULT_COST || o.cost === H_DEFAULT_COST) v.push('部分 carDef が既定車のコストで判定された');
+  // key の無い carDef はレースで登録されず carType（ここでは drift_awd＝70）で走る＝carType で測る（BI3 の前は使われない carDef の 0 で受理）。
+  const kl = mod.validateEntry({ class: 'budget', budget: { total: 40 } }, { carDef: H_KEYLESS, carType: 'drift_awd' });
+  console.log(`     key の無い carDef＋carType drift_awd（total 40） → ${JSON.stringify(kl)}`);
+  if (!(kl.ok === false && kl.cost === 70)) v.push(`key の無い carDef の判定 ${JSON.stringify(kl)}（期待 reject・cost 70＝走る drift_awd）`);
+  return v;
+}
+report('H2) 部分 carDef の予算判定', checkH2(reMod));
+// H3) 判定の定義＝登録の定義。registerRaceCarTypes（runRace が carDef を登録する関数）が CAR_TYPE_BY_KEY[key] に入れる値と、
+//     costOf が測る定義（fillCarDef(def, 判定時の表)）が custom を除き deep-equal・コストも一致。登録はその場で元へ戻す。
+const H_DEFS = [
+  ['表に無い key・maxSpeed 無し', H_UNDER],
+  ['表に無い key・drift の一部', H_OVER],
+  ['組込 key・一部だけ（drift は表から継承）', { key: 'drift_ff', accel: 1.30 }],
+  ['組込 key・drift null', { key: 'drift_awd', mass: 1100, drift: null }],
+  ['組込 key・drift true（object でも null でもない値）', { key: 'normal_ff', drift: true }],
+  ['完全な独自 carDef', { key: 'bi3_full', name: 'F', mass: 1200, accel: 1.1, brake: 1.0, maxSpeed: 1.0, us: 0.2, os: 0.1, drift: null, yawGain: 1, powerUs: 0, powerOs: 0, liftOffOs: 0, brakeOs: 0, spin: 0, slide: 0.02 }],
+  ['custom: false を持つ carDef', { key: 'bi3_c', custom: false, maxSpeed: 1.1 }],
+];
+const cloneDef = (ct) => { const d = {}; for (const k of Object.keys(ct)) { if (k === 'custom' || k === 'community') continue; d[k] = ct[k]; } return JSON.parse(JSON.stringify(d)); };
+for (const t of cfg.CAR_TYPES.slice(0, 6)) H_DEFS.push([`carDefForEntry の同梱形 ${t.key}`, cloneDef(t)]);
+const sansCustom = (t) => { const d = { ...t }; delete d.custom; return d; };   // 両側から custom を落として比べる（登録側は true を付け、def の custom: false は判定側に残る）
+function checkH3(fill) {
+  const v = [];
+  for (const [name, def] of H_DEFS) {
+    const judged = fill(def, cfg.CAR_TYPE_BY_KEY);
+    const before = reMod.costOf(def);
+    const restore = cfg.registerRaceCarTypes([def]);
+    let reg;
+    try { reg = cfg.CAR_TYPE_BY_KEY[def.key]; } finally { restore(); }
+    if (!reg || reg.custom !== true) { v.push(`${name}: 登録されない／custom 印が無い`); continue; }
+    if (JSON.stringify(sansCustom(judged)) !== JSON.stringify(sansCustom(reg))) v.push(`${name}: 判定の定義と登録の定義が違う（判定 ${JSON.stringify(sansCustom(judged))} ／ 登録 ${JSON.stringify(sansCustom(reg))}）`);
+    const after = reMod.costOf(sansCustom(reg));
+    if (before !== after) v.push(`${name}: コストが違う（判定 ${before} ／ 登録された定義 ${after}）`);
+  }
+  if (cfg.CAR_TYPE_BY_KEY.bi3_x || cfg.CAR_TYPES.some((t) => String(t.key).startsWith('bi3_'))) v.push('登録が元へ戻っていない');
+  return v;
+}
 {
-  const changed = [[RE_PATH, RAW_RE], [OFFICIAL, RAW_OFF], [UI_PATH, RAW_UI]].filter(([p, raw]) => fs.readFileSync(p, 'utf8') !== raw).map(([p]) => path.relative(ROOT, p));
+  const v = checkH3(cfg.fillCarDef);
+  console.log(`     ${H_DEFS.length} 定義で 判定の定義 ＝ 登録の定義（custom を除く・キーの並びも含めて JSON 一致）を照合`);
+  report('H3) 判定の定義と登録の定義の食い違い', v);
+}
+// H4) 回帰: 改修前（HEAD 36694c4）の costOf の値表（_bi3_table で採った実測値を凍結）と一致。
+const H_TABLE = [
+  ['normal_fr', 58], ['normal_ff', 38], ['normal_awd', 58], ['drift_ff', 50], ['drift_fr', 70], ['drift_awd', 70],
+];
+function checkH4(mod) {
+  const v = [];
+  const byKey = Object.fromEntries(H_TABLE);
+  for (const [k, w] of H_TABLE) {
+    const s1 = mod.costOf(k), s2 = mod.costOf(cloneDef(cfg.CAR_TYPE_BY_KEY[k]));
+    if (s1 !== w) v.push(`key 文字列 ${k}: ${s1}（改修前 ${w}）`);
+    if (s2 !== w) v.push(`carDefForEntry の同梱形 ${k}: ${s2}（改修前 ${w}）`);
+  }
+  for (const f of mod.FILLER_POOL) { const c = mod.costOf(f.carType); if (c !== byKey[f.carType]) v.push(`FILLER_POOL ${f.name}（${f.carType}）: ${c}（改修前 ${byKey[f.carType]}）`); }
+  if (mod.FILLER_POOL.length !== 5) v.push(`FILLER_POOL が ${mod.FILLER_POOL.length} 件（値表は 5 件で採った）`);
+  for (const [name, ref, w] of [
+    ['未知 key 文字列', 'no_such_car', 58], ['carType 無し', undefined, 58],
+    ['完全な独自 carDef（drift null）', H_DEFS.find((d) => d[0] === '完全な独自 carDef')[1], 55],
+    ['完全な独自 carDef（drift の一部）', { key: 'my_y', name: 'Y', mass: 1300, accel: 1.0, brake: 1.0, maxSpeed: 0.95, us: 0.3, os: 0.05, drift: { trigger: 'power' }, yawGain: 1, powerUs: 0, powerOs: 0, liftOffOs: 0, brakeOs: 0, spin: 0, slide: 0.02 }, 53],
+    ['key の無い完全 carDef', { mass: 1200, accel: 1.1, brake: 1.0, maxSpeed: 1.0, us: 0.2, os: 0.1 }, 55],
+    ['key の無い部分 carDef', { accel: 1.4 }, 58],
+  ]) { const c = mod.costOf(ref); if (c !== w) v.push(`${name}: ${c}（改修前 ${w}）`); }
+  return v;
+}
+report('H4) 改修前の値表との差', checkH4(reMod));
+// H5) 検出力: race_event.js の写しを壊すと H1／H2／H3 が赤になる（product のファイルは無改変）。
+{
+  const miss = [], noop = [];
+  const RESOLVE_NEW = "  if (carRef && typeof carRef === 'object' && carRef.key && typeof configNS.fillCarDef === 'function') {\n    return configNS.fillCarDef(carRef, CAR_TYPE_BY_KEY);\n  }\n";
+  const H_MUT = [
+    ['改修前の resolveCar に戻す（部分 carDef を表か既定車へ落とす）', (s) => s.replace(RESOLVE_NEW, ''), 'H2'],
+    ['判定時の表を渡さない（drift の継承が消える）', (s) => s.replace('return configNS.fillCarDef(carRef, CAR_TYPE_BY_KEY);', 'return configNS.fillCarDef(carRef, {});'), 'H3'],
+    ['key の無い carDef を carDef で測る（改修前の validateEntry）', (s) => s.replace("const cost = costOf((def && typeof def === 'object' && def.key) ? def : entry.carType);", 'const cost = costOf(entry.carDef || entry.carType);'), 'H2'],
+    ['fillCarDef を名前付き import する', (s) => s.replace("import { CAR_TYPE_BY_KEY, CAR_TYPE_DEFAULT } from './config.js';", "import { CAR_TYPE_BY_KEY, CAR_TYPE_DEFAULT, fillCarDef } from './config.js';"), 'H1'],
+  ];
+  for (const [name, fn, ch] of H_MUT) {
+    const m = fn(RAW_RE);
+    if (m === RAW_RE) { noop.push(name); continue; }
+    const log = console.log; console.log = () => {};
+    let v = [];
+    try {
+      if (ch === 'H1') v = checkH1(m, RAW_CFG);
+      else {
+        const mod = await import(writeRe('h5_' + H_MUT.findIndex((x) => x[0] === name), m));
+        if (ch === 'H2') v = checkH2(mod);
+        else {
+          // 写しの resolveCar が測る定義を、コストの一致で見る（H3 の後半と同じ照合を写しの costOf で行う）。
+          for (const [dn, def] of H_DEFS) {
+            const restore = cfg.registerRaceCarTypes([def]);
+            let reg; try { reg = sansCustom(cfg.CAR_TYPE_BY_KEY[def.key]); } finally { restore(); }
+            if (mod.costOf(def) !== mod.costOf(reg)) v.push(dn);
+          }
+        }
+      }
+    } finally { console.log = log; }
+    if (!v.length) miss.push(`${name} → ${ch} が見逃した`); else console.log(`     ✓ ${name} → ${ch} で ${v.length} 件の赤`);
+  }
+  report('H5) 見逃した変異', miss);
+  report('H5) 適用できなかった変異（パターン腐り）', noop);
+}
+
+{
+  const changed = [[RE_PATH, RAW_RE], [OFFICIAL, RAW_OFF], [UI_PATH, RAW_UI], [CFG_PATH, RAW_CFG]].filter(([p, raw]) => fs.readFileSync(p, 'utf8') !== raw).map(([p]) => path.relative(ROOT, p));
   if (changed.length) { pass = false; console.log(`  ✗ ゲートの実行で ${changed.join(', ')} が変化した`); }
-  else console.log('  ✓ public/js/race_event.js・wf_official_result.mjs・public/js/race_ui.js は実行前後で無変化');
+  else console.log('  ✓ public/js/race_event.js・wf_official_result.mjs・public/js/race_ui.js・public/js/config.js は実行前後で無変化');
 }
 for (const d of tmps) fs.rmSync(d, { recursive: true, force: true });
 

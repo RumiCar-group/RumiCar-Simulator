@@ -441,17 +441,30 @@ export function registerCarType(def) {
   if (BUILTIN_CAR_KEYS.has(String(def.key))) return null;
   return _putCarType(def);
 }
-function _putCarType(def) {
+// 車種定義 (一部だけでもよい) を、登録したときに車種表へ入る形へ埋める**純関数** (表は読むだけ・書かない)。
+// 【BI3・2026-10-11】旧 _putCarType の本体をそのまま切り出した。土台＝ノーマル FR (mkType('normal','fr')) に def を上書きし、
+//   drift は def.drift が object なら FR の drift テンプレートとマージ、null なら null、未指定なら byKey に同じ key の定義が
+//   あればその drift を継承 (無ければ null)。それ以外の値 (true・0 等) は def の値のまま。
+//   公式レースの予算クラス判定 (race_event.js costOf) もこの関数で埋めた定義のコストを測る＝判定する車と走る車が同じ定義
+//   (BI3 の前は maxSpeed の無い carDef を既定車のコストで受理し、レースは FR 土台とマージした定義で走っていた)。
+//   byKey は登録の時点の車種表 (CAR_TYPE_BY_KEY)。custom 印は付けない (付けるのは _putCarType)。
+export function fillCarDef(def, byKey) {
   const base = mkType('normal', 'fr'); // 既定の土台 (FR ノーマル)
-  const t = { ...base, ...def, custom: true };
+  const t = { ...base, ...def };
   // drift は { ...} or null。指定が object なら既定とマージ。
   if (def.drift && typeof def.drift === 'object') {
     const dbase = DRIVE.fr.drift;
     t.drift = { ...dbase, ...def.drift };
   } else if (def.drift === null || def.drift === undefined) {
-    t.drift = def.key && CAR_TYPE_BY_KEY[def.key] ? CAR_TYPE_BY_KEY[def.key].drift : null;
+    t.drift = def.key && byKey && byKey[def.key] ? byKey[def.key].drift : null;
     if (def.drift === null) t.drift = null;
   }
+  return t;
+}
+function _putCarType(def) {
+  // 並び (土台の鍵 → def の新しい鍵 → custom) と custom の上書きは旧 `{ ...base, ...def, custom: true }` と同じ。
+  const t = fillCarDef(def, CAR_TYPE_BY_KEY);
+  t.custom = true;
   const idx = CAR_TYPES.findIndex(x => x.key === t.key);
   if (idx >= 0) CAR_TYPES[idx] = t; else CAR_TYPES.push(t);
   CAR_TYPE_BY_KEY[t.key] = t;

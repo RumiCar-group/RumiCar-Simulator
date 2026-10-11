@@ -182,7 +182,9 @@ const GATES = [
   //   子プロセスで実行して result.json を照合）・読めない close は生成側が exit 2・変異試験。
   //   BI2 で G 章を足した: event の欠落欄の既定（maxSec・regime ほか）を race_event.js の resolveEventSpec に集約し、生成・再検証・👻 が
   //   同じ関数を呼ぶ（既定のリテラルの残り 0・正準サンプルから maxSec/regime を落とした束で生成→--verify 一致）。
-  //   所要は本ホスト実測 約 55s（単独・2026-10-11・BI2 の G3 が約 40s）。
+  //   BI3 で H 章を足した: 予算クラスのコスト判定（costOf）を、レースが登録する定義と同じ config.js fillCarDef で埋めた定義で測る
+  //   （部分 carDef の再現→是正・判定の定義＝registerRaceCarTypes の登録定義・改修前の値表との一致・変異試験）。
+  //   所要は本ホスト実測 約 56s（単独・2026-10-11・BI2 の G3 が約 40s・H 章は 1s 未満）。
   'wf_bi1_field.mjs',
 ].map((name) => ({ name, args: [] }));
 

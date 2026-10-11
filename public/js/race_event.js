@@ -6,6 +6,7 @@
 // 二層モデル (W_spec §0): 公式 (開催) はこのモジュール → race_engine.runRace で走り、練習記録
 // (localStorage・W2) には一切混ざらない (runRace が persist:false で練習ベストを書かない)。
 import { CAR_TYPE_BY_KEY, CAR_TYPE_DEFAULT } from './config.js';
+import * as configNS from './config.js';   // BI3: 足した名前 (fillCarDef) は名前空間から「あれば使う」(BA1・キャッシュ混在)
 import { PROGRAM_BY_KEY } from './programs.js';
 import { computeRaceTimeout } from './race_engine.js';
 
@@ -16,9 +17,18 @@ import { computeRaceTimeout } from './race_engine.js';
 //  - open  : 無制約 (現行の「車種も自由」)。
 // ============================================================================
 
-// 車種キー or 完全 def → 解決済みパラメータ。CAR_TYPE_BY_KEY は組込/独自/community の runtime レイヤ
+// 車種キー or carDef → 解決済みパラメータ。CAR_TYPE_BY_KEY は組込/独自/community の runtime レイヤ
 // (V1〜V4・組込上書き V3 も反映)。未知 key は既定 (ノーマル FR) にフォールバック。
+// 【BI3・2026-10-11】key を持つ carDef は、公式レースが登録する定義 (config.js registerRaceCarTypes → _putCarType) と
+//   同じ関数 fillCarDef で埋めた定義を返す＝コストを測る車と走る車が同じ。BI3 の前は maxSpeed の無い carDef を key の
+//   車種表の値か既定車へ落としていた (表に無い key なら既定車のコストで受理され、レースは FR 土台とマージした定義で走った)。
+//   key の無い carDef はここでは従来どおり解決する。ただしレースでは登録されない (registerRaceCarTypes は key の無い定義を飛ばす)
+//   ので、validateEntry は key の無い carDef を測らず carType で測る。
+//   fillCarDef の無い古い config.js と組み合わさったとき (キャッシュ混在) は従来の解決で測る。
 function resolveCar(carRef) {
+  if (carRef && typeof carRef === 'object' && carRef.key && typeof configNS.fillCarDef === 'function') {
+    return configNS.fillCarDef(carRef, CAR_TYPE_BY_KEY);
+  }
   if (carRef && typeof carRef === 'object' && carRef.maxSpeed != null) return carRef;     // full def
   const key = (carRef && typeof carRef === 'object') ? carRef.key : carRef;
   return CAR_TYPE_BY_KEY[key] || CAR_TYPE_BY_KEY[CAR_TYPE_DEFAULT];
@@ -53,7 +63,10 @@ export function validateEntry(event, entry) {
   }
   if (cls === 'budget') {
     const total = (event.budget && event.budget.total != null) ? event.budget.total : 100;
-    const cost = costOf(entry.carDef || entry.carType);
+    // BI3: レースが登録する carDef は key のあるものだけ (config.js registerRaceCarTypes)。key の無い carDef は登録されず、
+    //   その車は carType の車種で走る (race_engine.js のスロット生成) ので、carType で測る (BI3 の前は使われない carDef で測っていた)。
+    const def = entry.carDef;
+    const cost = costOf((def && typeof def === 'object' && def.key) ? def : entry.carType);
     return cost <= total ? { ok: true, cost, total } : { ok: false, reason: 'budget', cost, total };
   }
   return { ok: true };   // open
