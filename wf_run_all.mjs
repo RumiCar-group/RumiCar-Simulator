@@ -179,7 +179,10 @@ const GATES = [
   // BI1: 公式レースのフィールド構成の決定論（race_event.js frozenField・wf_official_result.mjs の帰属）。グリッド順がロケールと入力順に
   //   依存しない（LANG/TZ を変えた node 3 起動で並びの sha256 一致・改修前の原文を陰性対照に）・entryWindow.close より後の submittedAt を
   //   除き同時刻は入れる・close 未記載は全件（Date.parse 基準 400 組とも一致）・同名エントリーの author を field の添字で引く（生成側を
-  //   子プロセスで実行して result.json を照合）・読めない close は生成側が exit 2・変異試験。所要は本ホスト実測 約 13s（単独・2026-10-11）。
+  //   子プロセスで実行して result.json を照合）・読めない close は生成側が exit 2・変異試験。
+  //   BI2 で G 章を足した: event の欠落欄の既定（maxSec・regime ほか）を race_event.js の resolveEventSpec に集約し、生成・再検証・👻 が
+  //   同じ関数を呼ぶ（既定のリテラルの残り 0・正準サンプルから maxSec/regime を落とした束で生成→--verify 一致）。
+  //   所要は本ホスト実測 約 55s（単独・2026-10-11・BI2 の G3 が約 40s）。
   'wf_bi1_field.mjs',
 ].map((name) => ({ name, args: [] }));
 

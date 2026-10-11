@@ -31,12 +31,21 @@
 //      resultSha256 の pin 一致は wf_official_result.mjs（wf_run_all の最後のゲート）が見る。
 //   F) 検出力: race_event.js の写しを壊した変異（ロケール依存の比較・締切の除外を外す・同時刻を除く・地方時で読む・未記載で全件
 //      除外・タイブレークを外す・暦の検査を外す・改修前の原文）が B) か C) を赤にする（product のファイルは無改変）。
+//   G) 【BI2・2026-10-11】event の欠落欄の既定（laps・regime・crashRule・interact・maxSec・physicsMode・recon・wear）は
+//      race_event.js の resolveEventSpec だけが持ち、生成（wf_official_result.mjs runOfficial）・再検証（race_ui.js
+//      verifyOfficialLocally）・👻 ゴースト対戦（ghostVsWorld）が同じ関数を呼ぶ。BI2 の前は maxSec の無い event を生成側が
+//      computeRaceTimeout・ブラウザが固定 180 秒で走らせ、regime の無い event はブラウザだけ利用者の選んでいる領域で走った。
+//      G1 構造（2 ファイルのコード部分に既定のリテラルが 0 件・3 経路が関数を通る・race_ui.js は名前空間 import＝BA1）／
+//      G2 関数の既定値（maxSec＝computeRaceTimeout・峠は runRace と同じく 1 本・regime='tabletop'・書かれた欄はそのまま）／
+//      G3 正準サンプルから maxSec と regime を落とした束を本番の wf_official_result.mjs で生成（①② 合格・③ は exit 3）→
+//      --verify exit 0・result.json に実効の regime／maxSec／laps が刻まれる／G4 検出力（写しを壊す変異 11 件）。
+//      ※ maxSec は resultSha256 の canon に入れない（正準サンプルの pin は wf_official_result.mjs が見る）。
 //
 // 見張れていないもの（限界）: ①submittedAt はエントリー側が自分で書く値（PR のマージ時刻ではない）。締切前の時刻を偽って書いた
 //   エントリーは除けない。②並べ替えは submittedAt を書かれた文字列のまま比べる（旧実装と同じ鍵）ので、表記の違う時刻（Z と +09:00
 //   など）が混ざると時刻順にならない（エントリー画面が書く toISOString() の形どうしなら時刻順）。③ブラウザの UI（開催状態の表示・
 //   👻 の作者引き・殿堂入りの作者引き）は測らない（👻 と殿堂入りは author で entries を引く＝同じ作者が 2 件出すと先の 1 件になる）。
-// 所要: 本ホスト実測 約 13 秒（単独・2026-10-11）。
+// 所要: 本ホスト実測 約 55 秒（単独・2026-10-11・BI2 の G3 が約 40 秒＝既定を落とした束は卓上の領域で全車が上限 1800 秒まで走る）。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -62,7 +71,7 @@ const tmps = [];
 const mkTmp = (tag) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), `wf_bi1_${tag}_`)); tmps.push(d); return d; };
 
 console.log('='.repeat(78));
-console.log('BI1 公式レースのフィールド構成の決定論（グリッド順・締切・同名エントリーの帰属）');
+console.log('BI1 公式レースのフィールド構成の決定論（グリッド順・締切・同名エントリーの帰属）＋ BI2 既定値の集約');
 console.log('='.repeat(78));
 
 // ── A) 構造 ──────────────────────────────────────────────────────────────────
@@ -224,8 +233,9 @@ report('B) 違反', checkB(real));
 const reDir = mkTmp('re');
 function writeRe(name, text) {
   const jsUrl = pathToFileURL(JS_ROOT).href + '/';
-  const out = text.replace(/from '\.\/(config|programs)\.js'/g, (m, f) => `from '${jsUrl}${f}.js'`);
-  if ((out.match(/from 'file:/g) || []).length !== 2) throw new Error('写しの import を向け直せない（race_event.js の import が変わった）');
+  // BI2: race_event.js は race_engine.js（computeRaceTimeout）も import する＝向け直す相対 import は 3 本。
+  const out = text.replace(/from '\.\/(config|programs|race_engine)\.js'/g, (m, f) => `from '${jsUrl}${f}.js'`);
+  if ((out.match(/from 'file:/g) || []).length !== 3) throw new Error('写しの import を向け直せない（race_event.js の import が変わった）');
   const p = path.join(reDir, name + '.js');
   fs.writeFileSync(p, out);
   return pathToFileURL(p).href;
@@ -405,10 +415,134 @@ console.log(`  変異 ${RE_MUTATIONS.length} 件を注入（product のファイ
 report('F) 見逃した変異', miss);
 report('F) 適用できなかった変異（パターン腐り）', noop);
 
+// ── G) BI2: 生成側と再検証側の既定値（maxSec・regime ほか）を race_event.js の 1 関数に集約 ───────────────
+console.log('\n  G) BI2: event の欠落欄の既定は resolveEventSpec だけ（生成側・再検証・👻 が同じ関数）');
+const UI_PATH = path.join(JS_ROOT, 'race_ui.js');
+const RAW_UI = fs.readFileSync(UI_PATH, 'utf8');
+const stripComments = (t) => t.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
+// G1) 構造: 既定のリテラルが race_ui.js・wf_official_result.mjs のコード部分に残っていない／両者が同じ関数を呼ぶ。
+const DEFAULT_LITERALS = [
+  [/maxSec\b[^;\n]*\b180\b/g, 'maxSec の固定 180'],
+  [/regime\s*\|\|\s*null/g, "regime の `|| null` 既定"],
+  [/physicsMode\s*\|\|\s*['"]dynamic['"]/g, "physicsMode || 'dynamic'"],
+  [/laps\s*\|\|\s*3\b/g, 'laps || 3'],
+  [/crashRule\s*\|\|\s*\{/g, 'crashRule の既定オブジェクト'],
+  [/rejoin:\s*false/g, 'crashRule 既定の rejoin: false'],
+  [/penaltySec\s*\|\|\s*3\b/g, 'penaltySec || 3'],
+];
+function checkG1(ui, off) {
+  const v = [];
+  for (const [name, text] of [['race_ui.js', ui], ['wf_official_result.mjs', off]]) {
+    const code = stripComments(text);
+    for (const [re, what] of DEFAULT_LITERALS) { const n = (code.match(re) || []).length; if (n) v.push(`${name}: ${what} が ${n} 件`); }
+  }
+  const uiCode = stripComments(ui), offCode = stripComments(off);
+  const need = [
+    [uiCode, /typeof eventNS\.resolveEventSpec === 'function' \? eventNS\.resolveEventSpec\(event, course\) : null/g, 1, 'race_ui.js の eventSpecOf が resolveEventSpec を名前空間から呼ぶ'],
+    [uiCode, /const es = eventSpecOf\(event, rcourse\);/g, 1, 'verifyOfficialLocally が eventSpecOf(event, rcourse) を呼ぶ'],
+    [uiCode, /const es = eventSpecOf\(race\.event, rcourse\);/g, 1, 'ghostVsWorld が eventSpecOf(race.event, rcourse) を呼ぶ'],
+    [uiCode, /maxSec: es\.maxSec/g, 2, 'race_ui.js の 2 経路が maxSec を es から渡す'],
+    [offCode, /const spec = resolveEventSpec\(event, course\);/g, 1, 'wf_official_result.mjs の runOfficial が resolveEventSpec を呼ぶ'],
+    [offCode, /regime: spec\.regime, laps: spec\.laps, field, crashRule: spec\.crashRule, interact: spec\.interact, maxSec: spec\.maxSec/g, 1, 'runOfficial が spec の値で runRace を呼ぶ'],
+    [offCode, /\n    laps: spec\.laps,\n    maxSec: spec\.maxSec,\n    finishers:/g, 1, 'result.json に実効の laps・maxSec を刻む'],
+  ];
+  for (const [code, re, want, what] of need) { const n = (code.match(re) || []).length; if (n !== want) v.push(`${what}: ${n} 件（期待 ${want}）`); }
+  if (/import\s*\{[^}]*\bresolveEventSpec\b[^}]*\}\s*from\s*'\.\/race_event\.js'/.test(ui)) v.push('race_ui.js が resolveEventSpec を名前付き import している（BA1: 古い race_event.js がキャッシュに残ると全体が読めない）');
+  return v;
+}
+report('G1) 既定リテラルの残り・関数を通らない経路', checkG1(RAW_UI, RAW_OFF));
+
+// G2) 関数: resolveEventSpec の既定値（maxSec＝computeRaceTimeout・峠は 1 本・regime='tabletop' ほか）。
+const { resolveEventSpec } = await import(pathToFileURL(RE_PATH).href);
+const { computeRaceTimeout } = await import(pathToFileURL(path.join(JS_ROOT, 'race_engine.js')).href);
+const { buildFromSpec } = await import(pathToFileURL(path.join(JS_ROOT, 'course.js')).href);
+const SAMPLE = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs/phase_w/official_sample_event.json'), 'utf8'));
+const NODEF = JSON.parse(JSON.stringify(SAMPLE));
+delete NODEF.event.maxSec; delete NODEF.event.regime; NODEF.event.id = 'bi2-nodefaults';
+function checkG2(resolve) {
+  const v = [];
+  const sCourse = buildFromSpec(SAMPLE.courseSpec);
+  const sp = resolve(NODEF.event, sCourse);
+  const wantMax = computeRaceTimeout({ course: sCourse, laps: sp.laps, regime: 'tabletop' });
+  console.log(`     サンプル（maxSec・regime を落とした束）: regime=${sp.regime}・laps=${sp.laps}・maxSec=${sp.maxSec}（computeRaceTimeout=${wantMax}）`);
+  if (sp.regime !== 'tabletop') v.push(`regime が ${JSON.stringify(sp.regime)}（期待 'tabletop'）`);
+  if (sp.maxSec !== wantMax) v.push(`maxSec が ${sp.maxSec}（computeRaceTimeout は ${wantMax}）`);
+  const touge = buildFromSpec(SPECS.find((x) => x.kind === 'touge'));
+  const tg = resolve({ laps: 30 }, touge);
+  const t1 = computeRaceTimeout({ course: touge, laps: 1, regime: 'tabletop' }), t30 = computeRaceTimeout({ course: touge, laps: 30, regime: 'tabletop' });
+  if (!touge.touge || t1 === t30) v.push(`峠の検査が空振り（touge=${touge.touge}・1 本 ${t1}・30 本 ${t30}）`);
+  else if (tg.maxSec !== t1) v.push(`峠（laps 30）の maxSec が ${tg.maxSec}（runRace と同じく 1 本で ${t1}）`);
+  const empty = resolve({}, sCourse);
+  const want = { laps: 3, regime: 'tabletop', crashRule: { rejoin: false, penaltySec: 3 }, interact: true, physics: 'dynamic', recon: null, wear: false };
+  for (const [k, w] of Object.entries(want)) if (JSON.stringify(empty[k]) !== JSON.stringify(w)) v.push(`空の event の ${k} が ${JSON.stringify(empty[k])}（期待 ${JSON.stringify(w)}）`);
+  const given = resolve({ laps: 2.6, regime: 'fullscale', maxSec: 0, crashRule: { rejoin: 1 }, interact: false, physicsMode: 'v2', recon: 2, wear: 1 }, sCourse);
+  const wantG = { laps: 3, regime: 'fullscale', maxSec: 0, crashRule: { rejoin: true, penaltySec: 3 }, interact: false, physics: 'v2', recon: { laps: 2 }, wear: true };
+  for (const [k, w] of Object.entries(wantG)) if (JSON.stringify(given[k]) !== JSON.stringify(w)) v.push(`書かれた欄の ${k} が ${JSON.stringify(given[k])}（期待 ${JSON.stringify(w)}）`);
+  const a = resolve({}, sCourse); a.crashRule.rejoin = true;
+  if (resolve({}, sCourse).crashRule.rejoin !== false) v.push('返した crashRule を書き換えると次の呼び出しの既定が変わる（共有オブジェクト）');
+  return v;
+}
+report('G2) resolveEventSpec の既定値', checkG2(resolveEventSpec));
+
+// G3) 生成側の本番フロー: サンプルから maxSec と regime を落とした束で、生成 →（①② 合格・③ は正準サンプル専用で exit 3）→ --verify exit 0。
+//     result.json には実効の regime='tabletop'・maxSec＝computeRaceTimeout が刻まれる。
+function checkG3() {
+  const v = [];
+  const run = runOfficial(OFFICIAL, NODEF, 'g3');
+  const ok12 = /① 決定論 \(2回実行\): verifyHash ✓ 一致 \/ 順位 ✓ 一致/.test(run.out) && /② result\.json 再検証: verifyHash ✓ 一致 \/ 順位 ✓ 一致/.test(run.out);
+  if (!ok12 || !run.result || run.code !== 3) { v.push(`生成: ①② 合格かつ exit 3 でない（exit ${run.code}）: ${run.out.trim().split('\n').slice(-3).join(' / ')}`); return v; }
+  const sCourse = buildFromSpec(NODEF.courseSpec);
+  const wantMax = computeRaceTimeout({ course: sCourse, laps: run.result.laps, regime: 'tabletop' });
+  if (run.result.regime !== 'tabletop') v.push(`result.regime が ${JSON.stringify(run.result.regime)}（期待 'tabletop'）`);
+  if (run.result.maxSec !== wantMax) v.push(`result.maxSec が ${run.result.maxSec}（computeRaceTimeout は ${wantMax}）`);
+  const rp = path.join(dDir, 'g3_result.json'), bp = path.join(dDir, 'g3_bundle.json');
+  const r = spawnSync(process.execPath, [OFFICIAL, '--verify', rp, '--event', bp], { cwd: ROOT, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+  const vOut = (r.stdout || '') + (r.stderr || '');
+  const vm = /verifyHash: 保存 (\w+) \/ 再計算 (\w+) → ✓ 一致/.exec(vOut);
+  console.log(`     生成 exit ${run.code}（①② 合格・③ は正準サンプル専用）・verifyHash=${run.result.verifyHash}・regime=${run.result.regime}・maxSec=${run.result.maxSec}・--verify exit ${r.status}${vm ? `（保存 ${vm[1]} / 再計算 ${vm[2]}）` : ''}`);
+  if (r.status !== 0 || !vm || !/順位:\s+✓ 一致/.test(vOut)) v.push(`--verify が一致しない（exit ${r.status}）: ${vOut.trim().split('\n').slice(-3).join(' / ')}`);
+  return v;
+}
+report('G3) 既定を落とした束の生成と再検証', checkG3());
+
+// G4) 検出力: 写しを壊すと G1／G2 が赤になる（product のファイルは無改変）。
 {
-  const changed = [[RE_PATH, RAW_RE], [OFFICIAL, RAW_OFF]].filter(([p, raw]) => fs.readFileSync(p, 'utf8') !== raw).map(([p]) => path.relative(ROOT, p));
+  const miss = [], noop = [];
+  const UI_MUT = [
+    ['検証再走を旧固定 180 秒に戻す', (s) => s.replace('maxSec: es.maxSec, grid,', 'maxSec: event.maxSec != null ? event.maxSec : 180, grid,')],
+    ['👻 の regime を旧 `|| null` に戻す', (s) => s.replace('res = runRace({ course: rcourse, regime: es.regime,', 'res = runRace({ course: rcourse, regime: race.event.regime || null,')],
+    ['resolveEventSpec を名前付き import する', (s) => s.replace("import { frozenField } from './race_event.js';", "import { frozenField, resolveEventSpec } from './race_event.js';")],
+    ['検証再走が関数を通らない', (s) => s.replace('const es = eventSpecOf(event, rcourse);', 'const es = { ...event };')],
+  ];
+  const OFF_MUT = [
+    ['生成側の regime を旧 `|| null` に戻す', (s) => s.replace('course, regime: spec.regime,', 'course, regime: event.regime || null,')],
+    ['生成側の physicsMode 既定を書き戻す', (s) => s.replace('physics: spec.physics,', "physics: event.physicsMode || 'dynamic',")],
+  ];
+  for (const [name, fn] of UI_MUT) { const m = fn(RAW_UI); if (m === RAW_UI) { noop.push(name); continue; } if (!checkG1(m, RAW_OFF).length) miss.push(`${name} → G1 が見逃した`); else console.log(`     ✓ ${name} → G1 で赤`); }
+  for (const [name, fn] of OFF_MUT) { const m = fn(RAW_OFF); if (m === RAW_OFF) { noop.push(name); continue; } if (!checkG1(RAW_UI, m).length) miss.push(`${name} → G1 が見逃した`); else console.log(`     ✓ ${name} → G1 で赤`); }
+  const RE_MUT2 = [
+    ['maxSec の既定を固定 180 にする', (s) => s.replace('const maxSec = ev.maxSec != null ? ev.maxSec\n    : computeRaceTimeout(', 'const maxSec = ev.maxSec != null ? ev.maxSec : 180; void (')],
+    ["regime の既定を null にする", (s) => s.replace("const regime = ev.regime || 'tabletop';", 'const regime = ev.regime || null;')],
+    ['峠を 1 本に正規化しない', (s) => s.replace('laps: (course && course.touge) ? 1 : laps, regime })', 'laps, regime })')],
+    ['penaltySec を補わない', (s) => s.replace('penaltySec: cr.penaltySec != null ? cr.penaltySec : 3 }', 'penaltySec: cr.penaltySec }')],
+    ['crashRule を共有オブジェクトにする', (s) => s.replace("const crashRule = { rejoin: !!cr.rejoin, penaltySec: cr.penaltySec != null ? cr.penaltySec : 3 };", 'const crashRule = SHARED_CR; SHARED_CR.rejoin = SHARED_CR.rejoin || !!cr.rejoin;').replace('export function resolveEventSpec(event, course) {', 'const SHARED_CR = { rejoin: false, penaltySec: 3 };\nexport function resolveEventSpec(event, course) {')],
+  ];
+  for (const [name, fn] of RE_MUT2) {
+    const m = fn(RAW_RE);
+    if (m === RAW_RE) { noop.push(name); continue; }
+    const mod = await import(writeRe('g4_' + name.replace(/\W/g, '_') + '_' + RE_MUT2.findIndex((x) => x[0] === name), m));
+    const log = console.log; console.log = () => {};
+    let v; try { v = checkG2(mod.resolveEventSpec); } finally { console.log = log; }
+    if (!v.length) miss.push(`${name} → G2 が見逃した`); else console.log(`     ✓ ${name} → G2 で ${v.length} 件の赤`);
+  }
+  report('G4) 見逃した変異', miss);
+  report('G4) 適用できなかった変異（パターン腐り）', noop);
+}
+
+{
+  const changed = [[RE_PATH, RAW_RE], [OFFICIAL, RAW_OFF], [UI_PATH, RAW_UI]].filter(([p, raw]) => fs.readFileSync(p, 'utf8') !== raw).map(([p]) => path.relative(ROOT, p));
   if (changed.length) { pass = false; console.log(`  ✗ ゲートの実行で ${changed.join(', ')} が変化した`); }
-  else console.log('  ✓ public/js/race_event.js・wf_official_result.mjs は実行前後で無変化');
+  else console.log('  ✓ public/js/race_event.js・wf_official_result.mjs・public/js/race_ui.js は実行前後で無変化');
 }
 for (const d of tmps) fs.rmSync(d, { recursive: true, force: true });
 

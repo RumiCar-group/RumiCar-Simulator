@@ -7,6 +7,7 @@
 // (localStorage・W2) には一切混ざらない (runRace が persist:false で練習ベストを書かない)。
 import { CAR_TYPE_BY_KEY, CAR_TYPE_DEFAULT } from './config.js';
 import { PROGRAM_BY_KEY } from './programs.js';
+import { computeRaceTimeout } from './race_engine.js';
 
 // ============================================================================
 // クラス (class) 規定 — W_spec §2。リーダーボードはクラス別 (複数の梯子)。
@@ -233,4 +234,36 @@ export function frozenField(event, entries) {
   const ordered = [...(entries || [])].map(normEntry).filter(onTime).sort(cmpEntry);
   const valid = ordered.filter((e) => validateEntry(event, e).ok);
   return formField(event, valid);
+}
+
+// ============================================================================
+// 【BI2・2026-10-11】大会 (event.json) の欠落欄の既定を、この 1 関数だけが持つ。
+//   公式記録を作る側 (wf_official_result.mjs の runOfficial) と確かめる側 (race_ui.js の verifyOfficialLocally・
+//   👻 ゴースト対戦 ghostVsWorld) が、event から runRace の spec を組むときに必ずここを通る。BI2 の前は 3 か所が
+//   それぞれ既定を書いており、次の 2 点で食い違っていた (同じ event から別の結果になりえた):
+//     ・maxSec が無い event: 作る側は runRace に渡さず runRace が computeRaceTimeout で決め、確かめる側は固定 180 秒を渡した
+//       (コースが大きい・周回が多いと 180 秒を超えるので、作る側で完走した車が確かめる側で timeout になる)。
+//     ・regime が無い event: 作る側も確かめる側も null を渡し、runRace は領域を切り替えずに「その時点の領域」で走った。
+//       Node の起動直後は卓上 (config.js の REGIME_STATE の初期値) だが、ブラウザは利用者が選んでいる領域になる。
+//   既定値 (欄が無いとき。laps・regime・physicsMode は null・0・空文字も欄なしと同じに読む。maxSec・penaltySec は null だけを欄なしと読み、0 は 0):
+//     laps      … 3 (整数へ丸め、1 未満は 1)。      regime   … 'tabletop' (REGIME_STATE の初期値と同じ値を明示する)
+//     crashRule … { rejoin: false, penaltySec: 3 }。 rejoin は真偽へ、penaltySec は欠けていれば 3 で補う (runRace と同じ読み方)。
+//     interact  … true (false と書いたときだけ独立走行)。
+//     maxSec    … computeRaceTimeout({ course, laps, regime })。laps は runRace と同じく峠 (course.touge) なら 1 本
+//                 (runRace が maxSec を受け取らなかったときに自分で出す値と同じ＝BI2 の前の作る側と同じ値)。
+//     physics   … event.physicsMode が無ければ 'dynamic'。  recon … event.recon が正のときだけ { laps }。  wear … 真偽。
+//   course は runRace に渡すのと同じコースの物 (maxSec の算出だけに使う)。返す物は毎回新しい (呼び出し側が書き換えてよい)。
+export function resolveEventSpec(event, course) {
+  const ev = (event && typeof event === 'object') ? event : {};
+  const laps = Math.max(1, Math.round(ev.laps || 3));
+  const regime = ev.regime || 'tabletop';
+  const cr = (ev.crashRule && typeof ev.crashRule === 'object') ? ev.crashRule : {};
+  const crashRule = { rejoin: !!cr.rejoin, penaltySec: cr.penaltySec != null ? cr.penaltySec : 3 };
+  const interact = ev.interact !== false;
+  const maxSec = ev.maxSec != null ? ev.maxSec
+    : computeRaceTimeout({ course, laps: (course && course.touge) ? 1 : laps, regime });
+  const physics = ev.physicsMode || 'dynamic';
+  const recon = ev.recon > 0 ? { laps: ev.recon } : null;
+  const wear = !!ev.wear;
+  return { laps, regime, crashRule, interact, maxSec, physics, recon, wear };
 }

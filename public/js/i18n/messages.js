@@ -453,6 +453,9 @@ export const MESSAGES = {
   // AZ5: 再走が 0 台/減台で成立しなかったことを黙らない。減らして走れば結果は別物になり、verifyHash 不一致の
   //   理由が「環境差」ではなく「同じ台数で走っていない」になる。無言だと利用者は環境差だと誤読する。
   'official.verify.noRoom':     { ja: '⚠ 再実行は車体スケール ×1 (標準) で行います。その大きさではコース「{name}」のこの領域に車を 1 台も配置できないため、再実行しませんでした (壁に当たらず、前方に発走の余地を残せる位置が見つかりません)。', en: '⚠ The re-run uses car scale ×1 (standard). At that size not a single car can be placed in course "{name}" in this regime, so it was not re-run (no position is clear of the walls with room ahead to pull away).' },
+  // BI2: 大会の欠落欄の既定を決める関数 (race_event.js の resolveEventSpec) が無い＝古い race_event.js がキャッシュに残っている。
+  //   既定を推測して走らせると公式と別の条件の再走になるので、走らせずに再読込を促す (検証再走・ゴースト対戦の両方)。
+  'official.verify.stale':      { ja: '⚠ ページの部品の一部が古い版のまま読み込まれているため、再実行しませんでした。ページを再読込してから、もう一度お試しください。', en: '⚠ Part of the page is still loaded from an older version, so the re-run was not started. Reload the page and try again.' },
   // AZ5【層 4 レビュー是正】ゴースト対戦 (`ghostVsWorld`) は verifyHash を一切照合しない経路なので、
   //   下の `official.verify.fitReduced`（検証ハッシュの不一致に言及する）を流用してはいけない。
   //   ここで言うべきは「2 台のはずが減った＝対戦が成立していない」だけ。

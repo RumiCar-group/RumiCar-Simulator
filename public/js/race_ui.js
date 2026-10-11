@@ -7,6 +7,9 @@
 import { FLEET, CAR_TYPE_BY_KEY, APP_VERSION } from './config.js';
 import { runRace, engineFingerprint } from './race_engine.js';
 import { frozenField } from './race_event.js';
+// BI2: resolveEventSpec は BI2 で足した名前なので名前付き import しない (古い race_event.js がキャッシュに残るブラウザで
+//   モジュールグラフ全体が読み込めなくなる＝BA1 の規則)。無ければ再走せず「再読込してください」と出す (既定をここに写さない)。
+import * as eventNS from './race_event.js';
 import { aggregate, worldBest, beatenChecks } from './race_ladder.js';
 // AS13: シーズン/チャンピオンシップ・言語別ラダー (result.json の schema は不変・event/entries から引く)
 import { championships, langBoards, langRecordsAt, langProfiles, POINTS_DEFAULT } from './race_season.js';
@@ -418,7 +421,7 @@ function renderOfficialDetail(race) {
     [t('official.meta.title'), esc(event.title || event.id || '')],
     [t('official.meta.course'), esc(courseDisplayName(event.course) || courseName || '')],
     [t('official.meta.class'), esc(t('event.class.' + cls))],
-    [t('official.meta.laps'), String(event.laps || 3)],
+    [t('official.meta.laps'), String((eventSpecOf(event, null) || { laps: '?' }).laps)],
     [t('official.meta.window'), esc(winTxt)],
     [t('official.meta.engine'), esc(event.engineVer || '?')],
     [t('official.meta.status'), esc(t('official.status.' + status))],
@@ -493,6 +496,11 @@ function renderOfficialDetail(race) {
   if (entryOpen && !$('ofName').value) $('ofName').value = activeSlot() ? activeSlot().name : '';
 }
 
+// BI2: event → runRace の spec の材料 (既定込み)。古い race_event.js (resolveEventSpec が無い) なら null。
+function eventSpecOf(event, course) {
+  return typeof eventNS.resolveEventSpec === 'function' ? eventNS.resolveEventSpec(event, course) : null;
+}
+
 // 締切時の確定エントリー列をローカル決定論エンジンで再実行し、公式 verifyHash と照合 (参考)。
 function verifyOfficialLocally(race) {
   const { event, entries, result } = race;
@@ -503,22 +511,20 @@ function verifyOfficialLocally(race) {
     if (note) note.innerHTML = `<p class="official-verify-note warn">${escapeHtml(t('official.verify.noCourse', { name: cn }))}</p>`;
     return;
   }
+  // BI2: event の欠落欄の既定は race_event.js の resolveEventSpec だけが持つ (生成側 wf_official_result.mjs と同じ関数)。
+  //   maxSec が無ければ computeRaceTimeout (生成側と同じ値・旧実装は固定の秒数で生成側と食い違った)、regime が無ければ
+  //   'tabletop' (旧実装は null＝利用者がいま選んでいる領域で走った)。physicsMode・recon・wear も同じ関数から得る
+  //   (AO5/AO9/AO12: 記録のエンジン・試走周回数・タイヤ摩耗設定で再走)。
+  const es = eventSpecOf(event, rcourse);
+  if (!es) { if (note) note.innerHTML = `<p class="official-verify-note warn">${escapeHtml(t('official.verify.stale'))}</p>`; return; }
   const field = frozenField(event, entries);
-  const regime = event.regime || null;
-  const laps = Math.max(1, Math.round(event.laps || 3));
-  const crashRule = event.crashRule || { rejoin: false, penaltySec: 3 };
-  const ix = event.interact !== false;   // 既定 true (対戦)
-  // AB2: 公式記録は spec に凍結した maxSec で再実行する (同 maxSec ⇒ 同結果 ⇒ verifyHash 一致)。
-  // maxSec 未刻の旧記録は旧固定既定 180 にフォールバック (作成時と同条件 ＝ hash 不変)。
-  const maxSec = event.maxSec != null ? event.maxSec : 180;
+  const { regime, laps, crashRule } = es;
   // AD1: 記録に凍結グリッド (result.grid) があれば渡して算法非依存に忠実再現する。
   // 旧記録 (grid 未刻) は null=従来の freeSpawn 算法フォールバック (作成時と同条件＝hash 不変)。
   const grid = (result && Array.isArray(result.grid)) ? result.grid : null;
   let res;
-  const spec = { course: rcourse, regime, laps, field, crashRule, interact: ix, maxSec, grid,
-    physics: event.physicsMode || 'dynamic',   // AO5: 記録のエンジンで再走 (旧記録=dynamic フォールバック=作成時と同条件)
-    recon: event.recon > 0 ? { laps: event.recon } : null,   // AO9: 記録の試走周回数で再走 (旧記録=未刻=0=従来)
-    wear: !!event.wear };   // AO12: 記録のタイヤ摩耗設定で再走 (旧記録=未刻=false=従来)
+  const spec = { course: rcourse, regime, laps, field, crashRule, interact: es.interact, maxSec: es.maxSec, grid,
+    physics: es.physics, recon: es.recon, wear: es.wear };
   try {
     res = runRace({ ...spec, report: true, ghost: true });
   } catch (e) {
@@ -550,7 +556,7 @@ function verifyOfficialLocally(race) {
   if (note) note.innerHTML = noteHtml;
   const recordCourse = bundledRecordCourse(event, spec, res);   // BF3
   // 結果ダイアログ (参考) を開く (イベントのコース・クラス注記つき)。
-  const crashTxt = crashRule.rejoin ? t('race.crashRule.rejoin', { s: crashRule.penaltySec || 3 }) : t('race.crashRule.dnf');
+  const crashTxt = crashRule.rejoin ? t('race.crashRule.rejoin', { s: crashRule.penaltySec }) : t('race.crashRule.dnf');
   renderRaceResult(res, {
     laps, regime, crashTxt, course: rcourse, verifyHtml: noteHtml, recordCourse,
     carLabel: fieldCarLabeler(field),   // BE3: 持ち込み車種はレース後に車種表に無い
@@ -1012,6 +1018,9 @@ function ghostVsWorld(cls, course) {
     return;
   }
   const s = activeSlot(); if (!s) return;
+  // BI2: 記録の大会の周回・領域・クラッシュ規則・凍結 timeout は resolveEventSpec から得る (検証再走・生成側と同じ既定)。
+  const es = eventSpecOf(race.event, rcourse);
+  if (!es) { logLine(t('official.verify.stale')); return; }
   const field = [
     { name: t('ghost.you'), lang: s.lang, src: s.src, carType: s.carType },
     { name: rec.name || rec.author, lang: (wEntry.program && wEntry.program.lang) || 'c',
@@ -1019,10 +1028,9 @@ function ghostVsWorld(cls, course) {
   ];
   let res;
   try {
-    res = runRace({ course: rcourse, regime: race.event.regime || null,
-      laps: Math.max(1, Math.round(race.event.laps || 3)), field,
-      crashRule: race.event.crashRule || { rejoin: false }, interact: false,
-      maxSec: race.event.maxSec != null ? race.event.maxSec : 180,   // AB2: 記録の凍結 timeout で忠実再現
+    res = runRace({ course: rcourse, regime: es.regime, laps: es.laps, field,
+      crashRule: es.crashRule, interact: false,
+      maxSec: es.maxSec,   // AB2: 記録の凍結 timeout で忠実再現 (欄が無ければ生成側と同じ computeRaceTimeout)
       ghost: true });
   } catch (e) {   // AZ5: 収容 0 台 (NO_ROOM) は専用文言 (検証再走と同じ扱い＝兄弟経路を取り残さない)
     logLine((e && e.code === 'NO_ROOM') ? t('official.verify.noRoom', { name: rcourse.name })

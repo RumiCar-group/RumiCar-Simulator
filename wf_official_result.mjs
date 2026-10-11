@@ -20,7 +20,7 @@ import { dirname, join, resolve, isAbsolute } from 'path';
 import { createHash } from 'crypto';
 import { buildFromSpec } from './public/js/course.js';
 import { runRace, engineFingerprint } from './public/js/race_engine.js';
-import { frozenField, entryClose } from './public/js/race_event.js';
+import { frozenField, entryClose, resolveEventSpec } from './public/js/race_event.js';
 import { PROGRAM_BY_KEY } from './public/js/programs.js';
 import { APP_VERSION } from './public/js/config.js';
 
@@ -73,41 +73,43 @@ function loadBundle(path) {
 }
 
 // runRace を1回実行 (公式=正準)。grid を渡せば AD1 で凍結グリッドを算法非依存に忠実再現。
+// 【BI2】event の欠落欄 (laps・regime・crashRule・interact・maxSec・physicsMode・recon・wear) の既定は race_event.js の
+//   resolveEventSpec だけが持つ (ブラウザの再検証 verifyOfficialLocally・👻 ゴースト対戦と同じ関数)。BI2 の前はここに既定を
+//   書いていて、maxSec が無い event はここが runRace に任せ (computeRaceTimeout)、ブラウザは旧固定既定の秒数で走らせていた。
 function runOfficial(bundle, grid = null) {
   const { event, entries, courseSpec } = bundle;
   const course = buildFromSpec(courseSpec);
-  const laps = Math.max(1, Math.round(event.laps || 3));
-  const regime = event.regime || null;
-  const crashRule = event.crashRule || { rejoin: false, penaltySec: 3 };
-  const interact = event.interact !== false;
-  const maxSec = event.maxSec != null ? event.maxSec : undefined;
+  const spec = resolveEventSpec(event, course);
   const field = frozenField(event, entries);   // 決定論: submittedAt 昇順→validateEntry→filler 補充
   const res = runRace({
-    course, regime, laps, field, crashRule, interact, maxSec,
+    course, regime: spec.regime, laps: spec.laps, field, crashRule: spec.crashRule, interact: spec.interact, maxSec: spec.maxSec,
     grid: (grid && Array.isArray(grid)) ? grid : undefined,
-    physics: event.physicsMode || 'dynamic',   // 記録のエンジンで再走 (旧記録=dynamic フォールバック)
-    recon: event.recon > 0 ? { laps: event.recon } : null,
-    wear: !!event.wear,
+    physics: spec.physics,   // 記録のエンジンで再走 (旧記録=dynamic フォールバック)
+    recon: spec.recon,
+    wear: spec.wear,
     report: true,
   });
-  return { res, course, field, event };
+  return { res, course, field, event, spec };
 }
 
 // runRace 出力 → W_spec §6 result.json schema へ整形。author は runRace が返す idx (= field の添字) で引く。
 // 【BI1】旧実装は車名で引いていた (field.find(x => x.name === name)) ため、同名のエントリーが 2 件あると 2 台とも
 //   グリッドで先に並んだ方の author になった (実測: 'Twin' alice / 'Twin' bob の束で bob の行が alice になった)。
 //   filler (author を持たない) は null (旧実装と同じ)。
+// 【BI2】regime・laps・maxSec は実際に走らせた値 (resolveEventSpec の実効値) を刻む＝event に欄が無くても result.json だけで
+//   条件が読める。maxSec は resultSha256 の canon (下の resultSha256) に入れない (BI2 より前の記録・pin の値を変えない)。
 function buildResult(bundle, runOut) {
   const { event } = bundle;
-  const { res, field } = runOut;
+  const { res, field, spec } = runOut;
   const authorAt = (idx) => { const f = Number.isInteger(idx) ? field[idx] : undefined; return (f && f.author) || null; };
   return {
     eventId: event.id,
     engineVer: APP_VERSION,
     class: event.class || 'open',
     course: event.course,
-    regime: event.regime || null,
-    laps: Math.max(1, Math.round(event.laps || 3)),
+    regime: spec.regime,
+    laps: spec.laps,
+    maxSec: spec.maxSec,
     finishers: res.finishers.map((f) => ({
       rank: f.rank, name: f.name, author: authorAt(f.idx), carType: f.carType,
       totalTimeMs: Math.round(f.totalTimeMs),
