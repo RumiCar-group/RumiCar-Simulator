@@ -91,8 +91,10 @@ export function parsePy(src) {
     // `for v in range(...)`: 高速・決定論の専用ノード。それ以外は任意の反復可能を forin で処理。
     if (isKw('range') && peek(1).type === 'PUNC' && peek(1).value === '(') {
       next(); eat('PUNC', '(');
-      const a = expr(); let start = { t: 'num', v: 0 }, end = a, step = { t: 'num', v: 1 };
-      if (isPunc(',')) { next(); start = a; end = expr(); if (isPunc(',')) { next(); step = expr(); } }
+      // BJ1: 引数は ternary() で 1 つずつ読む（1〜3 個）。是正前は expr()＝タプルを含む式で読んだため `range(2, 5)` の
+      //   引数列全体が 1 つのタプル式になり end=タプル・start=0 として 0 回ループしていた（単引数は従来と同じ AST）。
+      const a = ternary(); let start = { t: 'num', v: 0 }, end = a, step = { t: 'num', v: 1 };
+      if (isPunc(',')) { next(); start = a; end = ternary(); if (isPunc(',')) { next(); step = ternary(); } }
       eat('PUNC', ')'); eat('PUNC', ':');
       return { t: 'forrange', var: v, start, end, step, body: suite() };
     }
@@ -104,7 +106,8 @@ export function parsePy(src) {
   function simpleStmt() {
     // 代入 (タプル可) または式
     const first = expr();
-    if (isOp('=') || (peek().type === 'OP' && ['+=', '-=', '*=', '/='].includes(peek().value))) {
+    // BJ1: 複合代入に `%=`・`//=`・`**=` を追加（評価器 execMassign は op.slice(0,-1) を applyBin へ渡す＝'%'・'//'・'**' は既存）。
+    if (isOp('=') || (peek().type === 'OP' && ['+=', '-=', '*=', '/=', '%=', '//=', '**='].includes(peek().value))) {
       const op = next().value;
       const targets = [first];
       // タプル代入の左辺は first が 'tuple' の場合あり (下の expr で処理しないため簡易対応)

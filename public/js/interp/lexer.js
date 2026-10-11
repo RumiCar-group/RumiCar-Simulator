@@ -3,14 +3,22 @@
 // Python 専用: NEWLINE, INDENT, DEDENT
 // 戻り値: トークン配列。
 
-const OPS3 = ['**=', '<<=', '>>='];
-const OPS2 = ['==', '!=', '<=', '>=', '&&', '||', '+=', '-=', '*=', '/=', '**', '//', '++', '--', '<<', '>>', '&=', '|=', '^='];
+// BJ1: py の複合代入 `%=`・`//=` を 1 トークンに（`**=` は従来から在る）。C の `//` は行コメントの判定が演算子より先なので
+//   `//=` は C に現れない。C の `%=` は 1 トークンになるが parser_c は従来どおり受理しない（是正前も構文エラー＝受理範囲は不変）。
+const OPS3 = ['**=', '<<=', '>>=', '//='];
+const OPS2 = ['==', '!=', '<=', '>=', '&&', '||', '+=', '-=', '*=', '/=', '%=', '**', '//', '++', '--', '<<', '>>', '&=', '|=', '^='];
 const OPS1 = ['+', '-', '*', '/', '%', '<', '>', '=', '!', '&', '|', '?', '^', '~'];
 const PUNCS = ['(', ')', '{', '}', '[', ']', ',', ';', ':', '.'];
 
 function isIdStart(ch) { return /[A-Za-z_]/.test(ch); }
 function isIdPart(ch) { return /[A-Za-z0-9_]/.test(ch); }
 function isDigit(ch) { return /[0-9]/.test(ch); }
+
+// BJ1: 文字列リテラル（C・py 共通。f-string と #define の置換本体も同じ tokenize を通る）のエスケープ。
+//   `\n \t \r \\ \" \' \0` を実際の文字に。それ以外（未知のエスケープ）は従来どおり `\` を落として次の文字。
+//   是正前は全て「次の文字」だった（"a\tb" → "atb"）。8 進/16 進/Unicode のエスケープは扱わない（\x41 → "x41"・\012 → NUL＋"12"）。
+const ESCAPES = { n: '\n', t: '\t', r: '\r', '\\': '\\', '"': '"', "'": "'", '0': '\0' };
+function unescapeChar(c) { return Object.prototype.hasOwnProperty.call(ESCAPES, c) ? ESCAPES[c] : c; }
 
 // AP8: C プリプロセッサ `#define`（オブジェクト形式マクロのみ）。
 // macros[name] = 置換トークン列。使用箇所で単純にトークンを差し込む（テキスト置換相当）。
@@ -108,10 +116,13 @@ export function tokenize(src, mode, macros = Object.create(null)) {
 
   function handlePyIndent() {
     // 行頭。空白を数える。空行/コメント行はスキップ。
+    // BJ1: CRLF（Windows の改行・ファイル取込/GitHub 取込は本文をそのまま渡す）の `\r` は字下げに数えず読み飛ばす＝
+    //   `\r\n` だけ（と空白＋`\r\n`）の行も空行として扱う。是正前は `\r` で止まり col=0 の行と見て DEDENT を出していた。
     let col = 0;
     while (i < n) {
       if (src[i] === ' ') { col++; i++; }
       else if (src[i] === '\t') { col += 8; i++; }
+      else if (src[i] === '\r') { i++; }
       else break;
     }
     if (i >= n) return;
@@ -153,8 +164,9 @@ export function tokenize(src, mode, macros = Object.create(null)) {
     // 空白
     if (ch === ' ' || ch === '\t' || ch === '\r') { i++; continue; }
 
-    // 行継続 (Python の \ 改行)
+    // 行継続 (Python の \ 改行)。BJ1: CRLF の `\` `\r` `\n` も同じ（`\r` は改行の一部）。
     if (ch === '\\' && src[i + 1] === '\n') { i += 2; line++; continue; }
+    if (ch === '\\' && src[i + 1] === '\r' && src[i + 2] === '\n') { i += 3; line++; continue; }
 
     // 数値 (10進 / 小数 / 指数 1e3 / 16進 0x1F)
     if (isDigit(ch) || (ch === '.' && isDigit(src[i + 1]))) {
@@ -186,7 +198,7 @@ export function tokenize(src, mode, macros = Object.create(null)) {
       const quote = src[i + 1]; i += 2;
       let raw = '';
       while (i < n && src[i] !== quote) {
-        if (src[i] === '\\') { raw += src[i + 1]; i += 2; }
+        if (src[i] === '\\') { raw += unescapeChar(src[i + 1]); i += 2; }   // BJ1: 実エスケープ
         else raw += src[i++];
       }
       i++;
@@ -197,7 +209,7 @@ export function tokenize(src, mode, macros = Object.create(null)) {
     if (ch === '"' || ch === "'") {
       const quote = ch; let s = ''; i++;
       while (i < n && src[i] !== quote) {
-        if (src[i] === '\\') { s += src[i + 1]; i += 2; }
+        if (src[i] === '\\') { s += unescapeChar(src[i + 1]); i += 2; }       // BJ1: 実エスケープ
         else s += src[i++];
       }
       i++;

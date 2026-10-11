@@ -186,6 +186,12 @@ const GATES = [
   //   （部分 carDef の再現→是正・判定の定義＝registerRaceCarTypes の登録定義・改修前の値表との一致・変異試験）。
   //   所要は本ホスト実測 約 56s（単独・2026-10-11・BI2 の G3 が約 40s・H 章は 1s 未満）。
   'wf_bi1_field.mjs',
+  // BJ1: インタプリタの字句・構文の穴（Stage BJ の常設ゲート・BJ2/BJ3 が章を足す）。本番経路 buildController＋buildApi と
+  //   parsePy/parseC で A) `for v in range(a, b[, step])` の複数引数 B) 複合代入 %=・//=・**= C) 文字列エスケープ（py・C・
+  //   f-string・#define）D) CRLF の本文（LF 版と AST・実行結果が一致・行継続を含む）E) 出荷サンプルの AST 指紋（本文が同じなら
+  //   AST も同じ）を固定する。期待値は python3 の実測を定数で持ち、python3 があるホストでは同じ本文を実行して突き合わせる。
+  //   改修前の木（--root）では A〜D が赤。所要は本ホスト実測 約 1.3s（単独・2026-10-11）。
+  'wf_bj1_pysem.mjs',
 ].map((name) => ({ name, args: [] }));
 
 // official_result は決定論2回照合→result.json 再検証→Node pin 照合の複合ゲート (AP20)。
