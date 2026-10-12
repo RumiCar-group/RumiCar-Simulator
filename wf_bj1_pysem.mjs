@@ -1,4 +1,4 @@
-// wf_bj1_pysem.mjs — Stage BJ「インタプリタ是正 I（高頻度の Python 意味論・CRLF）」の常設ゲート。BJ1 で新設し、BJ2・BJ3 が章を足す。
+// wf_bj1_pysem.mjs — Stage BJ「インタプリタ是正 I（高頻度の Python 意味論・CRLF）」の常設ゲート。BJ1 で新設し、BJ2・BJ3・BJ5 が章を足す。
 // ════════════════════════════════════════════════════════════════════════════
 // 学習者が自力で原因に辿り着けない「エラーが出ない／意味不明なエラーになる」意味論の穴の是正を、本番経路
 //   buildController(src, lang, buildApi(world)) → setup()/tick() と parsePy/parseC で機械検証する（再実装しない・CI-8/CI-14）。
@@ -45,6 +45,25 @@
 //      ユーザー関数から戻ったら curLine を呼び出し元の文の行へ戻す（G-8。是正前は `x = 10 / f()` のゼロ除算・`for c in f():` の
 //      notIterable などが呼ばれた関数の最後の文の行を指した）・関数の中の for x の後の x = 10 が関数ローカルになったこと・仮引数や
 //      ホストの名前と同名のループ変数（G-1）。未是正の差（global x を宣言した関数の中の for x）は今の値と python3 の値を定数で持つ。
+//
+// BJ5（三重引用符の文字列と文字列の中の改行）— 是正前（HEAD 0aa4039）の値は H 章の見出しとコメントに書いた。`--root <是正前の木>` で回すと
+//   H 章が赤になる（A〜G は緑）。
+//   H) lexer.js の readStrBody: py の三重引用符 """…"""／'''…'''（f/F 接頭辞付きを含む）を 1 つの文字列リテラルとして読む（H-1・python3 の
+//      json.dumps と照合）。是正前は `""`＋`"…"`＋`""` の 3 つの文として通って s は空文字列・'''It's "ok"''' の開いたままの `'` が後続の
+//      文をファイル末尾まで黙って呑み・docstring """say "hi" """ が「未定義の変数/名前: hi」。文字列（通常・三重・f-string。C・py 共通）の
+//      中の改行で行番号を進める（H-2: 後ろの文のエラーの行・line()・AST の line。是正前は改行の数だけ小さい）。ファイル末尾まで閉じ引用符が
+//      無い文字列は字句エラー「字句エラー: 閉じていない文字列… (行 N)」（N＝開き引用符の行・H-3。是正前の py は黙って通った）。
+//      CRLF 版は LF 版と AST（line を含む）・値・行が一致（H-4）。あわせて f-string の埋め込み式の中の文字列リテラル（f"{'}'}"・f"{':'}"）
+//      を式の区切り・書式指定にしない（是正前は "'}"・""＝閉じていない文字列を字句エラーにしたので、直さないと閉じた文字列が字句エラーに
+//      なる）・#define の置換本体の字句エラーの行を指令の行に（是正前は行 1）。通常の引用符の中の改行は従来どおり受理し、`\`＋改行は
+//      従来どおり LF を残す（BJ2 F-4 の期待値。Python はそれぞれ SyntaxError・行継続。三重引用符の `\`＋改行も LF＝H-2 で今の値と python3 の
+//      値を定数で持つ）。CR 単独は改行に数えない（H-2）。
+//      層 4 の指摘で追加（BJ5 の初版の回帰と穴）: 書式指定の中の引用符は文字（f"{x:'>5} and {a}" の閉じ `}` から後ろが黙って消えた＝初版の回帰・
+//      H-1 の H_SPEC。是正前の 0aa4039 でも同じ値なので `--root 0aa4039` では緑＝初版の回帰の検出用）・式の中の三重引用符の文字列
+//      （f"""{'''it's'''}"""。初版は構文エラー）・閉じ `}` の無い置換フィールドは字句エラー（f"{x" は是正前も初版も "5"）・式の中の
+//      字句エラー・構文エラーの行は物理行（初版は「開き引用符の行＋式の中の改行の数」と開き引用符の行＝H-3）。
+//      未是正の差: f-string の埋め込み式で出た実行時エラーの行は文の行（＝開き引用符の行。python3 は式のある行）・書式指定は落とす（H_SPEC に
+//      python3 の値を定数で持つ）。
 //
 // 使い方: node wf_bj1_pysem.mjs              … 検査
 //         node wf_bj1_pysem.mjs --root <dir>  … <dir>/public/js の product で回す（改修前の木で赤になることの確認用）
@@ -438,8 +457,8 @@ for (const [label, body, want] of FSTR) {
   checkPy3Err('F-3 f"{d[\\"k\\"]}"', src, /^SyntaxError/);
 }
 // F-4 文字列リテラルの中の CRLF（BJ1 層 4 F2）。LF 版と CRLF 版の AST が byte 一致し、値に CR が残らない。
-//   是正前は値に \r が残り AST が一致しなかった。※三重引用符 """…""" は本処理系では `""`＋`"…"`＋`""` の 3 つの文字列として
-//   字句解析される（未対応・値は空文字列）＝ここで測るのは CRLF と LF の一致だけ。
+//   是正前は値に \r が残り AST が一致しなかった。※三重引用符 """…""" は BJ2 の時点では `""`＋`"…"`＋`""` の 3 つの文字列として
+//   字句解析された（未対応・値は空文字列）＝ここで測るのは CRLF と LF の一致だけ。BJ5 で 1 つの文字列リテラルになった（値は H 章で測る）。
 const STR_CRLF = [
   ['py 三重引用符の本文 """a⏎b"""', 'py', 's = """a\nb"""\nprint(s)\n', null],
   ['py 改行を含む "a⏎b" と \'c⏎d\'', 'py', 's = "a\nb"\nt = \'c\nd\'\n', [97, 10, 98]],
@@ -682,6 +701,269 @@ for (const [label, src, lang, ticks, key, line, py3re] of G_LINE) {
 { // 正常系の実行位置: loop() の最後の文が関数を呼ぶと、tick の後の line() はその文の行（是正前は呼ばれた関数の最後の文の行 3）。
   const r = runLine('def g():\n  a = 1\n  return a\ndef setup():\n  pass\ndef loop():\n  x = g()', 'py', 1);
   ok(!r.err && r.cur === 7, `G-8 loop() の最後の文 x = g() の後の line() は 7（実 ${r.err ? r.err : r.cur}・是正前は 3）`);
+}
+
+// ── H) BJ5 三重引用符の文字列・文字列の中の改行の行番号・閉じていない文字列 ─────────────────────────
+console.log('\nH) BJ5 三重引用符・文字列の中の改行・閉じていない文字列 — 是正前: s = """a""" が空文字列・docstring """say "hi" """ が「未定義の変数/名前: hi」・' +
+  '文字列の中の改行で行番号が進まない・閉じていない文字列 s = "abc がエラー無しで通る');
+// python3 で同じ本文を走らせ、例外の種類（最後の行）と行（traceback の最後の File "<string>", line N）を見る。python3 が無ければ判定しない。
+function checkPy3Line(label, pySrc, re, line) {
+  if (!PY3) return;
+  const r = spawnSync('python3', ['-I', '-W', 'ignore', '-c', pySrc], { encoding: 'utf8', timeout: 20000 });
+  py3Checked++;
+  const last = (r.stderr || '').trim().split('\n').pop();
+  const m = [...(r.stderr || '').matchAll(/File "<string>", line (\d+)/g)].pop();
+  const got = m ? Number(m[1]) : null;
+  ok(!r.error && r.status !== 0 && re.test(last) && got === line,
+    `${label}: python3 ${PY3} も ${re} で行 ${line}（実 ${r.error || r.status === 0 ? 'エラーなし' : last + '・行 ' + got}）`);
+}
+// H-1 三重引用符の値。[ラベル, 本文（x = 5・d = {"k": 1} の後に置く）, 期待（python3 の json.dumps(s) の出力・定数・2026-10-12 Python 3.14.4）]。
+//   是正前（HEAD 0aa4039）: 三重引用符は `""`＋`"…"`＋`""` の 3 つの文として読まれ s は空文字列（"""a\"""b"""・"""a""" + "b" も ""）、
+//   '''It's "ok"''' は開いたままの `'` が後続をファイル末尾まで呑み、""""a""" は「未定義の変数/名前: a」・F"""{x}⏎{d["k"]}""" は
+//   「未定義の変数/名前: k」。f-string の式の中の文字列（f"{'}'}"・f"{':'}"・f"{'a:b'}"・f"{'{'}"）は、是正前は式を文字列の中の
+//   `}`・`:` で切って "'}"・""・"a"・構文エラー（BJ5 で閉じていない文字列を字句エラーにしたため、式の中の文字列を区切りにしないよう直した）。
+const H_VALS = [
+  ['s = """a"""', 's = """a"""', '"a"'],
+  ['s = """a⏎b"""（LF を含む）', 's = """a\nb"""', '"a\\nb"'],
+  ['s = \'\'\'It\'s "ok"\'\'\'', 's = \'\'\'It\'s "ok"\'\'\'', '"It\'s \\"ok\\""'],
+  ['s = """a\\tb"""（エスケープは通常の文字列と同じ）', 's = """a\\tb"""', '"a\\tb"'],
+  ['s = """"""（空）', 's = """"""', '""'],
+  ['s = f"""v={x}⏎ok"""', 's = f"""v={x}\nok"""', '"v=5\\nok"'],
+  ["s = f'''{x}'''", "s = f'''{x}'''", '"5"'],
+  ['s = F"""{x}⏎{d["k"]}"""（式の中の別の引用符）', 's = F"""{x}\n{d["k"]}"""', '"5\\n1"'],
+  ['s = """say "hi" """（単独の引用符）', 's = """say "hi" """', '"say \\"hi\\" "'],
+  ['s = """a\\"""b"""（エスケープした引用符は閉じ引用符に数えない）', 's = """a\\"""b"""', '"a\\"\\"\\"b"'],
+  ['s = """"a"""（中身の先頭が引用符）', 's = """"a"""', '"\\"a"'],
+  ["s = '''a''b'''（2 つ続く引用符）", "s = '''a''b'''", '"a\'\'b"'],
+  ['s = """a""" + "b"', 's = """a""" + "b"', '"ab"'],
+  ['s = """# 注釈ではない⏎  字下げも中身"""', 's = """# not a comment\n  indented"""', '"# not a comment\\n  indented"'],
+  ['s = "" + "x"（空の文字列は三重引用符ではない）', 's = "" + "x"', '"x"'],
+  ["s = f\"{'}'}\"（式の中の文字列の } で式を切らない）", "s = f\"{'}'}\"", '"}"'],
+  ["s = f\"{':'}\"（式の中の文字列の : を書式指定にしない）", "s = f\"{':'}\"", '":"'],
+  ["s = f\"{'a:b'}\"", "s = f\"{'a:b'}\"", '"a:b"'],
+  ["s = f\"{'{'}\"", "s = f\"{'{'}\"", '"{"'],
+  ["s = f\"{'it\\'s'}\"（式の中の文字列のエスケープした引用符）", "s = f\"{'it\\'s'}\"", '"it\'s"'],
+  ["s = f\"{'a\\':b'}\"（式の中の文字列のエスケープした引用符の後の : も書式指定にしない）", "s = f\"{'a\\':b'}\"", '"a\':b"'],
+  ["s = f\"\"\"{'''it's'''}\"\"\"（式の中の三重引用符の文字列に単独の '・BJ5 初版は構文エラー）", "s = f\"\"\"{'''it's'''}\"\"\"", '"it\'s"'],
+  ["s = f\"{'''a'b'''}\"", "s = f\"{'''a'b'''}\"", '"a\'b"'],
+  ['s = f\'{"""a"b"""}\'', 's = f\'{"""a"b"""}\'', '"a\\"b"'],
+  ["s = f\"{''''a'''}\"（式の中の三重引用符の中身の先頭が引用符）", "s = f\"{''''a'''}\"", '"\'a"'],
+  ["s = f\"{'' + 'a'}\"（式の中の空の文字列は三重引用符ではない）", "s = f\"{'' + 'a'}\"", '"a"'],
+  ["s = f\"{'a' + '}:'}\"（式の中の文字列の } と : の後ろも式）", "s = f\"{'a' + '}:'}\"", '"a}:"'],
+  ["s = f\"{ {'a': x}['a'] }\"（式の中の dict の : は書式指定ではない）", "s = f\"{ {'a': x}['a'] }\"", '"5"'],
+  ["s = f\"{({'a': x})['a']}\"（括弧の中の dict の :）", "s = f\"{({'a': x})['a']}\"", '"5"'],
+  ['s = f"{x:>3}"（書式指定は従来どおり落とす・F-3 と同じ）', 's = f"{x:>3}"', null],
+];
+const H_PRE = 'x = 5\nd = {"k": 1}\n';
+// 文の数（x・d・s の 3 つ）。是正前は三重引用符が `""`＋`"…"`＋`""` に割れて文が増えた（値がたまたま同じ  もここで赤になる）。
+const nStmts = (src) => { try { return parsePy(src).body.length; } catch (e) { return 'ERR ' + (e.message || e); } };
+for (const [label, body, want] of H_VALS) {
+  const r = run(H_PRE + body, 'py');
+  const got = r.vars ? J(r.vars.s) : 'ERR ' + r.err;
+  const ns = nStmts(H_PRE + body);
+  if (want === null) { ok(got === '"5"' && ns === 3, `H-1 ${label} → ${got}・文 ${ns}（本処理系は書式指定を扱わない＝"5"・文 3）`); continue; }
+  ok(got === want && ns === 3, `H-1 ${label} → ${got}・文 ${ns}（期待 ${want}・文 3）`);
+  checkPy3(`H-1 ${label}`, 'import json\n' + H_PRE + body + '\nprint(json.dumps(s))', [want]);
+}
+// H-1 書式指定（`:` 以降）と変換（`!r` 等）の中の引用符は文字（区切りではない）。本処理系は書式指定を落とす（値は素の str 化・従来どおり）ので、
+//   期待値は「書式指定を除いた本文」を python3 で走らせた値（checkPy3 で照合）、python3 の書式指定どおりの値は未是正の差として定数で持つ。
+//   BJ5 の初版は書式指定の中の引用符を文字列の区切りとして追い、閉じ `}` を見落として本体の末尾まで読み、書式指定として黙って落とした
+//   （f"{x:'>5} and {a}" → "5"・f'{x:"^5} units' → "5"・f"""{"a"}⏎{x:'>2}⏎end""" → "a\n5"）＝層 4 の指摘の回帰。是正前の 0aa4039 は
+//   三重引用符の行を除いて今と同じ値（引用符を見ずに `{`／`}` だけで閉じていた）＝`--root 0aa4039` では緑・初版の木では赤。
+//   [ラベル, 本文（H_PRE の後に置く）, 書式指定を除いた本文, 期待（json.dumps）, python3 の書式指定どおりの値（json.dumps・定数）]
+const H_SPEC = [
+  ["s = f\"{x:'>5} and {a}\"（層 4 の指摘の入力）", "a = 4\ns = f\"{x:'>5} and {a}\"", 'a = 4\ns = f"{x} and {a}"', '"5 and 4"', '"\'\'\'\'5 and 4"'],
+  ["s = f'{x:\"^5} units'", "s = f'{x:\"^5} units'", "s = f'{x} units'", '"5 units"', '"\\"\\"5\\"\\" units"'],
+  ["s = f\"\"\"{\"a\"}⏎{x:'>2}⏎end\"\"\"（三重引用符）", "s = f\"\"\"{\"a\"}\n{x:'>2}\nend\"\"\"", 's = f"""{"a"}\n{x}\nend"""', '"a\\n5\\nend"', '"a\\n\'5\\nend"'],
+  ["s = f\"{x!s:'>3}|\"（変換の後の書式指定）", "s = f\"{x!s:'>3}|\"", 's = f"{x!s}|"', '"5|"', '"\'\'5|"'],
+  ["s = f\"{d['k']:'>3}|{d['k']}\"（式の中の文字列と書式指定の中の引用符）", "s = f\"{d['k']:'>3}|{d['k']}\"", "s = f\"{d['k']}|{d['k']}\"", '"1|1"', '"\'\'1|1"'],
+  ["s = f\"{x:{'>'}5}|\"（書式指定の中の入れ子のフィールドの引用符）", "s = f\"{x:{'>'}5}|\"", 's = f"{x}|"', '"5|"', '"    5|"'],
+  ['s = f"{x:\\}"（書式指定の中の \\ の後の } は閉じ＝python3 と同じ。式の中の \\ とは違う）', 's = f"{x:\\}"', 's = f"{x}"', '"5"', null],
+  ["s = f'''{x:\"'}\"'''（三重引用符の中の書式指定の両方の引用符）", "s = f'''{x:\"'}\"'''", "s = f'''{x}\"'''", '"5\\""', null],
+];
+for (const [label, body, plain, want, py3spec] of H_SPEC) {
+  const r = run(H_PRE + body, 'py');
+  const got = r.vars ? J(r.vars.s) : 'ERR ' + r.err;
+  ok(got === want, `H-1 書式指定 ${label} → ${got}（期待 ${want}＝書式指定を除いた値・python3 の書式指定どおりの値は ${py3spec === null ? 'ValueError' : py3spec}）`);
+  checkPy3(`H-1 書式指定 ${label}（書式指定を除いた本文）`, 'import json\n' + H_PRE + plain + '\nprint(json.dumps(s))', [want]);
+  if (py3spec !== null) checkPy3(`H-1 書式指定 ${label}（未是正の差・書式指定どおりの値）`, 'import json\n' + H_PRE + body + '\nprint(json.dumps(s))', [py3spec]);
+  else checkPy3Err(`H-1 書式指定 ${label}（未是正の差・python3 は書式指定を解釈して ValueError）`, H_PRE + body, /^ValueError/);
+}
+{ // len（受け入れ基準の値）
+  for (const [label, body, want] of [['len("""a""")', 's = """a"""\nprint(len(s))', ['1']], ['len("""a⏎b""")', 's = """a\nb"""\nprint(len(s))', ['3']]]) {
+    const r = run(body, 'py');
+    ok(!r.err && J(r.out) === J(want), `H-1 ${label} → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ${J(want)}・是正前は 0）`);
+    checkPy3(`H-1 ${label}`, body, want);
+  }
+}
+// docstring（関数・モジュール・Model A の loop()・Model B）があっても走る。是正前は """say "hi" """ が「未定義の変数/名前: hi」。
+//   [ラベル, 本文, 期待する出力, tick 数, docstring の数（AST の中の「文字列だけの文」の数。是正前は 1 つの docstring が 3 つ以上に割れた）]
+const H_DOC = [
+  ['関数の docstring """say "hi" """', 'def f():\n  """say "hi" """\n  return 1\nprint(f())', ['1'], 0, 1],
+  ['関数の docstring """doc⏎more"""', 'def f():\n  """doc\nmore"""\n  return 1\nprint(f())', ['1'], 0, 1],
+  ['関数の docstring \'\'\'It\'s "ok"\'\'\'', 'def f():\n  \'\'\'It\'s "ok"\'\'\'\n  return 1\nprint(f())', ['1'], 0, 1],
+  ['モジュールの docstring と Model A の loop() の docstring（1 tick）', '"""module\n  doc"""\ndef setup():\n  pass\ndef loop():\n  """loop doc"""\n  print(1)', ['1'], 1, 2],
+  ['Model B の本体の docstring（2 tick）', 'n = 0\nwhile True:\n  """body\n  doc"""\n  n += 1\n  print(n)', ['1', '2'], 2, 1],
+];
+const strStmts = (node) => (Array.isArray(node) ? node.reduce((a, x) => a + strStmts(x), 0)
+  : node && typeof node === 'object' ? (node.t === 'exprstmt' && node.expr && node.expr.t === 'str' ? 1 : 0) + Object.values(node).reduce((a, x) => a + strStmts(x), 0) : 0);
+for (const [label, src, want, ticks, nDoc] of H_DOC) {
+  const r = run(src, 'py', ticks);
+  let nd; try { nd = strStmts(parsePy(src)); } catch (e) { nd = 'ERR ' + (e.message || e); }
+  ok(!r.err && J(r.out) === J(want) && nd === nDoc, `H-1 ${label} → ${r.err ? 'ERR ' + r.err : J(r.out)}・docstring ${nd} 個（期待 ${J(want)}・${nDoc} 個）`);
+  checkPy3(`H-1 ${label}`, asPy3(src, ticks), want);
+}
+{ // C は三重引用符を扱わない（従来どおり "" "a" "" の 3 つの文字列＝構文エラー。字句エラーではない）
+  const r = run('auto s = """a""";\nvoid setup(){}\nvoid loop(){}', 'c');
+  ok(!!r.err && r.err.startsWith('構文エラー(C)'), `H-1 C の """a""" は従来どおり構文エラー（三重引用符を扱わない）（実 ${r.err ? r.err : '走った'}）`);
+}
+// H-2 行番号。文字列の中の改行で行を進める（文字列の後ろの文は物理行・文字列で始まる文の行は開き引用符の行）。
+//   [ラベル, 言語, 本文, tick 数, キー, 行, 是正前の行, python3 の例外（null＝照合しない）]
+const H_LINE = [
+  ['s = """a⏎b"""⏎x = 1/0', 'py', 's = """a\nb"""\nx = 1/0', 0, 'divZero', 3, 2, /^ZeroDivisionError/],
+  ['s = "a⏎b"⏎x = 1/0（通常の引用符の中の改行・Python は SyntaxError＝物理行で判定）', 'py', 's = "a\nb"\nx = 1/0', 0, 'divZero', 3, 2, null],
+  ['x = 1⏎"""a⏎b"""⏎y = 1/0（文字列だけの文）', 'py', 'x = 1\n"""a\nb"""\ny = 1/0', 0, 'divZero', 4, 3, /^ZeroDivisionError/],
+  ['s = "a\\⏎b"⏎x = 1/0（\\＋改行）', 'py', 's = "a\\\nb"\nx = 1/0', 0, 'divZero', 3, 2, /^ZeroDivisionError/],
+  ['s = f"""a⏎{x}⏎b"""⏎y = 1/0（f-string の中の改行）', 'py', 'x = 1\ns = f"""a\n{x}\nb"""\ny = 1/0', 0, 'divZero', 5, 3, /^ZeroDivisionError/],
+  ['関数の docstring の後の文', 'py', 'def f():\n  """doc\n  more"""\n  return 1/0\nf()', 0, 'divZero', 4, 3, /^ZeroDivisionError/],
+  ['Model A の loop() の中（1 tick）', 'py', 'def setup():\n  pass\ndef loop():\n  s = """a\n\nb"""\n  n = 1/0', 1, 'divZero', 7, 5, /^ZeroDivisionError/],
+  ['Model B の本体（1 tick）', 'py', 'while True:\n  s = \'\'\'a\nb\'\'\'\n  n = 1/0', 1, 'divZero', 4, 3, /^ZeroDivisionError/],
+  ['C auto s = "a⏎b"; の次の行', 'c', 'void setup(){\n  auto s = "a\nb";\n  int x = 1 / 0;\n}\nvoid loop(){}', 0, 'divZero', 4, 3, null],
+  ['C 2 つの改行を含む文字列と #define の後', 'c', '#define K 0\nint a = 1;\nvoid setup(){}\nvoid loop(){\n  Serial.println("x\ny\nz");\n  int b = a / K;\n}', 1, 'divZero', 8, 6, null],
+  ['s = """a\\⏎b"""⏎x = 1/0（三重引用符の中の \\＋改行）', 'py', 's = """a\\\nb"""\nx = 1/0', 0, 'divZero', 3, 2, /^ZeroDivisionError/],
+  ['s = "a<CR>b"⏎x = 1/0（CR 単独は改行に数えない＝本体ループと同じ）', 'py', 's = "a\rb"\nx = 1/0', 0, 'divZero', 2, 2, null],
+  ['s = """a<CR>b<CR>c"""⏎x = 1/0（三重引用符の中の CR 単独）', 'py', 's = """a\rb\rc"""\nx = 1/0', 0, 'divZero', 2, 2, null],
+];
+for (const [label, lang, src, ticks, key, line, pre, py3re] of H_LINE) {
+  const r = runLine(src, lang, ticks);
+  ok(r.key === 'interp.err.' + key && r.line === line && r.cur === line && r.err.endsWith(`(行 ${line})`),
+    `H-2 ${label} → ${key}（行 ${line}・line() ${line}・是正前は ${pre}）（実 ${r.err ? r.err : '走った'}・line() ${r.cur}）`);
+  if (py3re) checkPy3Line(`H-2 ${label}`, asPy3(src, ticks), py3re, line);
+}
+{ // 未是正の差（決定ログに記録）: f-string の埋め込み式で出た実行時エラーの行は文の行（＝開き引用符の行）。python3 は式のある行。
+  const src = 'x = 0\ns = f"""a\n{1/x}"""';
+  const r = runLine(src, 'py', 0);
+  ok(r.key === 'interp.err.divZero' && r.line === 2, `H-2 未是正の差: f"""a⏎{1/x}""" のゼロ除算は文の行 2（実 ${r.err ? r.err : '走った'}・python3 は式のある行 3）`);
+  checkPy3Line('H-2 未是正の差（python3 は式のある行）', src, /^ZeroDivisionError/, 3);
+}
+{ // 未是正の差（決定ログ BJ-11 ② (d)・BJ2 F-4 と同じ扱い）: 三重引用符の中の `\`＋改行は LF を残す（python3 は行継続＝"ab"）。CR 単独は値に残る。
+  for (const [label, body, want, py3want] of [
+    ['s = """a\\⏎b"""', 's = """a\\\nb"""', '"a\\nb"', '"ab"'],
+    ['s = f"""a\\⏎{x}"""', 'x = 5\ns = f"""a\\\n{x}"""', '"a\\n5"', '"a5"'],
+    ['s = "a<CR>b"（CR 単独）', 's = "a\rb"', '"a\\rb"', null],
+  ]) {
+    const r = run(body, 'py');
+    const got = r.vars ? J(r.vars.s) : 'ERR ' + r.err;
+    ok(got === want, `H-2 未是正の差: ${label} → ${got}（期待 ${want}${py3want ? '・python3 は ' + py3want : '・python3 は CR 単独を改行として読む'}）`);
+    if (py3want) checkPy3(`H-2 未是正の差: ${label}（python3 の値）`, 'import json\n' + body + '\nprint(json.dumps(s))', [py3want]);
+  }
+}
+{ // AST の line: 三重引用符・f-string で始まる文は開き引用符の行、その後ろの文は物理行（是正前は [1,2,2,2,3,3,3,4]＝三重引用符が 3 つの文に割れ行も進まない）。
+  const lines = (src, parse) => { try { return J(parse(src).body.map((s) => s.line)); } catch (e) { return 'ERR ' + (e.message || e); } };
+  const a = lines('x = 1\n"""a\nb"""\nf"""c\n{x}"""\ny = 2', parsePy);
+  ok(a === J([1, 2, 4, 6]), `H-2 py の文の line（x = 1／"""a⏎b"""／f"""c⏎{x}"""／y = 2）→ ${a}（期待 [1,2,4,6]）`);
+  let fb;
+  try { fb = J(parsePy('def f():\n  """doc\n  more"""\n  return 1').body[0].body.map((s) => s.line)); } catch (e) { fb = 'ERR ' + e.message; }
+  ok(fb === J([2, 4]), `H-2 関数の本体の文の line（docstring／return）→ ${fb}（期待 [2,4]）`);
+  let c;   // C のトップレベルの宣言は line を持たない（parser_c の topLevel）＝関数の本体の文で見る
+  try { c = J(parseC('void setup(){\n  auto s = "a\nb";\n  int y = 2;\n}\nvoid loop(){}').body[0].body.map((s) => s.line)); } catch (e) { c = 'ERR ' + e.message; }
+  ok(c === J([2, 4]), `H-2 C の関数の本体の文の line（auto s = "a⏎b";／int y = 2;）→ ${c}（期待 [2,4]）`);
+}
+{ // 実行位置ハイライト（line()）: loop() の最後の文が三重引用符の後ろの文なら tick の後の line() はその物理行（是正前は 5）。
+  const r = runLine('def setup():\n  pass\ndef loop():\n  s = """a\nb"""\n  x = 1', 'py', 1);
+  ok(!r.err && r.cur === 6, `H-2 loop() の三重引用符の後ろの文の後の line() は 6（実 ${r.err ? r.err : r.cur}・是正前は 5）`);
+}
+// H-3 閉じていない文字列は字句エラー（行＝開き引用符の行・日本語固定の形式＝i18n 化は Stage 案 3）。
+//   [ラベル, 言語, 本文, 行, python3 の例外（null＝照合しない）]。是正前: py は黙って通る（"abc\ は "abcundefined"）・C は構文エラー（行 1）。
+const H_OPEN = [
+  ['py s = "abc', 'py', 's = "abc', 1, /^SyntaxError: unterminated string literal/],
+  ['py s = """abc⏎x = 2', 'py', 's = """abc\nx = 2', 1, /^SyntaxError: unterminated triple-quoted string literal/],
+  ['py x = 1⏎s = f"{x}', 'py', 'x = 1\ns = f"{x}', 2, /^SyntaxError: unterminated f-string literal/],
+  ['C auto s = "abc;', 'c', 'auto s = "abc;\nvoid setup(){}\nvoid loop(){}', 1, null],
+  ["py s = 'abc", 'py', "s = 'abc", 1, /^SyntaxError: unterminated string literal/],
+  ["py x = 1⏎s = '''It's", 'py', "x = 1\ns = '''It's", 2, /^SyntaxError: unterminated triple-quoted string literal/],
+  ['py s = """a""""（引用符が 1 つ多い）', 'py', 's = """a""""', 1, /^SyntaxError: unterminated string literal/],
+  ['py s = "abc\\（\\ で終わる・是正前は "abcundefined"）', 'py', 's = "abc\\', 1, /^SyntaxError: unterminated string literal/],
+  ["py s = f\"{'abc}\"（式の中の閉じていない文字列）", 'py', "s = f\"{'abc}\"", 1, /^SyntaxError: unterminated string literal/],
+  ["py x = 1⏎s = f'''{x}⏎y = 2", 'py', "x = 1\ns = f'''{x}\ny = 2", 2, /^SyntaxError: unterminated triple-quoted f-string literal/],
+  ['py 3 行目で開いた " がファイル末尾まで閉じない', 'py', 'a = 1\nb = 2\nc = "x\nd = 4\n', 3, null],
+  ['C #define S "abc（行 2・是正前は使わないマクロならエラー無し）', 'c', 'int a = 1;\n#define S "abc\nvoid setup(){}\nvoid loop(){}', 2, null],
+  ["C char c = 'a;", 'c', "char c = 'a;\nvoid setup(){}\nvoid loop(){}", 1, null],
+];
+for (const [label, lang, src, line, py3re] of H_OPEN) {
+  for (const [form, body] of [['LF', src], ['CRLF', crlf(src)]]) {
+    const r = run(body, lang);
+    ok(!!r.err && r.err.startsWith('字句エラー: 閉じていない文字列') && r.err.endsWith(` (行 ${line})`) && r.out.length === 0,
+      `H-3 ${label}（${form}）→ 字句エラー（行 ${line}）（実 ${r.err ? r.err : '走った ' + J(r.vars && r.vars.s)}）`);
+  }
+  if (py3re) checkPy3Line(`H-3 ${label}`, src, py3re, line);
+}
+{ // f-string の埋め込み式の字句エラー・構文エラーの行は物理行（字句エラー＝その文字・閉じていない文字列の開き引用符の行／構文エラー＝読めなかった
+  //   トークンの行。python3 と同じ行の本文で照合）。BJ5 の初版は式の字句解析を開き引用符の行から始めてトークンの行を開き引用符の行で上書きしていた＝
+  //   字句エラーは「開き引用符の行＋式の中の改行の数」・構文エラーは開き引用符の行（初版の木で実測: 4 本目が 3・ほかは 2）。
+  //   是正前の 0aa4039 は三重引用符の f-string が無く 1〜5 本目はエラー無しで走った（s は空文字列）。6 本目は 0aa4039 でも構文エラーで行 2。
+  //   [ラベル, 本文, 先頭, 行, python3 の例外（null＝照合しない）]
+  const H_FEXPR = [
+    ['f"""a⏎{x\\y}"""（式の中の \\）', 'x = 1\ns = f"""a\n{x\\y}"""\nz = 2', "字句エラー: 不明な文字 '\\'", 3, /^SyntaxError: unexpected character after line continuation character/],
+    ["f\"\"\"a⏎{'abc}\"\"\"（式の中の閉じていない文字列）", "x = 1\ns = f\"\"\"a\n{'abc}\"\"\"\nz = 2", '字句エラー: 閉じていない文字列', 3, /^SyntaxError: unterminated string literal/],
+    ['f"""a⏎{x y}"""（式の構文エラー）', 'x = 1\ns = f"""a\n{x y}"""\nz = 2', '構文エラー(Py)', 3, /^SyntaxError: invalid syntax/],
+    ["f\"\"\"a⏎{⏎'abc}\"\"\"（式の中の改行の後の閉じていない文字列・層 4 の指摘の入力）", "x = 1\ns = f\"\"\"a\n{\n'abc}\"\"\"", '字句エラー: 閉じていない文字列', 4, /^SyntaxError: unterminated string literal/],
+    ['f"""a⏎{⏎x y}"""（式の中の改行の後の構文エラー）', 'x = 1\ns = f"""a\n{\nx y}"""', '構文エラー(Py)', 4, /^SyntaxError: invalid syntax/],
+    ['f"a\\⏎{x y}"（通常の引用符の \\＋改行の後の式）', 'x = 5\ns = f"a\\\n{x y}"', '構文エラー(Py)', 3, /^SyntaxError: invalid syntax/],
+  ];
+  for (const [label, src, head, line, py3re] of H_FEXPR) {
+    for (const [form, body] of [['LF', src], ['CRLF', crlf(src)]]) {
+      const r = run(body, 'py');
+      ok(!!r.err && r.err.startsWith(head) && r.err.endsWith(` (行 ${line})`), `H-3 ${label}（${form}）→ ${head}…（行 ${line}）（実 ${r.err ? r.err : '走った'}）`);
+    }
+    if (py3re) checkPy3Line(`H-3 ${label}`, src, py3re, line);
+  }
+}
+{ // 閉じ `}` の無い置換フィールドは字句エラー（行＝`{` の行）。是正前（0aa4039）も BJ5 の初版もエラー無しで "5" 等（python3 は SyntaxError）。
+  //   式の中の `\` は、是正前と初版は `\}` で式を閉じて `\` を黙って落とした（f"{x\}" → "5"）＝今は字句エラー（python3 と同じ SyntaxError）。
+  //   [ラベル, 本文, エラー文（完全一致）, python3 の例外, python3 の行]
+  const H_FIELD = [
+    ['x = 5⏎s = f"{x"', 'x = 5\ns = f"{x"', '字句エラー: f-string の { に対応する } がありません (行 2)', /^SyntaxError: f-string: expecting '}'/, 2],
+    ["x = 5⏎s = f\"{x:'>5\"（書式指定の後に閉じ } が無い）", "x = 5\ns = f\"{x:'>5\"", '字句エラー: f-string の { に対応する } がありません (行 2)', /^SyntaxError: f-string: expecting '}'/, 2],
+    ["x = 5⏎s = f\"\"\"{x⏎:'>5\"\"\"（三重引用符・行＝{ の行）", "x = 5\ns = f\"\"\"{x\n:'>5\"\"\"", '字句エラー: f-string の { に対応する } がありません (行 2)', /^SyntaxError: '\{' was never closed/, 2],
+    ["x = 5⏎s = f\"\"\"a⏎{x:'>5\"\"\"（{ が開き引用符より後の行）", "x = 5\ns = f\"\"\"a\n{x:'>5\"\"\"", '字句エラー: f-string の { に対応する } がありません (行 3)', /^SyntaxError: f-string: expecting '}'/, 3],
+    ['x = 5⏎s = f"{x\\}"（式の中の \\・是正前は "5"）', 'x = 5\ns = f"{x\\}"', "字句エラー: 不明な文字 '\\' (行 2)", /^SyntaxError: unexpected character after line continuation character/, 2],
+    ['x = 5⏎s = f"{x\\:>3}"（式の中の \\: は書式指定の始まりではない・是正前も初版も同じ字句エラー。判定を ch で行うと "5"）', 'x = 5\ns = f"{x\\:>3}"', "字句エラー: 不明な文字 '\\' (行 2)", /^SyntaxError: unexpected character after line continuation character/, 2],
+  ];
+  for (const [label, src, msg, py3re, py3line] of H_FIELD) {
+    for (const [form, body] of [['LF', src], ['CRLF', crlf(src)]]) {
+      const r = run(body, 'py');
+      ok(r.err === msg && r.out.length === 0, `H-3 ${label}（${form}）→ ${msg}（実 ${r.err ? r.err : '走った ' + J(r.vars && r.vars.s)}）`);
+    }
+    checkPy3Line(`H-3 ${label}`, src, py3re, py3line);
+  }
+}
+{ // 未是正の差（決定ログ BJ-11 ②）: f-string のリテラル部分の単独の `}` はそのまま文字（python3 は SyntaxError・出力に `}` が見える）。
+  //   同じ種類の引用符の入れ子（PEP 701・python 3.12 以降）は未対応で字句エラー（外側の文字列が式の中の引用符で閉じる。3.11 以前の python も SyntaxError。
+  //   是正前・初版は構文エラー「予期しないトークン ')'」＝文言が変わった＝`--root` の木では赤）。単独の `}` は是正前・初版と同じ値（`--root` でも緑）。
+  const r1 = run('x = 5\ns = f"a}b{x}"', 'py');
+  ok(!r1.err && J(r1.vars.s) === '"a}b5"', `H-3 未是正の差: f"a}b{x}" → ${r1.err ? 'ERR ' + r1.err : J(r1.vars.s)}（期待 "a}b5"・python3 は SyntaxError）`);
+  checkPy3Err('H-3 未是正の差: f"a}b{x}"', 'x = 5\ns = f"a}b{x}"', /^SyntaxError: f-string: single '}' is not allowed/);
+  const r2 = run('d = {"k": 1}\ns = f"{d["k"]}"', 'py');
+  ok(r2.err === '字句エラー: f-string の { に対応する } がありません (行 2)', `H-3 未是正の差: f"{d["k"]}"（同じ引用符の入れ子）→ ${r2.err ? r2.err : '走った ' + J(r2.vars && r2.vars.s)}（期待 字句エラー（行 2）・python3.12 以降は 1）`);
+}
+{ // 置換本体の不明な文字の行も指令の行（是正前は行 1）
+  const r = run('int a = 1;\n#define S @\nvoid setup(){}\nvoid loop(){}', 'c');
+  ok(!!r.err && r.err === "字句エラー: 不明な文字 '@' (行 2)", `H-3 C #define S @ の字句エラーは指令の行 2（実 ${r.err ? r.err : '走った'}・是正前は行 1）`);
+}
+// H-4 CRLF: H-1／H-2 の本文の CRLF 版の AST（line を含む）と値・エラーの行が LF 版と一致。
+{
+  const bad = [];
+  const srcs = [...H_VALS.map(([l, b]) => ['py', l, H_PRE + b, 0]), ...H_SPEC.map(([l, b]) => ['py', l, H_PRE + b, 0]), ...H_DOC.map(([l, s, , t]) => ['py', l, s, t]),
+    ...H_LINE.map(([l, lang, s, t]) => [lang, l, s, t])];
+  for (const [lang, label, src, ticks] of srcs) {
+    const a = astOf(src, lang), b = astOf(crlf(src), lang);
+    const rl = runLine(src, lang, ticks), rc = runLine(crlf(src), lang, ticks);
+    const vl = run(src, lang, ticks), vc = run(crlf(src), lang, ticks);
+    const same = !a.startsWith('ERR') && a === b && J(rl) === J(rc) && J(vl.out) === J(vc.out) && J(vl.vars && vl.vars.s) === J(vc.vars && vc.vars.s) && vl.err === vc.err;
+    if (!same) bad.push(label);
+  }
+  ok(bad.length === 0 && srcs.length > 0, `H-4 H-1／H-2 の本文 ${srcs.length} 本: CRLF 版の AST（line を含む）・値・エラーの行が LF 版と一致${bad.length ? '（不一致 ' + bad.join(', ') + '）' : ''}`);
 }
 
 

@@ -2,6 +2,20 @@
 // 共通トークン: NUM, STR, ID, OP, PUNC, EOF
 // Python 専用: NEWLINE, INDENT, DEDENT
 // 戻り値: トークン配列。
+//
+// BJ5: 文字列リテラル（通常・三重引用符・f-string。C・py 共通）は readStrBody で閉じ引用符まで読む。
+//   ① py の `"""…"""`／`'''…'''`（`f`/`F` 接頭辞付きを含む）を 1 つの文字列リテラルとして読む（中身は改行と単独の引用符を含みうる・
+//      エスケープと CRLF→LF は通常の文字列と同じ strUnit）。C は三重引用符を扱わない（従来どおり `""`＋`"…"`＋`""`）。
+//   ② 文字列の中の改行（LF・CRLF・`\`＋改行。CR 単独は数えない＝本体ループと同じ）で行番号を進める。文字列のトークンと f-string の
+//      外枠のトークンの行は開き引用符の行（＝その文字列で始まる文の AST の line も開き引用符の行）・f-string の埋め込み式のトークンは式の
+//      物理行（式の中の字句エラー・構文エラーの行＝python3 と同じ。AST は式のトークンの行を持たない）・文字列の後ろのトークンは物理行。
+//   ③ ファイルの末尾まで閉じ引用符が無い文字列は字句エラー（行＝開き引用符の行）。f-string の閉じ `}` の無い置換フィールドも字句エラー
+//      （行＝`{` の行・emitFString）。
+//   是正前（HEAD 0aa4039）: `s = """a"""` が `""`＋`"a"`＋`""` の 3 つの文として通って s は空文字列・`'''It's "ok"'''` の開いたままの
+//   `'` が後続の文をファイル末尾まで黙って呑む・docstring `"""say "hi" """` が「未定義の変数/名前: hi」・文字列の中の改行で行番号が
+//   進まない（以降のエラーの行が改行の数だけ小さい）・閉じていない文字列 `s = "abc` がエラー無しで通った。
+//   通常の引用符の文字列の中の改行は従来どおり受理し（Python は SyntaxError）、`\`＋改行は従来どおり LF を残す（三重引用符も同じ。
+//   Python は行継続＝`"""a\⏎b"""` は "ab"）。
 
 // BJ1: py の複合代入 `%=`・`//=` を 1 トークンに（`**=` は従来から在る）。C の `//` は行コメントの判定が演算子より先なので
 //   `//=` は C に現れない。C の `%=` は 1 トークンになるが parser_c は従来どおり受理しない（是正前も構文エラー＝受理範囲は不変）。
@@ -34,7 +48,8 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
   const indentStack = [0];
   let atLineStart = (mode === 'py');
 
-  function pushTok(type, value) { toks.push({ type, value, line }); }
+  // BJ5: ln＝トークンの行（既定は現在の行）。文字列・f-string は開き引用符の行を渡す（本体の改行で line が進んだ後に push するため）。
+  function pushTok(type, value, ln = line) { toks.push({ type, value, line: ln }); }
 
   function skipLineComment() { while (i < n && src[i] !== '\n') i++; }
 
@@ -55,8 +70,10 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
       throw new Error(`未対応の関数形式マクロ '#define ${name}(...)' (行 ${line})`);
     }
     // 置換本体をトークン化（既に定義済みのマクロは展開・自己/前方参照は素の ID のまま＝C 相当）。
+    // BJ5: 開始行＝指令の行（置換本体の字句エラー〔閉じていない文字列・不明な文字〕の行。是正前は常に行 1。
+    //   置換トークンの行は使用箇所の行で差し込み直すので AST は変わらない）。
     const body = after.trim();
-    macros[name] = tokenize(body, 'c', macros).filter(t => t.type !== 'EOF');
+    macros[name] = tokenize(body, 'c', macros, line).filter(t => t.type !== 'EOF');
   }
   function skipBlockComment() {
     i += 2;
@@ -64,66 +81,97 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
     i += 2;
   }
 
-  // AP9: f-string の内容を `( STR + (exprtoks) + STR ... )` へ展開して現在の行番号で push する。
+  // AP9: f-string の内容を `( STR + (exprtoks) + STR ... )` へ展開して push する。
   // BJ2: 内容は 1 文字ずつの組 {ch: エスケープ解除後の文字, raw: 本文の生テキスト（`\n` なら 2 文字）} の列 units で受ける。
-  //   波括弧の判定と文字列部分は ch で行い（是正前と同じ）、埋め込み式は raw を連結して **py モード**で字句解析する。
+  //   リテラル部分の波括弧の判定と文字列部分は ch で行い（是正前と同じ。埋め込み式の範囲の判定は BJ5 で raw に）、埋め込み式は raw を
+  //   連結して **py モード**で字句解析する。
   //   是正前は式もエスケープ解除後の文字から切り出し C モードで字句解析していた＝①`f"{7//2}"` の `//` 以降が C の行コメントに
   //   なり "7"（python3 は "3"）②`f"{'\\n'}"` の式 `'\\n'` が外側と内側で 2 回エスケープ解除されて LF 1 文字（python3 は
   //   `\` と `n` の 2 文字）。py モードの字句解析は行頭の字下げ（`{ x }` の空白）を INDENT に、末尾を NEWLINE にするので、
   //   式の中では意味を持たない NEWLINE/INDENT/DEDENT は落とす（EOF も従来どおり落とす）。
   //   式の中の `\"`（例 `f"{d[\"k\"]}"`）は Python では SyntaxError で、本処理系も字句エラー「不明な文字 '\'」になる（是正前は通っていた）。
-  //   字句エラーの行番号は外側の行（tokenize の line0）。
-  function emitFString(units) {
-    const parts = [];   // {lit:string} | {expr:string}
+  // BJ5: units の各単位は line（その単位が始まる物理行）も持つ。ln＝開き引用符の行。
+  //   ① 行: 外枠のトークン（最初の `(`・リテラル部分の STR・`+`・最後の `)`）は ln で出す（＝f-string で始まる文の AST の line は開き引用符の行）。
+  //      埋め込み式のトークン（式を囲む `(`／`)` を含む）は式の物理行で出し、式の字句解析は `{` の行から始める＝式の中の字句エラーの行は
+  //      その文字（閉じていない文字列は開き引用符）の物理行、構文エラーの行は読めなかったトークンの物理行（`x = 1⏎s = f"""a⏎{x y}"""` は
+  //      行 3＝python3 と同じ。python3 は「カンマ忘れ」等で式の始まりの行を出すこともある）。BJ5 の初版は式の字句解析を開き引用符の行から
+  //      始めてトークンの行を開き引用符の行で上書きしていた＝字句エラーは「開き引用符の行＋式の中の改行の数」・構文エラーは開き引用符の行で、
+  //      どちらも物理行と合わなかった（層 4 の指摘）。AST が持つ行は文の line だけ（parser_py の statement）なので、式のトークンの行は AST に入らない。
+  //      実行時エラーの行は従来どおり文の行（`\` で続けた複数行の文と同じ。python3 は式のある行）。
+  //   ② 埋め込み式の範囲は 1 回の走査で決める。式の中の文字列リテラル（'…'・"…"・'''…'''・"""…"""。`\'` 等のエスケープは raw が 2 文字＝
+  //      引用符に数えない）の中では `{`・`}`・`:`・`!` を区切りにしない（f"{'}'}" → "}"・f"{':'}" → ":"・f"{'''it's'''}" → "it's"）。
+  //      括弧の外の最初の `:`（書式指定）／`!r`・`!s`・`!a`（変換）から後ろは落とし（値は素の str 化・従来どおり）、その中の引用符は文字として
+  //      扱う（python3 と同じ。f"{x:'>5}" の `'` は埋め文字＝区切りではない）。書式指定の中では入れ子の `{…}` だけを数えて閉じ `}` を探す。
+  //   ③ 閉じ `}` が無い置換フィールドは字句エラー（行＝`{` の行。式の中に字句エラー〔閉じていない文字列・`\` 等〕があればそちらを先に報告）。
+  //      BJ5 の初版は書式指定の中の引用符も文字列の区切りとして追い、閉じ `}` を見落として本体の末尾まで読み、書式指定として黙って落としていた
+  //      （f"{x:'>5} and {a}" → "5"。層 4 の指摘。是正前の 0aa4039 と python3 の書式指定を落とした値は "5 and 4"）。
+  //   是正前（HEAD 0aa4039）: 式の範囲は `{`／`}` だけで決め（引用符を見ない）、切り出した式から書式指定を落としていた＝f"{'}'}" → "'}"・
+  //   f"{':'}" → ""・f"{'a:b'}" → "a"・f"{'{'}" → 構文エラー・閉じ `}` の無い f"{x" → "5"（エラー無し・python3 は SyntaxError）。
+  function emitFString(units, ln) {
+    const parts = [];   // {lit:string} | {expr:string, l0:式の開始行（`{` の行）, l1:閉じ `}` の行}
     let lit = '', k = 0;
     const chAt = (j) => (j < units.length ? units[j].ch : undefined);
+    const rawAt = (j) => (j < units.length ? units[j].raw : undefined);
     while (k < units.length) {
       const c = units[k].ch;
       if (c === '{') {
         if (chAt(k + 1) === '{') { lit += '{'; k += 2; continue; }
-        parts.push({ lit }); lit = ''; k++;
-        let depth = 1, etext = '';
+        parts.push({ lit }); lit = '';
+        const l0 = units[k].line; k++;
+        // braces＝`{`／`}` の深さ（閉じ `}` の判定）・brackets＝`(`・`[`・`{` の深さ（書式指定の `:`／`!` の判定）・
+        // q＝式の中の文字列リテラルの開き引用符（中にいる間だけ。三重引用符は 3 文字）・spec＝書式指定／変換の中。
+        // 式の中の判定は raw（本文の生テキスト）で行う＝`\}`・`\:` 等のエスケープ（raw が 2 文字）は区切りに数えず式にそのまま残す（式の中の
+        // `\` は字句エラー＝python3 と同じ SyntaxError。是正前は ch で判定し `\}` で式を閉じて `\` を黙って落とした＝f"{x\}" → "5"）。
+        // 書式指定の中は従来どおり ch で `{`／`}` を数える（`\` は書式指定の文字で、続く `}` は閉じ＝python3 と同じ）。
+        let braces = 1, brackets = 0, etext = '', q = null, spec = false;
         while (k < units.length) {
-          const d = units[k].ch;
-          if (d === '{') depth++;
-          else if (d === '}') { depth--; if (depth === 0) break; }
-          etext += units[k].raw; k++;
+          const r = units[k].raw;
+          if (spec) {
+            const d = units[k].ch;
+            if (d === '{') braces++;
+            else if (d === '}' && --braces === 0) break;
+            k++; continue;
+          }
+          if (q) {
+            if (r === q[0] && (q.length === 1 || (rawAt(k + 1) === r && rawAt(k + 2) === r))) { etext += q; k += q.length; q = null; }
+            else { etext += r; k++; }
+            continue;
+          }
+          if (r === '"' || r === "'") { q = (rawAt(k + 1) === r && rawAt(k + 2) === r) ? r + r + r : r; etext += q; k += q.length; continue; }
+          if (r === '{') { braces++; brackets++; }
+          else if (r === '}') { if (--braces === 0) break; brackets--; }
+          else if (r === '(' || r === '[') brackets++;
+          else if (r === ')' || r === ']') brackets--;
+          else if (brackets === 0 && (r === ':' || (r === '!' && /^[rsa]$/.test(rawAt(k + 1) || '') &&
+                   (rawAt(k + 2) === '}' || rawAt(k + 2) === ':')))) { spec = true; k++; continue; }
+          etext += r; k++;
         }
+        if (k >= units.length) {
+          tokenize(etext, 'py', undefined, l0);   // 式の中の字句エラー（閉じていない文字列・`\` 等）があれば先に報告（行＝物理行）
+          throw new Error(`字句エラー: f-string の { に対応する } がありません (行 ${l0})`);
+        }
+        parts.push({ expr: etext, l0, l1: units[k].line });
         k++;                                   // 閉じ '}' を消費
-        parts.push({ expr: stripFormatSpec(etext) });
       } else if (c === '}' && chAt(k + 1) === '}') { lit += '}'; k += 2; }
       else { lit += c; k++; }
     }
     parts.push({ lit });
-    pushTok('PUNC', '(');
+    pushTok('PUNC', '(', ln);
     let firstEmit = true;
-    const plus = () => { if (!firstEmit) pushTok('OP', '+'); firstEmit = false; };
+    const plus = () => { if (!firstEmit) pushTok('OP', '+', ln); firstEmit = false; };
     for (const p of parts) {
       if (p.lit !== undefined) {
         if (p.lit === '' && !firstEmit) continue;   // 中間の空リテラルは省く (先頭は文字列文脈のため残す)
-        plus(); pushTok('STR', p.lit);
+        plus(); pushTok('STR', p.lit, ln);
       } else {
         plus();
-        pushTok('PUNC', '(');
-        for (const t of tokenize(p.expr, 'py', undefined, line).filter(t => !FSTR_DROP.has(t.type))) pushTok(t.type, t.value);
-        pushTok('PUNC', ')');
+        pushTok('PUNC', '(', p.l0);
+        for (const t of tokenize(p.expr, 'py', undefined, p.l0).filter(t => !FSTR_DROP.has(t.type))) pushTok(t.type, t.value, t.line);
+        pushTok('PUNC', ')', p.l1);
       }
     }
-    if (firstEmit) pushTok('STR', '');            // f"" → ""
-    pushTok('PUNC', ')');
-  }
-  // トップレベル (括弧外) の最初の `:` (フォーマット指定) / `!r|!s|!a` (変換) 以降を落とす。
-  function stripFormatSpec(s) {
-    let depth = 0;
-    for (let j = 0; j < s.length; j++) {
-      const c = s[j];
-      if (c === '(' || c === '[' || c === '{') depth++;
-      else if (c === ')' || c === ']' || c === '}') depth--;
-      else if (depth === 0 && c === ':') return s.slice(0, j);
-      else if (depth === 0 && c === '!' && /[rsa]/.test(s[j + 1] || '') &&
-               (j + 2 >= s.length || s[j + 2] === ':')) return s.slice(0, j);
-    }
-    return s;
+    if (firstEmit) pushTok('STR', '', ln);        // f"" → ""
+    pushTok('PUNC', ')', ln);
   }
 
   // 文字列リテラル（通常・f-string 共通）の中身を 1 単位読む。i は単位の先頭を指し、読んだ分だけ進める。
@@ -131,15 +179,29 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
   //   BJ2: CRLF（Windows の改行・ファイル取込/GitHub 取込は本文をそのまま渡す）を LF に正規化する＝文字列の中に改行を含む
   //   本文（`"a` CRLF `b"`・三重引用符 `"""a` CRLF `b"""` の中身）の値と AST が LF 版と一致する。是正前は値に `\r` が残った。
   //   `\` ＋ CRLF も `\` ＋ LF と同じ（従来どおり `\` を落とした LF 1 文字）。CR 単独は従来どおりそのまま。
+  //   BJ5: 物理的な改行（LF・CRLF・`\`＋LF・`\`＋CRLF）を読んだら行番号を進める（本体ループの改行と同じ数え方＝CR 単独は数えない）。
   function strUnit() {
     if (src[i] === '\\') {
-      if (src[i + 1] === '\r' && src[i + 2] === '\n') { i += 3; return { ch: '\n', raw: '\\\n' }; }
+      if (src[i + 1] === '\r' && src[i + 2] === '\n') { i += 3; line++; return { ch: '\n', raw: '\\\n' }; }
+      if (src[i + 1] === '\n') line++;
       const u = { ch: unescapeChar(src[i + 1]), raw: src.slice(i, i + 2) };
       i += 2; return u;
     }
-    if (src[i] === '\r' && src[i + 1] === '\n') { i += 2; return { ch: '\n', raw: '\n' }; }
+    if (src[i] === '\r' && src[i + 1] === '\n') { i += 2; line++; return { ch: '\n', raw: '\n' }; }
     const c = src[i++];
+    if (c === '\n') line++;
     return { ch: c, raw: c };
+  }
+
+  // BJ5: 文字列リテラルの本体を閉じ引用符 close（'"'・"'"・'"""'・"'''"）まで読み、閉じ引用符の直後へ進めて単位の列を返す。
+  //   i は本体の先頭（開き引用符の直後）を指す。ファイルの末尾まで閉じ引用符が無ければ字句エラー（行＝開き引用符の行 l0）。
+  //   是正前は閉じ引用符が無くてもファイル末尾までを文字列として黙って受け取っていた。
+  function readStrBody(open, close, l0) {
+    const units = [];
+    while (i < n && !src.startsWith(close, i)) { const l = line, u = strUnit(); u.line = l; units.push(u); }   // line＝単位の物理行（emitFString の式の行）
+    if (i >= n) throw new Error(`字句エラー: 閉じていない文字列（${open} で始まる文字列の終わりの ${close} がありません） (行 ${l0})`);
+    i += close.length;
+    return units;
   }
 
   function handlePyIndent() {
@@ -222,20 +284,23 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
     //   `( "lit0" + (expr1) + "lit1" + ... )` へトークン展開する (先頭は必ず STR ＝文字列連結文脈)。
     //   埋め込み式は再帰 tokenize (既存 #define と同じ流儀)。フォーマット指定 `{x:.2f}`/変換 `{x!r}`
     //   は先頭のトップレベル `:`/`!` 以降を切り捨てる (簡易・値は素の str 化)。`{{`/`}}` は素の波括弧。
+    //   BJ5: `f"""…"""`／`f'''…'''`（三重引用符）も同じ展開。外枠のトークン（STR・`(`・`)`・`+`）の行は開き引用符の行＝文の AST line。
+    //   埋め込み式の中のトークンは物理行を持つ（式の中の字句・構文エラーは物理行で報告＝python3 と同じ）。
     if (mode === 'py' && (ch === 'f' || ch === 'F') && (src[i + 1] === '"' || src[i + 1] === "'")) {
-      const quote = src[i + 1]; i += 2;
-      const units = [];
-      while (i < n && src[i] !== quote) units.push(strUnit());   // BJ1: 実エスケープ・BJ2: 生テキストも保持＋CRLF→LF
-      i++;
-      emitFString(units);
+      const l0 = line, q = src[i + 1];
+      const close = src.startsWith(q + q + q, i + 1) ? q + q + q : q;
+      i += 1 + close.length;
+      const units = readStrBody(ch + close, close, l0);   // BJ1: 実エスケープ・BJ2: 生テキストも保持＋CRLF→LF・BJ5: 改行で行を進める
+      emitFString(units, l0);
       continue;
     }
-    // 文字列
+    // 文字列（BJ5: py は `"""`／`'''` で始まれば三重引用符。C は扱わない）
     if (ch === '"' || ch === "'") {
-      const quote = ch; let s = ''; i++;
-      while (i < n && src[i] !== quote) s += strUnit().ch;         // BJ1: 実エスケープ・BJ2: CRLF→LF
-      i++;
-      pushTok('STR', s);
+      const l0 = line;
+      const close = (mode === 'py' && src.startsWith(ch + ch + ch, i)) ? ch + ch + ch : ch;
+      i += close.length;
+      const units = readStrBody(close, close, l0);        // BJ1: 実エスケープ・BJ2: CRLF→LF・BJ5: 改行で行を進める
+      pushTok('STR', units.map((u) => u.ch).join(''), l0);
       continue;
     }
     // 識別子 / キーワード
