@@ -898,7 +898,9 @@ export const MESSAGES = {
   //   ループの中から呼んだ関数の直下の break／continue が呼び出し側のループに黙って効いた）と range のステップ 0（Python は ValueError）。
   'interp.err.breakOutside':    { ja: 'break はループ (for / while。C は switch も) の中に書いてください。loop() 関数そのものはループではありません。関数の中の break は、その関数を呼んだループには効きません', en: '\'break\' must be inside a loop (for / while, or a switch in C). The loop() function itself is not a loop, and a break inside a function does not affect the loop that called it' },
   'interp.err.continueOutside': { ja: 'continue はループ (for / while) の中に書いてください。loop() 関数そのものはループではありません (その回の loop() を終えるなら return)。関数の中の continue は、その関数を呼んだループには効きません', en: '\'continue\' must be inside a loop (for / while). The loop() function itself is not a loop (use return to end this pass of loop()), and a continue inside a function does not affect the loop that called it' },
-  'interp.err.returnOutside':   { ja: 'return は関数の中に書いてください。関数の外では使えません (while True: の 1 回分を終えるなら continue、ループを抜けるなら break)', en: '\'return\' must be inside a function; it cannot be used outside one (to end one pass of while True: use continue; to leave the loop use break)' },
+  // BJ6: returnOutside は py の Model B（while True:）と C のトップレベル（while (1) や関数の外の return;）の両方で出るので、ループの書き方に
+  //   依らない文言にした（BJ3 の初版は「while True: の 1 回分を終えるなら continue」で、C の return; にも while True: を案内していた）。
+  'interp.err.returnOutside':   { ja: 'return は関数の中に書いてください。関数の外では使えません (ループの 1 回分を終えるなら continue、ループを抜けるなら break)', en: '\'return\' must be inside a function; it cannot be used outside one (to end one pass of a loop use continue; to leave the loop use break)' },
   'interp.err.rangeStepZero':   { ja: 'range() のステップ (3 番目の引数) に 0 は使えません', en: 'range() step (3rd argument) must not be zero' },
 
   // ---- loader.js: 取込/共有の操作系エラーメッセージ ----

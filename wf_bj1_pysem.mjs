@@ -1,4 +1,4 @@
-// wf_bj1_pysem.mjs — Stage BJ「インタプリタ是正 I（高頻度の Python 意味論・CRLF）」の常設ゲート。BJ1 で新設し、BJ2・BJ3・BJ5 が章を足す。
+// wf_bj1_pysem.mjs — Stage BJ「インタプリタ是正 I（高頻度の Python 意味論・CRLF）」の常設ゲート。BJ1 で新設し、BJ2・BJ3・BJ5・BJ6 が章を足す。
 // ════════════════════════════════════════════════════════════════════════════
 // 学習者が自力で原因に辿り着けない「エラーが出ない／意味不明なエラーになる」意味論の穴の是正を、本番経路
 //   buildController(src, lang, buildApi(world)) → setup()/tick() と parsePy/parseC で機械検証する（再実装しない・CI-8/CI-14）。
@@ -64,6 +64,23 @@
 //      字句エラー・構文エラーの行は物理行（初版は「開き引用符の行＋式の中の改行の数」と開き引用符の行＝H-3）。
 //      未是正の差: f-string の埋め込み式で出た実行時エラーの行は文の行（＝開き引用符の行。python3 は式のある行）・書式指定は落とす（H_SPEC に
 //      python3 の値を定数で持つ）。
+//
+// BJ6（1 行の suite の break／continue／pass／return・その文の行番号・return のエラー文言）— 是正前（HEAD 473f95b）の値は I 章の見出しと各表に
+//   書いた。`--root <是正前の木>` で回すと I 章が赤になる（A〜H は緑）。
+//   I) parser_py の suite の 1 行の分岐（`:` の後の同じ行の文）を、字下げしたブロックの文と同じキーワードの単純文（kwStmt: return〔値あり・
+//      なし〕・break・continue・pass・import／from・global）で読み、読んだ文に先頭のトークンの行を line として付ける。是正前は simpleStmt() だけで
+//      読み、`if n == 2: break` が「未定義の変数/名前: break」（`else: continue`・`while x: break`・`if x: pass`・`def f2(): global x` も同じ形）、
+//      `def f(): return 1` は関数の本体が変数 return で 1 がトップレベルの別の文（f() が「…: return」）。`if a: return g()` は a が偽の間 g() を
+//      無条件に呼んでいた（I-1）。1 行の suite の文に line が無く、外側の文（呼び出し元）の行で報告していた（`else: z = 1 / 0` が if の行 4・
+//      `def f(): x = 1 / 0` が呼び出し元の行。python3 は文の行・I-2）。ループの外の 1 行の suite の break／continue／return は breakOutside／
+//      continueOutside／returnOutside（是正前は「未定義の変数/名前」・I-2）。従来の形（I-3）: 1 行の suite の複合文（if／while／for／def）と `;` は
+//      是正前と同じ文言の構文エラー（Python は `;` を受理＝未是正の差を定数で持つ）。キーワードの単純文の後ろに同じ行の続き（`break 5`・`return 1 2`）が
+//      あれば構文エラー（Python も SyntaxError。是正前は `def f(): return 1 2` が f を呼ばなければ黙って走った）。I-4 returnOutside の文言は ja／en とも
+//      `while` を含まない（py の while True: と C の while (1) の両方で通る。是正前は C の `return;` にも「while True: の 1 回分を終えるなら continue」）。
+//      I-5 CRLF 版の AST（line を含む）・値・エラーの行が LF 版と一致。
+//   G-9（G 章に追加）: BJ3 の挙動変化のうち v10.1.0 の木を `--root` にした走査で拾えなかった 2 つを、エラーになる形で検査する（トップレベルの
+//      `for random in range(2)` の後の `random.random()` が notMethod＝ループ変数がホストの名前を隠す・`range(1,5,None)` が rangeStepZero）。
+//      v10.1.0 の木では赤になり、出力の「実 走った …」がエラー無しで走った値を示す（BJ4 の拾い上げ用）。BJ6 の陰性対照（473f95b）では緑。
 //
 // 使い方: node wf_bj1_pysem.mjs              … 検査
 //         node wf_bj1_pysem.mjs --root <dir>  … <dir>/public/js の product で回す（改修前の木で赤になることの確認用）
@@ -571,7 +588,7 @@ function runSlot(code, ticks, each) {
   slot.controller = buildController(slot.src, slot.lang, slot.hostEnv || buildApi(slot.world));
   slot.controller.setup();
   slot.running = true;
-  for (let k = 0; k < ticks; k++) { tickSlot(slot, []); if (each) each(slot, k); }
+  for (let k = 0; k < ticks; k++) { tickSlot(slot, []); if (each) each(slot, k, logs); }
   return { logs, slot, vars: slot.controller.interp.global.vars };
 }
 {
@@ -701,6 +718,25 @@ for (const [label, src, lang, ticks, key, line, py3re] of G_LINE) {
 { // 正常系の実行位置: loop() の最後の文が関数を呼ぶと、tick の後の line() はその文の行（是正前は呼ばれた関数の最後の文の行 3）。
   const r = runLine('def g():\n  a = 1\n  return a\ndef setup():\n  pass\ndef loop():\n  x = g()', 'py', 1);
   ok(!r.err && r.cur === 7, `G-8 loop() の最後の文 x = g() の後の line() は 7（実 ${r.err ? r.err : r.cur}・是正前は 3）`);
+}
+
+// G-9（BJ6 で追加）: BJ3 の挙動変化のうち、v10.1.0 の木を `--root` にした走査で拾えなかった 2 つ（決定ログ BJ-9 ④）をエラーになる形で検査する。
+//   v10.1.0 の木では赤で、出力の「実 走った …」がエラー無しで走った値を示す（BJ4 の「v10.1.0 で走っていたが v10.2.0 でエラーになる書き方」の拾い上げ用）。
+//   BJ3 の後の木（BJ5 の確定コミット 473f95b を含む）では緑。[ラベル, 本文, キー, 行, python3 も同じ種類で止まる正規表現, python3 は別の種類で止まる正規表現]
+const G9 = [
+  ['トップレベルの for random in range(2) の後の random.random()（ループ変数がホストの名前を隠す）', 'for random in range(2):\n  pass\nx = random.random()', 'notMethod', 3,
+    /^AttributeError: 'int' object has no attribute 'random'/, null],
+  ['for i in range(1,5,None)（None はステップ 0 と同じ扱い）', 'for i in range(1,5,None):\n  print(i)', 'rangeStepZero', 1,
+    null, /^TypeError: 'NoneType' object cannot be interpreted as an integer/],
+];
+for (const [label, src, key, line, py3same, py3diff] of G9) {
+  setLang('en'); const en = run(src, 'py'); setLang('ja');
+  const r = run(src, 'py');
+  ok(r.key === 'interp.err.' + key && r.line === line && r.out.length === 0 && en.key === r.key && en.line === line
+    && typeof en.err === 'string' && en.err.endsWith(` (line ${line})`) && !JP_RE.test(en.err),
+    `G-9 ${label} → ${key}（行 ${line}）（実 ${r.err ? r.err : '走った ' + J(r.out)}）`);
+  if (py3same) checkPy3Err(`G-9 ${label}`, src, py3same);
+  if (py3diff) checkPy3Err(`G-9 ${label}（未是正の差: python3 はエラーの種類が違う）`, src, py3diff);
 }
 
 // ── H) BJ5 三重引用符の文字列・文字列の中の改行の行番号・閉じていない文字列 ─────────────────────────
@@ -966,6 +1002,168 @@ for (const [label, lang, src, line, py3re] of H_OPEN) {
   ok(bad.length === 0 && srcs.length > 0, `H-4 H-1／H-2 の本文 ${srcs.length} 本: CRLF 版の AST（line を含む）・値・エラーの行が LF 版と一致${bad.length ? '（不一致 ' + bad.join(', ') + '）' : ''}`);
 }
 
+
+// ── I) BJ6 1 行の suite の break／continue／pass／return・その文の行番号・returnOutside の文言 ─────────────────────────
+console.log('\nI) BJ6 1 行の suite（if …: break ほか）— 是正前: if n == 2: break が「未定義の変数/名前: break」・def f(): return 1 の f() が「…: return」・' +
+  'else: z = 1 / 0 のエラーが if の行・returnOutside の文言が C の return; にも while True: を案内');
+// I-1 値。[ラベル, 本文, python3 の出力（定数・2026-10-12 Python 3.14.4）, tick 数, 是正前（473f95b）の結果]。python3 も同じ出力（checkPy3）。
+const I_VALS = [
+  ['while の中の if n == 2: break', 'n = 0\nwhile n < 5:\n  n += 1\n  if n == 2: break\nprint(n)', ['2'], 0, '未定義の変数/名前: break (行 4)'],
+  ['while の中の if n == 2: continue', 'n = 0\ns = 0\nwhile n < 4:\n  n += 1\n  if n == 2: continue\n  s += n\nprint(s)', ['8'], 0, '未定義の変数/名前: continue (行 5)'],
+  ['for の中の if k < 2: pass と else: continue', 'for k in range(4):\n  if k < 2: pass\n  else: continue\n  print(k)', ['0', '1'], 0, '未定義の変数/名前: pass (行 2)'],
+  ['while x: break', 'x = 1\nwhile x: break\nprint(x)', ['1'], 0, '未定義の変数/名前: break (行 2)'],
+  ['def f(): return 1', 'def f(): return 1\nprint(f())', ['1'], 0, '未定義の変数/名前: return (行 2)'],
+  ['関数の中の if a: return 5', 'def g(a):\n  if a: return 5\n  return 7\nprint(g(1), g(0))', ['5 7'], 0, '未定義の変数/名前: return (行 2)'],
+  ['関数の中の if x: return（値なし）', 'def h():\n  x = 1\n  if x: return\n  print("no")\nh()\nprint("ok")', ['ok'], 0, '未定義の変数/名前: return (行 3)'],
+  ['def f2(): global x', 'x = 0\ndef f2(): global x\nf2()\nprint(x)', ['0'], 0, '未定義の変数/名前: global (行 3)'],
+  // 同じ規則の別の形
+  ['if i == 0: continue と elif i == 3: break', 'for i in range(5):\n  if i == 0: continue\n  elif i == 3: break\n  print(i)', ['1', '2'], 0, '未定義の変数/名前: continue (行 2)'],
+  ['for i in range(3): pass の後の i', 'for i in range(3): pass\nprint(i)', ['2'], 0, '未定義の変数/名前: pass (行 1)'],
+  ['def f(): return 1, 2（タプル）', 'def f(): return 1, 2\na, b = f()\nprint(a, b)', ['1 2'], 0, '未定義の変数/名前: return (行 2)'],
+  ['def f(a): return a * 2 if a else -1（条件式）', 'def f(a): return a * 2 if a else -1\nprint(f(3), f(0))', ['6 -1'], 0, '未定義の変数/名前: a (行 1)'],
+  ['if a: return g() は a が偽なら g() を呼ばない', 'def g():\n  print("g")\n  return 1\ndef f(a):\n  if a: return g()\n  return 7\nprint(f(0))', ['7'], 0,
+    'エラー無しで ["g","7"]＝a が偽の間 g() を無条件に呼んだ（return g() の g() がトップレベルではなく関数の本体の別の文になった）'],
+  ['if 1: import math', 'if 1: import math\nprint(1)', ['1'], 0, '未定義の変数/名前: import (行 1)'],
+  ['def loop() の中の if 1: return（Model A・1 tick）', 'def setup():\n  pass\ndef loop():\n  print("a")\n  if 1: return\n  print("no")', ['a'], 1, '出力 ["a"] の後「未定義の変数/名前: return (行 5)」'],
+  ['def setup(): pass と def loop(): print(n)（Model A・1 tick）', 'n = 3\ndef setup(): pass\ndef loop(): print(n)', ['3'], 1, '未定義の変数/名前: pass (行 1)'],
+];
+for (const [label, src, want, ticks, pre] of I_VALS) {
+  const r = run(src, 'py', ticks);
+  ok(!r.err && linesEq(r.out, want), `I-1 ${label} → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ${J(want)}・是正前 ${pre}）`);
+  checkPy3(`I-1 ${label}`, asPy3(src, ticks), want);
+}
+{ // Model B（トップレベルの while True:）の 1 行の suite の break を本番の tickSlot で（G-3 と同じ見方）。3 tick 目に break し、ループの後ろの文を
+  //   その tick で 1 回だけ走らせて終わる＝running は true のまま・ログ ["after 3"]・以降の tick でログが増えない。
+  //   是正前は 1 tick 目に「【実行時エラー】未定義の変数/名前: break (行 4)」で停止（running=false）。
+  const src = 'n = 0\nwhile True:\n  n += 1\n  if n == 3: break\nprint("after", n)';
+  const counts = [];
+  const { logs, slot, vars } = runSlot(src, 8, (s, k, lg) => counts.push(lg.length));
+  ok(slot.running === true && J(logs) === J(['after 3']) && vars.n === 3 && J(counts) === J([0, 0, 1, 1, 1, 1, 1, 1]),
+    `I-1 Model B の if n == 3: break（8 tick）: running=${slot.running}・ログ ${J(logs)}・n=${vars.n}・tick ごとのログ行数 ${J(counts)}（期待 true・["after 3"]・3・[0,0,1,1,1,1,1,1]）`);
+  checkPy3('I-1 Model B の if n == 3: break', asPy3(src, 8), ['after 3']);
+}
+// I-2 行番号。(a) AST の line: 1 行の suite の文に先頭のトークンの行（是正前は line 無し・キーワードは exprstmt の変数）。
+{
+  const src = 'x = 1\nif x: y = 2\nelse: y = 3\ndef f(): return 4\nwhile x: break\nfor i in range(2): pass\nfor c in "ab": continue\nif x:\n  pass\nelif x: y = 5\ndef g(): global x\nif x: import math';
+  let got;
+  try {
+    const b = parsePy(src).body;
+    const one = [b[1].then[0], b[1].els[0], b[2].body[0], b[3].body[0], b[4].body[0], b[5].body[0], b[6].els[0].then[0], b[7].body[0], b[8].then[0]];
+    got = J(one.map((s) => [s.t, s.line]));
+  } catch (e) { got = 'ERR ' + (e.message || e); }
+  const want = J([['massign', 2], ['massign', 3], ['return', 4], ['break', 5], ['pass', 6], ['continue', 7], ['massign', 10], ['pass', 11], ['pass', 12]]);
+  ok(got === want, `I-2 1 行の suite の文の AST の [t, line] → ${got}（期待 ${want}）`);
+}
+// (b) エラーの行と line()。[ラベル, 本文, tick 数, キー, 行, 是正前の行, python3 の例外]
+const I_LINE = [
+  ['else: z = 1 / 0（if の 2 行後の else）', 'n = 0\nwhile n < 3:\n  n += 1\n  if n == 9:\n    pass\n  else: z = 1 / 0', 0, 'divZero', 6, '4（if の行）', /^ZeroDivisionError/],
+  ['def f(): return 1 / 0', 'def f(): return 1 / 0\nprint(f())', 0, 'divZero', 1, '1（関数の中ではなくトップレベルの別の文 1 / 0 の行）', /^ZeroDivisionError/],
+  ['def f(): x = 1 / 0（呼び出しは行 3）', 'def f(): x = 1 / 0\ny = 1\nf()', 0, 'divZero', 1, '3（呼び出し元の行）', /^ZeroDivisionError/],
+  ['if x == \\⏎   1: y = 1 / 0（\\ で続けた条件の後の文）', 'x = 1\nif x == \\\n   1: y = 1 / 0', 0, 'divZero', 3, '2（if の行）', /^ZeroDivisionError/],
+  ['if """a⏎b""": z = 1 / 0（改行を含む文字列の条件の後の文）', 'if """a\nb""": z = 1 / 0', 0, 'divZero', 2, '1（if の行）', /^ZeroDivisionError/],
+];
+for (const [label, src, ticks, key, line, pre, py3re] of I_LINE) {
+  const r = runLine(src, 'py', ticks);
+  ok(r.key === 'interp.err.' + key && r.line === line && r.cur === line && r.err.endsWith(`(行 ${line})`),
+    `I-2 ${label} → ${key}（行 ${line}・line() ${line}・是正前は ${pre}）（実 ${r.err ? r.err : '走った'}・line() ${r.cur}）`);
+  checkPy3Line(`I-2 ${label}`, asPy3(src, ticks), py3re, line);
+}
+{ // def f(): return 1 / 0 の 1 / 0 は関数の中の式（是正前はトップレベルの別の文で、print("a") より前に行 1 のゼロ除算＝出力 []）。
+  const src = 'def f(): return 1 / 0\nprint("a")\nprint(f())';
+  const r = run(src, 'py');
+  ok(r.key === 'interp.err.divZero' && r.line === 1 && J(r.out) === J(['a']),
+    `I-2 def f(): return 1 / 0 の後の print("a") が先に走り f() でゼロ除算（行 1）（実 ${r.err ? r.err : '走った'}・出力 ${J(r.out)}・是正前は出力 [] で行 1）`);
+  checkPy3Line('I-2 def f(): return 1 / 0（print("a") の後）', src, /^ZeroDivisionError/, 1);
+}
+{ // 実行位置ハイライト: 1 行の def loop(): y = 1 の 1 tick の後の line() は 2（是正前は 0＝関数の本体の文に line が無かった）。
+  const r = runLine('def setup(): x = 0\ndef loop(): y = 1', 'py', 1);
+  ok(!r.err && r.cur === 2, `I-2 def loop(): y = 1 の 1 tick の後の line() は 2（実 ${r.err ? r.err : r.cur}・是正前は 0）`);
+}
+// (c) ループの外・関数の外の 1 行の suite の break／continue／return（是正前は「未定義の変数/名前」）。ja と en・キー・行は okErr（G-4／G-5 と同じ見方）、
+//   python3 の SyntaxError の種類と行は checkPy3Line。[ラベル, 本文, tick 数, キー, 行, python3 の例外]
+const I_OUT = [
+  ['def loop(): の中の if x: break（1 tick）', 'def loop():\n  x = 1\n  if x: break', 1, 'breakOutside', 3, /^SyntaxError: 'break' outside loop/],
+  ['def loop(): の中の if 1: continue（1 tick）', 'def loop():\n  if 1: continue', 1, 'continueOutside', 2, /^SyntaxError: 'continue' not properly in loop/],
+  ['トップレベルの if x: return', 'x = 1\nif x: return', 0, 'returnOutside', 2, /^SyntaxError: 'return' outside function/],
+  ['Model B の while True: の中の if 1: return（1 tick）', 'n = 0\nwhile True:\n  if 1: return', 1, 'returnOutside', 3, /^SyntaxError: 'return' outside function/],
+];
+for (const [label, src, ticks, key, line, py3re] of I_OUT) {
+  okErr(`I-2 ${label}`, src, 'py', ticks, key, line, null);
+  checkPy3Line(`I-2 ${label}`, src, py3re, line);
+}
+// I-3 従来の形は変えない。1 行の suite の単純文（キーワード以外）は従来どおり simpleStmt。
+{
+  const src = 'x = 1\nif x: y = 2\nprint(y)';
+  const r = run(src, 'py');
+  ok(!r.err && J(r.out) === J(['2']), `I-3 if x: y = 2 → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ["2"]・是正前と同じ）`);
+  checkPy3('I-3 if x: y = 2', src, ['2']);
+}
+// 1 行の suite の複合文と `;` は是正前（473f95b）と同じ文言の構文エラー（完全一致）。[ラベル, 本文, エラー文, python3 の本文, python3: 正規表現＝SyntaxError／配列＝受理した出力]
+//   `;` は未対応（Python は受理＝未是正の差・python3 の出力を定数で持つ）。1 行の suite の global／import の読み飛ばしは `;` の手前で止める
+//   （止めないと `def f(): global x; x = 1` の x = 1 が黙って消える。字下げしたブロックの `global x; x = 1` は従来どおり行末まで読み飛ばす＝範囲外）。
+const I_SYN = [
+  ['1 行の suite の if（if x: if x: pass）', 'x = 1\nif x: if x: pass', "構文エラー(Py): 予期しないトークン ':' (行 2)", null, /^SyntaxError: invalid syntax/],
+  ['1 行の suite の for（while x: for i in range(2): pass）', 'x = 1\nwhile x: for i in range(2): pass', "構文エラー(Py): 予期しないトークン ':' (行 2)", null, /^SyntaxError: invalid syntax/],
+  ['1 行の suite の while（if x: while x: pass）', 'x = 1\nif x: while x: pass', "構文エラー(Py): 予期しないトークン ':' (行 2)", null, /^SyntaxError: invalid syntax/],
+  ['1 行の suite の def（if x: def g(): pass）', 'x = 1\nif x: def g(): pass', "構文エラー(Py): 予期しないトークン ':' (行 2)", null, /^SyntaxError: invalid syntax/],
+  ['else: の 1 行の suite の if', 'x = 1\nif x:\n  pass\nelse: if x: pass', "構文エラー(Py): 予期しないトークン ':' (行 4)", null, /^SyntaxError: invalid syntax/],
+  ['if x: a = 1; b = 2', 'x = 1\nif x: a = 1; b = 2', "構文エラー(Py): 予期しないトークン ';' (行 2)", 'x = 1\nif x: a = 1; b = 2\nprint(a, b)', ['1 2']],
+  ['a = 1; b = 2', 'a = 1; b = 2', "構文エラー(Py): 予期しないトークン ';' (行 1)", 'a = 1; b = 2\nprint(a, b)', ['1 2']],
+  ['def f(): global x; x = 1', 'x = 0\ndef f(): global x; x = 1\nf()\nprint(x)', "構文エラー(Py): 予期しないトークン ';' (行 2)", 'x = 0\ndef f(): global x; x = 1\nf()\nprint(x)', ['1']],
+  ['if 1: import math; import time', 'if 1: import math; import time\nprint(1)', "構文エラー(Py): 予期しないトークン ';' (行 1)", 'if 1: import math; import time\nprint(1)', ['1']],
+  ['def f(): return; x = 1', 'def f(): return; x = 1\nprint(2)', "構文エラー(Py): 予期しないトークン ';' (行 1)", 'def f(): return; x = 1\nprint(2)', ['2']],
+  ['while 1: break; x = 1', 'while 1: break; x = 1\nprint(2)', "構文エラー(Py): 予期しないトークン ';' (行 1)", 'while 1: break; x = 1\nprint(2)', ['2']],
+];
+for (const [label, src, msg, py3src, py3want] of I_SYN) {
+  const r = run(src, 'py');
+  ok(r.err === msg && r.out.length === 0, `I-3 ${label} → ${msg}（是正前と同じ）（実 ${r.err ? r.err : '走った ' + J(r.out)}）`);
+  if (py3want instanceof RegExp) checkPy3Err(`I-3 ${label}`, src, py3want);
+  else checkPy3(`I-3 ${label}（未是正の差: python3 は ; を受理）`, py3src, py3want);
+}
+// キーワードの単純文の後ろの同じ行の続きは構文エラー（Python も SyntaxError）。是正前: if x: break 5 は「未定義の変数/名前: break」・
+//   def f(): return 1 2 と def f(): pass 5 は f を呼ばなければエラー無しで走った（v10.1.0 も同じ）。
+const I_JUNK = [
+  ['if x: break 5', 'x = 1\nif x: break 5', "構文エラー(Py): 予期しないトークン '5' (行 2)"],
+  ['def f(): return 1 2', 'def f(): return 1 2\nprint(3)', "構文エラー(Py): 予期しないトークン '2' (行 1)"],
+  ['def f(): pass 5', 'def f(): pass 5\nprint(3)', "構文エラー(Py): 予期しないトークン '5' (行 1)"],
+];
+for (const [label, src, msg] of I_JUNK) {
+  const r = run(src, 'py');
+  ok(r.err === msg && r.out.length === 0, `I-3 ${label} → ${msg}（実 ${r.err ? r.err : '走った ' + J(r.out)}）`);
+  checkPy3Err(`I-3 ${label}`, src, /^SyntaxError: invalid syntax/);
+}
+// I-4 returnOutside の文言（ja／en とも while を含まない＝py の while True: と C の while (1) の両方で通る）。是正前は
+//   「while True: の 1 回分を終えるなら continue」を C の関数の外の return; にも案内した。
+{
+  const m = MESSAGES['interp.err.returnOutside'] || {};
+  ok(typeof m.ja === 'string' && typeof m.en === 'string' && !!m.ja && !!m.en && !/while/i.test(m.ja) && !/while/i.test(m.en)
+    && /continue/.test(m.ja) && /break/.test(m.ja) && /continue/.test(m.en) && /break/.test(m.en) && !JP_RE.test(m.en),
+    `I-4 interp.err.returnOutside の ja／en に while が無い（continue と break の案内はある・en に日本語なし）（実 ja ${J(m.ja)}・en ${J(m.en)}）`);
+  const I_RET = [
+    ['py Model B の while True: の中の return（1 tick）', 'n = 0\nwhile True:\n  n += 1\n  return', 'py', 1, 4],
+    ['C の関数の外の return;', 'int x = 1;\nreturn;\nvoid setup(){}\nvoid loop(){}', 'c', 0, 2],
+    ['C のトップレベルの while (1) の中の return;（2 tick）', 'int n = 0;\nwhile (1) {\n  n++;\n  if (n == 2) return;\n}', 'c', 2, 4],
+  ];
+  for (const [label, src, lang, ticks, line] of I_RET) {
+    okErr(`I-4 ${label}`, src, lang, ticks, 'returnOutside', line, null);
+    setLang('en'); const en = run(src, lang, ticks); setLang('ja');
+    const ja = run(src, lang, ticks);
+    ok(!!m.ja && ja.err === `${m.ja} (行 ${line})` && en.err === `${m.en} (line ${line})`,
+      `I-4 ${label} の表示が新しい文言そのもの（実 ja ${J(ja.err)}・en ${J(en.err)}）`);
+  }
+}
+// I-5 CRLF: I-1／I-2 の本文の CRLF 版の AST（line を含む）・値・エラーの行が LF 版と一致。
+{
+  const bad = [];
+  const srcs = [...I_VALS.map(([l, s, , t]) => [l, s, t]), ...I_LINE.map(([l, s, t]) => [l, s, t]), ...I_OUT.map(([l, s, t]) => [l, s, t])];
+  for (const [label, src, ticks] of srcs) {
+    const a = astOf(src, 'py'), b = astOf(crlf(src), 'py');
+    const rl = runLine(src, 'py', ticks), rc = runLine(crlf(src), 'py', ticks);
+    const vl = run(src, 'py', ticks), vc = run(crlf(src), 'py', ticks);
+    if (!(!a.startsWith('ERR') && a === b && J(rl) === J(rc) && J(vl.out) === J(vc.out) && vl.err === vc.err)) bad.push(label);
+  }
+  ok(bad.length === 0 && srcs.length > 0, `I-5 I-1／I-2 の本文 ${srcs.length} 本: CRLF 版の AST（line を含む）・値・エラーの行が LF 版と一致${bad.length ? '（不一致 ' + bad.join(', ') + '）' : ''}`);
+}
 
 console.log(`\n  python3 との突き合わせ: ${PY3 ? py3Checked + ' 件' : '0 件（python3 不在）'}`);
 console.log(`[結果] pass=${pass} fail=${fail}`);

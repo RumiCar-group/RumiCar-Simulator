@@ -36,7 +36,22 @@ export function parsePy(src) {
       eat('DEDENT');
       return stmts;
     }
-    return [simpleStmt()];
+    // BJ6: 1 行の suite（`if n == 2: break`・`else: continue`・`while x: break`・`def f(): return 1`・`def f(): global x`）。
+    //   字下げしたブロックの文（statementCore）と同じキーワードの単純文を kwStmt で読み、それ以外は従来どおり simpleStmt()。
+    //   読んだ文には先頭のトークンの行を line に付ける（statement() と同じ規則。`else: z = 1 / 0` のエラーが else の行・
+    //   `def f(): return 1 / 0` が関数の中の行になる）。是正前は simpleStmt() だけで読み、break／continue／pass／return／global が
+    //   変数名になって「未定義の変数/名前: break」等（`def f(): return 1` は本体が変数 return で 1 が別の文）、文に line が無く
+    //   外側の文の行（呼び出し元の行）で報告していた。複合文（if／while／for／def）は従来どおり simpleStmt() へ回って構文エラー
+    //   （Python も SyntaxError）。キーワードの単純文の後ろに同じ行の続き（`break 5`・`return 1 2`・`;`）があれば構文エラー
+    //   （Python も SyntaxError。続きを次の文として黙って読む形を新しく作らない。是正前は `if x: break 5` が「未定義の変数/名前: break」、
+    //   `def f(): return 1 2` は f を呼ばなければエラー無しで走った。`;` は従来どおり未対応＝是正前と同じ文言の構文エラー。
+    //   字下げしたブロックの `break 5` は従来どおり 5 を次の文として読む＝是正前からの差・BJ6 の範囲外）。
+    const ln = peek().line;
+    const kw = kwStmt(true);
+    if (kw && peek().type !== 'NEWLINE' && !isEOF()) err(`予期しないトークン '${peek().value ?? peek().type}'`);
+    const node = kw || simpleStmt();
+    if (node.line == null) node.line = ln;
+    return [node];
   }
 
   function statement() {
@@ -50,13 +65,24 @@ export function parsePy(src) {
     if (isKw('if')) return ifStmt();
     if (isKw('while')) return whileStmt();
     if (isKw('for')) return forStmt();
+    return kwStmt(false) || simpleStmt();
+  }
+  // BJ6: キーワードの単純文（return〔値あり・なし〕・break・continue・pass・import／from・global〔どちらも pass として読み飛ばす〕）。
+  //   該当しなければ null。statementCore（字下げしたブロックの文）と suite の 1 行の分岐が共有する（BJ6 で statementCore から
+  //   切り出した。字下げしたブロックの文の AST は是正前と同じ＝出荷サンプルの AST 指紋は wf_bj1_pysem E 章が見張る）。
+  //   inline＝1 行の suite: import／from／global の読み飛ばしを `;` の手前で止める（`def f(): global x; x = 1` は是正前と同じ
+  //   「予期しないトークン ';'」の構文エラー＝`;` は未対応）。字下げしたブロックでは従来どおり行末まで読み飛ばす（`global x; x = 1` の
+  //   `x = 1` は黙って消える＝是正前からの差・BJ6 の範囲外）。
+  function kwStmt(inline) {
     if (isKw('return')) { next(); let v = null; if (peek().type !== 'NEWLINE') v = expr(); return { t: 'return', value: v }; }
     if (isKw('break')) { next(); return { t: 'break' }; }
     if (isKw('continue')) { next(); return { t: 'continue' }; }
     if (isKw('pass')) { next(); return { t: 'pass' }; }
-    if (isKw('import') || isKw('from')) { while (peek().type !== 'NEWLINE' && !isEOF()) next(); return { t: 'pass' }; }
-    if (isKw('global')) { while (peek().type !== 'NEWLINE' && !isEOF()) next(); return { t: 'pass' }; }
-    return simpleStmt();
+    if (isKw('import') || isKw('from') || isKw('global')) {
+      while (peek().type !== 'NEWLINE' && !isEOF() && !(inline && isPunc(';'))) next();
+      return { t: 'pass' };
+    }
+    return null;
   }
 
   function funcDef() {
