@@ -57,14 +57,19 @@
 //      wf_bj1_pysem の F-3・H-1（H_SPEC）・H-3 の書式指定と単独の `}` の行は、是正前の値（書式指定を落とす・a}b5）から python3 の値に改めた。
 //
 // BK4（値の意味論・py だけ・C は従来どおり）— 是正前の木（850bbb2）で `--root <木>` を付けて回すと I 章（是正前と同じ値の行を除く）だけが赤になる
-//   （2026-10-14 の実測: pass=595 fail=73＝赤は I 章の 73 だけ・A〜H は緑）。
+//   （2026-10-14 の実測: 層4 の是正後の表で pass=620 fail=90＝赤は I 章の 90 だけ・A〜H は緑。是正前の表では pass=595 fail=73）。
 //   I) 本番経路の値とエラーを python3 3.14.4 の実測（定数・checkPy3／checkPy3Line）と照合する。表の最後の列は是正前の値。
-//      I-1 (3) 除数の False・0 の負のべきは divZero。I-2 (4) and／or は被演算子の値・py の真偽は空の list／tuple／dict も偽（if・while・not・
-//          bool()。是正前は空の list／dict が真＝PLAN の `[] or 0`＝0 はこれ無しに成り立たない）。I-3 (5) print／str／f-string／str.format／`%s` の
-//          True／False／None・return の無い関数は None・C の print(true) は "true" のまま。I-4 (6) list／tuple の ==／!= は要素ごと（`is` は構文
-//          エラーのまま）。I-5 (8)(11) count／index／remove・dict のキーと添字の bool は数・index と remove の未発見は interp.err.notInList。
-//          I-6 (11) // は CPython の床除算（1 // 0.1 は 9.0）。I-7 (17) range の引数は整数（interp.err.rangeArg）・式の range の 0 のステップ。
-//          I-8 None（null）の演算と添字は interp.err.noneOp／noneIndex（==・!=・in・`%s` は通す）。
+//      I-1 (3) 除数の False・0 の負のべきは divZero（指数 -inf は除く）。I-2 (4) and／or は被演算子の値（被演算子の真偽は空の list／tuple／dict も偽＝
+//          `[] or 0` は 0）。if・while・not・三項・bool() の真偽と、条件に直接書いた and／or の判定は是正前（850bbb2）と同じ（空の容器は真のまま＝
+//          python3 との残る差の行で是正前の値を固定）。I-3 (5) print／str／f-string／str.format／`%s`／py の Serial.print の True／False／None・return
+//          の無い関数は None・C の print(true)・`"%s" % true` は "true" のまま。I-4 (6) list／tuple の ==／!= は要素ごと・list と tuple は等しくない・
+//          入れ子 30000 段でも JS の RangeError を出さない（`is` は構文エラーのまま）。I-5 (8)(11) count／index／remove・dict のキーと添字の bool は数・
+//          index と remove の未発見は interp.err.notInList。I-6 (11) // は CPython の床除算（1 // 0.1 は 9.0）。I-7 (17) range の引数は整数
+//          （interp.err.rangeArg）・式の range の 0 のステップ。I-8 None（null）の演算と添字は interp.err.noneOp／noneIndex（==・!=・in・`%s` は通す）・
+//          `%` の数の指定子に None は noneOp・list／str の添字の None は noneAsIndex・dict のキーの None は 'None'（JS の "null" を見せない）。
+//      層4（wf-verify）の指摘 F1〜F9 の是正（4a23b63 の後の追加コミット）: F1 の真偽・F2 の list と tuple・F5 の深い入れ子・F6・F7・F9 の行を足し、
+//          I-2 の if／while／not／bool() の行を python3 との残る差（是正前と同じ値）に改めた。4a23b63 の木で `--root` を付けて回すとそれらの行が赤になる
+//          （2026-10-14 の実測: pass=691 fail=19＝赤は I 章の 19 だけ）。
 //      出荷 23 本の出力と runRace（F 章）・出荷 py の AST 指紋（wf_bj1_pysem E 章）は不変。wf_bj1_pysem の G-9 `range(1,5,None)` は rangeStepZero から
 //      rangeArg（python3 と同じ TypeError の種類）に改めた。
 //
@@ -772,21 +777,46 @@ gErrs('I-1', [
 ]);
 gVals('I-1', [
   ['2 ** -1・0 ** 0・0 ** 2（不変）', 'print(2 ** -1, 0 ** 0, 0 ** 2)', 0, ['0.5 1 0'], '同じ'],
+  // 層4 F6: 指数が -inf なら divZero にしない（python3 も inf。値は == で比べる＝float の表示は未是正の差）。
+  ['0 ** -math.inf・0.0 ** -math.inf・False ** -math.inf は inf（層4 F6）', 'import math\nprint(0 ** -math.inf == math.inf, 0.0 ** -math.inf == math.inf, False ** -math.inf == math.inf)', 0, ['True True True'], '["true true true"]（4a23b63 は divZero）'],
 ]);
-// I-2 (4) and／or は被演算子の値を返す。py の真偽（if・while・not・and・or・三項・bool()）は空の list／tuple／dict も偽（python3 と同じ）。
-//   是正前は `0 and 1` が false（表示 false）・空の list／dict が真（`[] or 0` が []・`if []:` が本体を走らせた）。
+// I-2 (4) and／or は被演算子の値を返し、被演算子の真偽は python3 と同じ（空の list／tuple／dict も偽＝`[] or 0` は 0）。是正前は `0 and 1` が false
+//   （表示 false）・`[] or 0` が []。基準 (4)「if／while の真偽判定は不変」（層4 F1）: if・while・not・三項・bool() の真偽は是正前（850bbb2）と同じ
+//   truthy（空の list／tuple／dict は真のまま）で、条件に直接書いた and／or（`if q and q[0] == 1:`・`while q and q[0] > 0:`）も是正前と同じ判定。
 gVals('I-2', [
   ['0 and 1（probe の (4)）', 'print(0 and 1)', 0, ['0'], '["false"]'],
   ['"" or "x"', 'print("" or "x")', 0, ['x'], '同じ'],
   ['[] or 0', 'print([] or 0)', 0, ['0'], '[""]（[] は真）'],
+  ['{} or 5・len([] and 1)・[0] or 1', 'print({} or 5, len([] and 1), len([0] or 1))', 0, ['5 0 1'], 'len(1) のエラー（[] は真）'],
   ['1 and 2・5 and None・None or 5・0 or ""', 'print(1 and 2, 5 and None, None or 5, 0 or "")', 0, ['2 None 5 '], '["2 0 5 "]'],
-  ['1 and 0 or 3・not 0 and 2・len([] and 1)', 'print(1 and 0 or 3, not 0 and 2, len([] and 1))', 0, ['3 2 0'], 'len(1) のエラー（[] は真）'],
+  ['1 and 0 or 3・not 0 and 2', 'print(1 and 0 or 3, not 0 and 2)', 0, ['3 2'], '["3 2"]'],
   ['x = 0 and f()（短絡・f を呼ばない）', 'def f():\n    print("called")\n    return 1\nx = 0 and f()\nprint(x)', 0, ['0'], '["false"]'],
-  ['if／while の判定（数・文字列・None・list）', 'n = 0\nfor v in [0, 1, "", "a", None, [], [0], {}, {"k": 1}]:\n    if v:\n        n += 1\nprint(n)', 0, ['4'], '["6"]（[]・{} が真）'],
-  ['while q:（空になったら止まる）', 'q = [1, 2, 3]\nn = 0\nwhile q:\n    q.pop()\n    n += 1\nprint(n)', 0, ['3'], 'ステップ上限エラー（[] が真）'],
-  ['not []・bool([])・bool([0])・bool({})', 'print(not [], bool([]), bool([0]), bool({}))', 0, ['True False True False'], '["false true true true"]'],
+  ['x = [] or 0 の後の if x:（値の文脈の or）', 'x = [] or 0\nif x:\n    print("run")\nelse:\n    print("skip")', 0, ['skip'], '["run"]'],
   ['if x and y:（真偽の判定は従来どおり）', 'x = 2\ny = 0\nif x and y:\n    print("a")\nelif x or y:\n    print("b")', 0, ['b'], '同じ'],
+  // 層4 F1: 条件に直接書いた and／or は値を作らずに判定する（`q and …` の値 [] を真と読み違えて空の q で本体を走らせない＝是正前と同じ）。
+  ['空の q の if q and q[0] == 1:（層4 F1）', 'q = []\nif q and q[0] == 1:\n    print("run")\nelse:\n    print("skip")', 0, ['skip'], '同じ'],
+  ['while q and q[0] > 0:（空になったら止まる・層4 F1）', 'q = [3, 2, 0, 5]\nn = 0\nwhile q and q[0] > 0:\n    q.pop(0)\n    n += 1\nprint(n, len(q))\nr = [1]\nwhile r and r[0] > 0:\n    r.pop()\nprint(len(r))', 0, ['2 2', '0'], '同じ'],
+  ['not (q and q[0])・q and q[0] の三項（空の q）', 'q = []\nprint(not (q and q[0]), "a" if q and q[0] else "b")', 0, ['True b'], '["true b"]'],
 ]);
+// 残る差（基準 (4) の「if／while の真偽判定は不変」による。BK-11 ①＝次 Stage の候補）: if・while・not・三項・bool() は空の list／tuple／dict を真と
+//   判定する（是正前と同じ値・python3 は偽）。条件に直接書いた `[] or 0` も真（値の文脈の `x = [] or 0` は 0）。行は [ラベル, 本文, 本処理系の値
+//   （＝是正前の値）, python3 の値]。python3 がある環境では python3 の値も突き合わせる（差が実在すること）。
+{
+  const KEEP = [
+    ['if v: の 11 値（0・1・""・"a"・None・[]・[0]・{}・{"k": 1}・0.0・(1, 2)）', 'n = 0\nfor v in [0, 1, "", "a", None, [], [0], {}, {"k": 1}, 0.0, (1, 2)]:\n    if v:\n        n += 1\nprint(n)', ['7'], ['5']],
+    ['not []・bool([])・bool([0])・bool({})・bool()・bool(None)', 'print(not [], bool([]), bool([0]), bool({}), bool(), bool(None))', ['False True True True False False'], ['True False True False False False']],
+    ['三項 "a" if [] else "b"・条件に直接書いた if [] or 0:・not ([] or 0)', 'print("a" if [] else "b", not ([] or 0))\nif [] or 0:\n    print("run")', ['a False', 'run'], ['b True']],
+  ];
+  for (const [label, code, want, py3want] of KEEP) {
+    const r = run(code, 'py');
+    ok(!r.err && J(r.out) === J(want), `I-2 残る差 ${label} → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ${J(want)}＝是正前と同じ・python3 は ${J(py3want)}）`);
+    checkPy3(`I-2 残る差 ${label}（python3 側の値）`, code, py3want);
+  }
+  // while q:（空の list は真＝空になっても回り続け、ステップ上限で止まる。python3 は 3 回で止まる）。
+  const w = run('q = [1, 2, 3]\nn = 0\nwhile q:\n    q.pop()\n    n += 1\nprint(n)', 'py');
+  ok(w.key === 'interp.err.stepLimit', `I-2 残る差 while q:（空になっても止まらない）→ ${w.key || J(w.out)}（期待 interp.err.stepLimit＝是正前と同じ・python3 は ["3"]）`);
+  checkPy3('I-2 残る差 while q:（python3 側の値）', 'q = [1, 2, 3]\nn = 0\nwhile q:\n    q.pop()\n    n += 1\nprint(n)', ['3']);
+}
 // I-3 (5) py の print／str／f-string／str.format／`%s` の bool は True／False・None は None（python3 と同じ）。値の無い return・return の無い関数・
 //   dict.get の見つからないキーは None。bool に空でない書式指定は int（従来どおり・python3 と同じ）。是正前は true／false・None が数の 0。
 gVals('I-3', [
@@ -802,12 +832,16 @@ gVals('I-3', [
   ['Model A の loop() の中の print(True)（1 tick）', 'def loop():\n    print(5 > 3)', 1, ['True'], '["true"]'],
 ]);
 { // C は従来どおり（print(true) は "true"・&& は偽のとき false・除数の false は Infinity・配列の == は同一性）。
-  const r = run('void setup() {\n  int a[2] = {1, 2};\n  int b[2] = {1, 2};\n  print(true); print(false); Serial.println(true);\n  print(0 && 5); print(2 && 5); print(0 || 7);\n  print(1 / false); print(a == b);\n}\nvoid loop() {}', 'c');
-  const want = ['true', 'false', 'true', 'false', '5', '7', 'Infinity', 'false'];
+  // 層4 F4: C の `"%s" % true` も "true" のまま。
+  const r = run('void setup() {\n  int a[2] = {1, 2};\n  int b[2] = {1, 2};\n  print(true); print(false); Serial.println(true);\n  print(0 && 5); print(2 && 5); print(0 || 7);\n  print(1 / false); print(a == b); print("%s" % true);\n  if (0 && 1) print(1); else print(2);\n}\nvoid loop() {}', 'c');
+  const want = ['true', 'false', 'true', 'false', '5', '7', 'Infinity', 'false', 'true', '2'];
   ok(!r.err && J(r.out) === J(want), `I-3 C は従来どおり → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ${J(want)}＝是正前と同じ）`);
+  // 層4 F7: py の Serial.print／println も print と同じ表示（python3 に Serial は無い＝定数だけで判定）。
+  const s = run('Serial.println(True, None)\nSerial.print(False)\nSerial.println(1, "a")', 'py');
+  ok(!s.err && J(s.out) === J(['True None', 'False', '1 a']), `I-3 py の Serial.println(True, None)・Serial.print(False) → ${s.err ? 'ERR ' + s.err : J(s.out)}（期待 ["True None","False","1 a"]・是正前 ["true 0","false","1 a"]・4a23b63 ["true ","false","1 a"]）`);
 }
 // I-4 (6) list／tuple の ==／!= は要素ごと（入れ子・長さ違い・要素の型違い）。`in` も同じ規則。`is` は未対応のまま（構文エラー）。
-//   残る差: list と tuple を区別しない（`[1, 2] == (1, 2)` は True・python3 は False）・dict の == は同一性のまま。
+//   層4 F2: list と tuple は等しくない（python3 と同じ。tuple は評価器の TUPLES の印・dict.items() の組も tuple）。残る差: dict の == は同一性のまま。
 {
   const EQ = [
     ['[1, 2] == [1, 2]', 'True'], ['[1, 2] != [1, 2]', 'False'], ['[1, [2, 3]] == [1, [2, 3]]', 'True'], ['[1, 2] == [1, 2, 3]', 'False'],
@@ -818,6 +852,8 @@ gVals('I-3', [
   gVals('I-4', EQ.map(([e, v]) => [e, `print(${e})`, 0, [v], (e.includes('!=') ? '["true"]' : '["false"]') + '（同一性）']));
 }
 gVals('I-4', [
+  ['(1, 2) == [1, 2]・[1, 2] in [(1, 2)]・(1, 2) != [1, 2]・[[1, 2]] == [(1, 2)]（層4 F2）', 'print((1, 2) == [1, 2], [1, 2] in [(1, 2)], (1, 2) != [1, 2], [[1, 2]] == [(1, 2)], [(1, 2)] == [(1, 2)])', 0, ['False False True False True'], '["false false true false false"]（同一性）・4a23b63 は ["True True False True True"]'],
+  ['dict.items() の組は tuple・return a, b は tuple・list(t) は list（層4 F2）', 'd = {"a": 1}\nfor p in d.items():\n    print(p == ("a", 1), p == ["a", 1])\ndef f():\n    return 1, 2\nprint(f() == (1, 2), f() == [1, 2], list((1, 2)) == [1, 2], [1, 2].count((1, 2)))', 0, ['True False', 'True False True 0'], '["false false","false false false 0"]'],
   ['同じ list（a = b）', 'a = [1]\nb = a\nprint(a == b, a != b)', 0, ['True False'], '["true false"]'],
   ['if x == [1, 2]:', 'x = [1, 2]\nif x == [1, 2]:\n    print("eq")\nelse:\n    print("ne")', 0, ['eq'], '["ne"]'],
 ]);
@@ -825,6 +861,14 @@ gVals('I-4', [
   //   JS の呼び出しスタックが尽き、トップレベルでは RangeError が素のまま出る）。
   const r = run('a = [1]\na.append(a)\nb = [1]\nb.append(b)\nc = [2]\nc.append(c)\nprint(a == b, a == c, a == a)', 'py');
   ok(!r.err && J(r.out) === J(['True False True']), `I-4 自分自身を要素に持つ list の == → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ["True False True"]・RangeError を出さない・是正前 ["false false true"]）`);
+}
+{ // 層4 F5: 入れ子 30000 段の list の ==・!=・in・count・index は明示のスタックで比べる（JS の RangeError を出さない・関数の中でも recursion に
+  //   しない。python3 3.14.4 も True）。4a23b63 はトップレベルで RangeError「Maximum call stack size exceeded」・関数の中で interp.err.recursion。
+  const deep = 'a = []\nb = []\nfor i in range(30000):\n    a = [a]\n    b = [b]\n';
+  gVals('I-4', [
+    ['入れ子 30000 段の ==・!=・in・count・index（層4 F5）', deep + 'print(a == b, a != b, a in [b], [a].count(b), [a].index(b))', 0, ['True False True 1 0'], '["false true false 0 -1"]（同一性）'],
+    ['関数の中の入れ子 30000 段の ==（層4 F5）', deep + 'def f():\n    return a == b\nc = [b]\nprint(f(), a == c)', 0, ['True False'], '["false false"]'],
+  ]);
 }
 gErrs('I-4', [
   ['x is None（未対応・python3 は True）', 'x = None\nprint(x is None)', 'interp.syn.expected', 2, null, null, '同じ'],
@@ -874,12 +918,32 @@ gErrs('I-8', [
   ['return の無い関数の値 + 1', 'def f():\n    pass\ny = f() + 1', 'interp.err.noneOp', 3, { op: '+' }, /^TypeError: unsupported operand/, 'y が NaN'],
   ['None[0]', 'x = None\nprint(x[0])', 'interp.err.noneIndex', 2, {}, /^TypeError: 'NoneType' object is not subscriptable/, '[""]'],
   ['f"{None:>5}"（書式指定・fmtType）', 'print(f"{None:>5}")', 'interp.err.fmtType', 1, { type: 'None', spec: '>5' }, /^TypeError: unsupported format string passed to NoneType\.__format__/, '["    0"]'],
+  // 層4 F9: `%` の数の指定子（d i f x X）に None は noneOp（python3 は TypeError）。`%s` は None（下の gVals）。
+  ['"%d" % None（2 行目・層4 F9）', 'x = None\nprint("%d" % x)', 'interp.err.noneOp', 2, { op: '%' }, /^TypeError: %d format: a real number is required, not NoneType/, '["0"]'],
+  ['"%.1f" % None（層4 F9）', 'print("%.1f" % None)', 'interp.err.noneOp', 1, { op: '%' }, /^TypeError: must be real number, not NoneType/, '["0.0"]'],
+  ['"%s %x" % ("a", None)（層4 F9）', 'print("%s %x" % ("a", None))', 'interp.err.noneOp', 1, { op: '%' }, /^TypeError: %x format: an integer is required, not NoneType/, '["a 0"]'],
+  // 層4 F7: list／str の添字の None は noneAsIndex（python3 は TypeError）。4a23b63 は黙って空（JS のキー "null"）・是正前は数の 0（先頭の要素）。
+  ['[1, 2][None]（2 行目・層4 F7）', 'x = [1, 2]\nprint(x[None])', 'interp.err.noneAsIndex', 2, {}, /^TypeError: list indices must be integers or slices, not NoneType/, '["1"]'],
+  ['x[None] = 5（list の代入先・層4 F7）', 'x = [1, 2]\nx[None] = 5', 'interp.err.noneAsIndex', 2, {}, /^TypeError: list indices must be integers or slices, not NoneType/, 'x[0] が 5'],
+  ['"ab"[None]（層4 F7）', 'print("ab"[None])', 'interp.err.noneAsIndex', 1, {}, /^TypeError: string indices must be integers, not 'NoneType'/, '["a"]'],
 ]);
 gVals('I-8', [
   ['None == 0・None == None・None != 0・None in [None]・"%s" % None', 'print(None == 0, None == None, None != 0, None in [None], "%s" % None)', 0, ['False True True True None'], '["true true false true 0"]'],
   ['d.get("k") == None・f() == None', 'def f():\n    pass\nd = {}\nprint(d.get("k") == None, f() == None)', 0, ['True True'], '["false false"]'],
   ['while None:（Model B にしない・従来どおり）', 'while None:\n    print(1)\nprint("end")', 0, ['end'], '同じ'],
+  // 層4 F7: dict のキーの None は 'None'（反復・in・添字・get・pop で JS の "null" を見せない）。
+  ['for k in {None: 1}・"null" in {None: 1}・None in・d[None]・get・pop（層4 F7）', 'd = {None: 1}\nfor k in d:\n    print(k)\nd[None] = 3\nprint("null" in d, None in d, d[None], d.get(None), len(d), d.pop(None), len(d))', 0, ['None', 'False True 3 3 1 3 0'], '["0","false true 3 3 1 3 0"]・4a23b63 は ["null","True True 3 3 1 3 0"]'],
+  ['"%s|%d|%s" % (None, True, False)', 'print("%s|%d|%s" % (None, True, False))', 0, ['None|1|False'], '["0|1|false"]'],
 ]);
+{ // 残る差（層4 F7 の兄弟）: py の str.join と文字列のメソッドは文字列以外の値を pyStr で文字列にして通す（python3 は TypeError）。JS の "null"・"true" は見せない。
+  const r = run('print("a".join(["x", None]), "-".join(["x", True]), "anullb".replace(None, "x"), "null".find(None), "aNoneb".replace(None, "-"))', 'py');
+  ok(!r.err && J(r.out) === J(['xaNone x-True anullb -1 a-b']), `I-8 残る差 join・replace・find に None／True → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ["xaNone x-True anullb -1 a-b"]・4a23b63 ["xanull x-true axb 0 aNoneb"]・python3 は TypeError）`);
+  checkPy3Err('I-8 残る差 "a".join(["x", None])（python3 側）', 'print("a".join(["x", None]))', /^TypeError: sequence item 1: expected str instance, NoneType found/);
+  // 層4 F8: 実機 API に None は引数エラー（RC_read は -2・RC_drive／RC_steer は 0 を返して何もしない）。是正前は None が数の 0＝LEFT／FREE と同じ。
+  //   数の組込関数（int・abs・math.*）は 0 として計算（§9 の残る差）。python3 に RC_* は無い＝定数だけで判定。
+  const a = run('print(RC_read(None), RC_drive(None, 100), RC_steer(None), int(None), abs(None))', 'py');
+  ok(!a.err && J(a.out) === J(['-2 0 0 0 0']), `I-8 実機 API と数の組込関数に None（層4 F8）→ ${a.err ? 'ERR ' + a.err : J(a.out)}（期待 ["-2 0 0 0 0"]・是正前は RC_read(None) が RC_read(LEFT) と同じ・RC_drive(None, 100) が 1）`);
+}
 
 console.log(`\n  python3 との突き合わせ: ${PY3 ? py3Checked + ' 件' : '0 件（python3 不在）'}`);
 console.log(`[結果] pass=${pass} fail=${fail}`);

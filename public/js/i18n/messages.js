@@ -930,6 +930,8 @@ export const MESSAGES = {
   'interp.err.notInList':   { ja: 'list.{method}(x): x がリストの中にありません', en: 'list.{method}(x): x is not in the list' },
   'interp.err.noneOp':      { ja: 'None に演算子 {op} は使えません (値を代入していない変数か、return で値を返さない関数の結果かもしれません)', en: 'The operator {op} cannot be used with None (it may be a variable that was never given a value, or the result of a function that does not return a value)' },
   'interp.err.noneIndex':   { ja: 'None に添字 [ ] は使えません (値を代入していない変数か、return で値を返さない関数の結果かもしれません)', en: 'None cannot be indexed with [ ] (it may be a variable that was never given a value, or the result of a function that does not return a value)' },
+  // BK4 層4 F7: list／str の添字に None（python3 は TypeError: list indices must be integers or slices, not NoneType）。
+  'interp.err.noneAsIndex': { ja: 'list と文字列の添字に None は使えません (添字は整数にしてください)', en: 'None cannot be used as a list or string index (indices must be integers)' },
 
   // ---- BK1: 字句エラー（lexer.js）・構文エラー（parser_py.js／parser_c.js）。SourceError（lexer.js）が t('interp.' + phase + '.' + sub) で参照し、
   //   頭（head）＋文言＋行の接尾（interp.err.line）で組む。ja は是正前の日本語固定文と 1 文字も変えない（wf_bk1_interp2 A 章が是正前の文言で照合）。

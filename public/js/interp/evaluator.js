@@ -61,9 +61,18 @@ export class Interp {
   }
 
   resetSteps() { this.steps = 0; this.timeRead = false; }
-  // BK4 (4): 真偽の判定（if・while・not・and・or・三項・py の bool()）。py は空の list／tuple／dict も偽（python3 と同じ）。是正前は
-  //   空の list／dict が真（`if []:` が本体を走らせ・`[] or 0` が []・`while q:` が空になっても回り続けた）。C は従来どおり。
-  tr(v) { return this.lang === 'py' ? pyTruthy(v) : truthy(v); }
+  // BK4 (4)・層4 F1: 条件の真偽（if・while・do-while・C の for・三項の条件・not の被演算子）。基準 (4)「if／while の真偽判定は不変」を文字どおり
+  //   守る＝真偽は 850bbb2 と同じ truthy（空の list／tuple／dict は真のまま・python3 は偽＝残る差・BK-11 ①）。py の and／or は値（`[] or 0` は 0）を
+  //   pyTruthy で決めるが、条件の中に直接書いた and／or（`if q and q[0] == 1:`・`while q and q[0] > 0:`）は値を作らず被演算子ごとに cond で
+  //   判定する＝850bbb2 の truthy(a && b)／truthy(a || b) と同じ結果・同じ評価順（`[] and …` の値 [] を truthy で真と読み違えて、空の q で
+  //   本体を走らせない）。C は従来どおり truthy(evalExpr)。
+  cond(node, scope) {
+    if (this.lang === 'py' && node.t === 'bin') {
+      if (node.op === '&&') return this.cond(node.a, scope) && this.cond(node.b, scope);
+      if (node.op === '||') return this.cond(node.a, scope) || this.cond(node.b, scope);
+    }
+    return truthy(this.evalExpr(node, scope));
+  }
   tick() { if (++this.steps > SIM.maxStepsPerTick) throw new StepLimit(this.curLine, this.timeRead); }
 
   has(name) { return !!this.funcs[name]; }
@@ -159,12 +168,12 @@ export class Interp {
       case 'break': throw new BreakSignal(this.curLine);
       case 'continue': throw new ContinueSignal(this.curLine);
       case 'if': {
-        if (this.tr(this.evalExpr(node.cond, scope))) this.execBlock(node.then, scope);
+        if (this.cond(node.cond, scope)) this.execBlock(node.then, scope);
         else if (node.els) this.execBlock(node.els, scope);
         return;
       }
       case 'while': {
-        while (this.tr(this.evalExpr(node.cond, scope))) {
+        while (this.cond(node.cond, scope)) {
           this.tick();
           try { this.execBlock(node.body, scope); }
           catch (e) { if (e instanceof BreakSignal) break; if (e instanceof ContinueSignal) continue; throw e; }
@@ -176,7 +185,7 @@ export class Interp {
           this.tick();
           try { this.execBlock(node.body, scope); }
           catch (e) { if (e instanceof BreakSignal) break; if (e instanceof ContinueSignal) continue; throw e; }
-        } while (this.tr(this.evalExpr(node.cond, scope)));
+        } while (this.cond(node.cond, scope));
         return;
       }
       case 'switch': {
@@ -197,7 +206,7 @@ export class Interp {
       case 'for': {
         const fs = { vars: Object.create(null), parent: scope };
         if (node.init) this.execStmt(node.init, fs);
-        while (node.cond ? this.tr(this.evalExpr(node.cond, fs)) : true) {
+        while (node.cond ? this.cond(node.cond, fs) : true) {
           this.tick();
           try { this.execBlock(node.body, fs); }
           catch (e) { if (e instanceof BreakSignal) break; if (e instanceof ContinueSignal) {} else throw e; }
@@ -296,7 +305,13 @@ export class Interp {
 
   // AP16: Python の負インデックス (a[-1] → 末尾)。py のみ・list/str に適用 (C は無改変=従来どおり)。
   // BK4 (8): py の添字の bool は数（`[5, 6][True]` は 6・`{1: "a"}[True]` は "a"。Python の bool は int）。是正前は JS のキー "true"。
+  // BK4 層4 F7: py の添字の None。dict は pyKey（キー 'None'）・list／str は実行時エラー interp.err.noneAsIndex（python3 は TypeError: list indices
+  //   must be integers…）。是正前（null になってから）は JS のキー "null"＝`[1, 2][None]` が黙って空・`{None: 1}` のキーが表示 null。
   pyIndex(o, k) {
+    if (this.lang === 'py' && k === null) {
+      if (Array.isArray(o) || typeof o === 'string') throw this.rt('noneAsIndex');
+      return pyKey(k);
+    }
     if (this.lang === 'py' && typeof k === 'boolean') k = Number(k);
     if (this.lang === 'py' && typeof k === 'number' && k < 0 && (Array.isArray(o) || typeof o === 'string')) return o.length + k;
     return k;
@@ -348,7 +363,8 @@ export class Interp {
       case 'none': return null;   // BK4 (5): py の None（parser_py）
       case 'var': return this.getVar(scope, node.name);
       case 'list': return node.items.map(e => this.evalExpr(e, scope));
-      case 'tuple': return node.items.map(e => this.evalExpr(e, scope));
+      // BK4 層4 F2: tuple は TUPLES に印を付けた配列（pyEq が list と区別する＝`(1, 2) == [1, 2]` は False）。
+      case 'tuple': return mkTuple(node.items.map(e => this.evalExpr(e, scope)));
       case 'dict': {
         // AP9: 素の辞書 (プロトタイプ無し) — index 読み書き `d[k]` と反復キー列挙に使う。
         const o = Object.create(null);
@@ -358,10 +374,16 @@ export class Interp {
       }
       case 'bin': {
         const op = node.op;
-        // BK4 (4): py の and は被演算子の値を返す（`0 and 1` は 0・`5 and None` は None）。是正前は偽のとき false（C は従来どおり false）。
-        //   or は従来から被演算子の値（C も同じ式）。if／while の真偽判定は truthy なので変わらない。
-        if (op === '&&') { const a = this.evalExpr(node.a, scope); return this.tr(a) ? this.evalExpr(node.b, scope) : (this.lang === 'py' ? a : false); }
-        if (op === '||') { const a = this.evalExpr(node.a, scope); return this.tr(a) ? a : this.evalExpr(node.b, scope); }
+        // BK4 (4): py の and／or は被演算子の値を返し、被演算子の真偽は pyTruthy（python3 と同じく空の list／tuple／dict も偽）＝`0 and 1` は 0・
+        //   `5 and None` は None・`[] or 0` は 0・`"" or "x"` は x。是正前は and が偽のとき false・真偽は truthy（`[] or 0` は []）。
+        //   ここは値の文脈（代入・引数・print など）。条件の中に直接書いた and／or は cond が 850bbb2 と同じ truthy で判定する（層4 F1）。
+        //   C は従来どおり（&& は偽のとき false・|| は被演算子の値・真偽は truthy）。
+        if (op === '&&') {
+          const a = this.evalExpr(node.a, scope);
+          if (this.lang === 'py') return pyTruthy(a) ? this.evalExpr(node.b, scope) : a;
+          return truthy(a) ? this.evalExpr(node.b, scope) : false;
+        }
+        if (op === '||') { const a = this.evalExpr(node.a, scope); return (this.lang === 'py' ? pyTruthy(a) : truthy(a)) ? a : this.evalExpr(node.b, scope); }
         return applyBin(op, this.evalExpr(node.a, scope), this.evalExpr(node.b, scope), this.curLine, this.lang);
       }
       case 'compare': {
@@ -375,16 +397,18 @@ export class Interp {
         return true;
       }
       case 'un': {
+        // BK4 層4 F1: py の not の被演算子は条件と同じ cond（`not (q and q[0])` が 850bbb2 と同じ真偽）。
+        if (node.op === '!' && this.lang === 'py') return !this.cond(node.a, scope);
         const a = this.evalExpr(node.a, scope);
         // BK4: py の None（null）に - + ~ は実行時エラー（python3 は TypeError。是正前は数の 0 として 0）。
         if (a === null && this.lang === 'py' && node.op !== '!') throw this.rt('noneOp', { op: node.op });
-        if (node.op === '-') return -a; if (node.op === '+') return +a; if (node.op === '!') return !this.tr(a);
+        if (node.op === '-') return -a; if (node.op === '+') return +a; if (node.op === '!') return !truthy(a);
         if (node.op === '~') return ~a;
         return a;
       }
       case 'arraydecl': return this.shapeArray(node.dims, 0, node.init ? this.evalExpr(node.init, scope) : null, scope);
       case 'sizeof': return this.sizeOfVal(this.evalExpr(node.a, scope));
-      case 'ternary': return this.tr(this.evalExpr(node.cond, scope)) ? this.evalExpr(node.a, scope) : this.evalExpr(node.b, scope);
+      case 'ternary': return this.cond(node.cond, scope) ? this.evalExpr(node.a, scope) : this.evalExpr(node.b, scope);
       case 'assignexpr': {
         let v;
         if (node.op === '=') v = this.evalExpr(node.value, scope);
@@ -420,11 +444,13 @@ export class Interp {
       if (typeof obj === 'string' && callee.name === 'format') return pyStrFormat(obj, args, kw, this.curLine);
       if (kw) throw this.rt('notMethod', { name: callee.name });
       // AP9: str/list/dict の Python メソッドを JS ネイティブより優先 (.replace/.sort 等の意味論差を吸収)。
-      const pm = pyMethod(obj, callee.name, this.curLine);
+      const pm = pyMethod(obj, callee.name, this.curLine, this.lang);
       if (pm) return pm(...args);
       // ホストオブジェクト (Serial/math/sensor/time/random) と dict 値の関数はネイティブ経路。
       const fn = obj == null ? undefined : obj[callee.name];
       if (typeof fn !== 'function') throw this.rt('notMethod', { name: callee.name });
+      // BK4 層4 F7: py の Serial.print／println も print と同じく pyStr（True／False／None）。是正前は "true"／""（None は null）。C は従来どおり。
+      if (this.lang === 'py' && obj === this.host.Serial) return fn.apply(obj, args.map((v) => (v === undefined ? v : pyStr(v))));
       return fn.apply(obj, args);
     }
     if (callee.t === 'var') {
@@ -444,11 +470,10 @@ export class Interp {
         if (name === 'millis' || name === 'micros') this.timeRead = true;   // BK1 H1: StepLimit の文言のヒント (値は変えない)
         // BK4: py だけ。print／str の値の文字列化は pyStr（True／False／None。f-string・str.format と同じ）。是正前は JS の表示（true・
         //   None は数の 0）。undefined（範囲外の添字など）は従来どおり（print は空・str は "undefined"）。C の print(true) は従来どおり "true"。
-        //   bool(…) は pyTruthy（if と同じ）。range(…) の引数は rangeArgs（整数・0 でないステップ）。
+        //   bool(…) はホストの bool（if と同じ truthy＝850bbb2 と同じ・層4 F1）。range(…) の引数は rangeArgs（整数・0 でないステップ）。
         if (this.lang === 'py') {
           if (name === 'print') return this.host.print(...args.map((v) => (v === undefined ? v : pyStr(v))));
           if (name === 'str') return args.length ? pyStr(args[0]) : '';
-          if (name === 'bool') return args.length ? pyTruthy(args[0]) : false;   // BK4 (4): bool([]) は False（是正前は true）
           if (name === 'range') return this.host.range(...this.rangeArgs(args));
         }
         return this.host[name](...args);
@@ -462,8 +487,8 @@ export class Interp {
 }
 
 function truthy(v) { return !(v === 0 || v === false || v === '' || v == null); }
-// BK4 (4): py の真偽。truthy に加えて空の list／tuple（長さ 0 の配列）と空の dict（プロトタイプ無しの素の辞書＝evalExpr の dict）が偽。
-//   ホストのオブジェクト（math・Serial・sensor0 など）は真のまま。
+// BK4 (4): py の and／or の被演算子の真偽（値の文脈だけ・Interp.cond の説明）。truthy に加えて空の list／tuple（長さ 0 の配列）と空の dict
+//   （プロトタイプ無しの素の辞書＝evalExpr の dict）が偽。ホストのオブジェクト（math・Serial・sensor0 など）は真のまま。
 function pyTruthy(v) {
   if (!truthy(v)) return false;
   if (Array.isArray(v)) return v.length > 0;
@@ -776,20 +801,25 @@ function pyStrFormat(tpl, args, kw, line) {
   }
   return render(String(tpl), 0);
 }
+// BK4 層4 F7 の兄弟: py は引数の文字列化を pyStr（None は 'None'・bool は True／False）。是正前（None が null になってから）は String で
+//   `"anullb".replace(None, "x")` が axb・`"null".find(None)` が 0（JS の "null"）。python3 は文字列以外の引数が TypeError＝残る差（文字列にして
+//   通す・数は従来どおり）。C は従来どおり String。各ファクトリは (受け手, py) を受ける。
+const sOf = (py) => (py ? pyStr : String);
 const STR_METHODS = {
   upper: (s) => () => s.toUpperCase(),
   lower: (s) => () => s.toLowerCase(),
-  strip: (s) => (c) => c == null ? s.trim() : trimChars(s, c, true, true),
-  lstrip: (s) => (c) => c == null ? s.replace(/^\s+/, '') : trimChars(s, c, true, false),
-  rstrip: (s) => (c) => c == null ? s.replace(/\s+$/, '') : trimChars(s, c, false, true),
-  replace: (s) => (a, b) => s.split(String(a)).join(String(b)),
-  split: (s) => (sep) => sep == null ? s.trim().split(/\s+/).filter((x) => x !== '') : s.split(String(sep)),
-  startswith: (s) => (p) => s.startsWith(String(p)),
-  endswith: (s) => (p) => s.endsWith(String(p)),
-  find: (s) => (x) => s.indexOf(String(x)),
-  count: (s) => (x) => { const t = String(x); return t === '' ? s.length + 1 : s.split(t).length - 1; },
+  strip: (s, py) => (c) => c == null ? s.trim() : trimChars(s, sOf(py)(c), true, true),
+  lstrip: (s, py) => (c) => c == null ? s.replace(/^\s+/, '') : trimChars(s, sOf(py)(c), true, false),
+  rstrip: (s, py) => (c) => c == null ? s.replace(/\s+$/, '') : trimChars(s, sOf(py)(c), false, true),
+  replace: (s, py) => (a, b) => s.split(sOf(py)(a)).join(sOf(py)(b)),
+  split: (s, py) => (sep) => sep == null ? s.trim().split(/\s+/).filter((x) => x !== '') : s.split(sOf(py)(sep)),
+  startswith: (s, py) => (p) => s.startsWith(sOf(py)(p)),
+  endswith: (s, py) => (p) => s.endsWith(sOf(py)(p)),
+  find: (s, py) => (x) => s.indexOf(sOf(py)(x)),
+  count: (s, py) => (x) => { const t = sOf(py)(x); return t === '' ? s.length + 1 : s.split(t).length - 1; },
   // format は evalCall が直接 pyStrFormat を呼ぶ（BK3: キーワード引数と実行時エラーの行を渡すため）。
-  join: (s) => (arr) => (Array.isArray(arr) ? arr : [arr]).map(String).join(s),
+  // BK4 層4 F7: py は要素を pyStr（True／False／None。是正前は null・true）。python3 は文字列以外の要素が TypeError＝残る差（数も通す・従来どおり）。
+  join: (s, py) => (arr) => (Array.isArray(arr) ? arr : [arr]).map(sOf(py)).join(s),
 };
 // BK4 (8)(11): count／index／remove は要素を pySame（== と同じ規則＝bool と数を数として・list は要素ごと）で比べる。index と remove は
 //   見つからなければ行番号付きの実行時エラー interp.err.notInList（python3 は ValueError）。index の start／end は python3 と同じ（負は末尾から）。
@@ -821,13 +851,14 @@ const DICT_METHODS = {
   get: (o) => (k, d) => { k = pyKey(k); return k in o ? o[k] : (d === undefined ? null : d); },
   keys: (o) => () => Object.keys(o),
   values: (o) => () => Object.keys(o).map((k) => o[k]),
-  items: (o) => () => Object.keys(o).map((k) => [k, o[k]]),
+  items: (o) => () => Object.keys(o).map((k) => mkTuple([k, o[k]])),   // BK4 層4 F2: 組は tuple（python3 と同じ）
   pop: (o) => (k, d) => { k = pyKey(k); if (k in o) { const v = o[k]; delete o[k]; return v; } return d === undefined ? null : d; },
   clear: (o) => () => { for (const k of Object.keys(o)) delete o[k]; },
 };
-// 受け手の型に応じた Python メソッドを返す (無ければ null → 呼び出し側がネイティブ経路へ)。line＝実行時エラーの行（BK4: list の index／remove）。
-function pyMethod(obj, name, line) {
-  if (typeof obj === 'string') { const f = STR_METHODS[name]; return f ? f(obj) : null; }
+// 受け手の型に応じた Python メソッドを返す (無ければ null → 呼び出し側がネイティブ経路へ)。line＝実行時エラーの行（BK4: list の index／remove）・
+//   lang＝言語（BK4 層4 F7: py の str.join の要素の文字列化）。
+function pyMethod(obj, name, line, lang) {
+  if (typeof obj === 'string') { const f = STR_METHODS[name]; return f ? f(obj, lang === 'py') : null; }
   if (Array.isArray(obj)) { const f = LIST_METHODS[name]; return f ? f(obj, line) : null; }
   if (obj && typeof obj === 'object') { const f = DICT_METHODS[name]; return f ? f(obj, line) : null; }
   return null;
@@ -836,16 +867,19 @@ function pyMethod(obj, name, line) {
 // AP16: Python 風の printf フォーマット ("x=%d"%5 → "x=5")。%d/%i/%s/%f(.N)/%x/%X/%% を最小サポート。
 // 引数はタプル (配列) or 単一値。位置は左から順に消費。未知指定子はそのまま残す。
 // (str.format の `{}`-式 pyStrFormat〔BK3〕とは別＝`%` 演算子専用。)
-function pyPercentFormat(fmt, args) {
+// BK4 層4 F4: `%s` の pyStr（True／False／None）は py だけ（C は従来どおり String＝"true"）。F9: py で None を数の指定子（d i f x X）に渡すと
+//   実行時エラー interp.err.noneOp（python3 は TypeError: %d format: a real number is required…）。是正前は数の 0（"0"・"0.000000"）。
+function pyPercentFormat(fmt, args, line, py) {
   const list = Array.isArray(args) ? args : [args];
   let i = 0;
   return String(fmt).replace(/%%|%(-?\d+)?(?:\.(\d+))?([sdifxX])/g, (m, _w, prec, conv) => {
     if (m === '%%') return '%';
     const v = list[i++];
+    if (py && v === null && conv !== 's') throw new RuntimeError('noneOp', { op: '%' }, line);
     switch (conv) {
       case 'd': case 'i': return String(Math.trunc(Number(v)));
       case 'f': return Number(v).toFixed(prec != null ? +prec : 6);
-      case 's': return pyStr(v);   // BK4 (5): `"%s" % True` は True（是正前は true）
+      case 's': return py ? pyStr(v) : String(v);   // BK4 (5): py の `"%s" % True` は True（是正前は true）・C は従来どおり
       case 'x': return Math.trunc(Number(v)).toString(16);
       case 'X': return Math.trunc(Number(v)).toString(16).toUpperCase();
       default: return m;
@@ -878,30 +912,50 @@ function pyFloorDiv(a, b) {
 }
 // BJ2: Python の ==。bool と数の組は数として比べる（True == 1・False == 0・True == 1.0 は真・True != 0 も真）。
 //   それ以外は従来どおり ===（"1" == 1 は偽・数同士・bool 同士・文字列同士は値で一致・None 同士は真）。
-// BK4 (6): list／tuple 同士は長さと要素ごとの pySame（入れ子も同じ規則・python3 と同じく要素の同一性を先に見る）。是正前は同一性
-//   （`[1, 2] == [1, 2]` は偽）。残る差: list と tuple を区別しない（`[1, 2] == (1, 2)` は真・python3 は偽）・dict の == は同一性のまま。
-//   自分自身を要素に持つ別々の list 同士（`a.append(a)`・`b.append(b)` の a == b）は、比べている途中の同じ組に戻ったら等しいとみなす
-//   （python3 は RecursionError。組を覚えないと JS の呼び出しスタックが尽き、トップレベルでは RangeError が素のまま出る）。
-const eqPairs = [];
+// BK4 (6): list／tuple 同士は seqEq（長さと要素ごとの pySame・入れ子も同じ規則・python3 と同じく要素の同一性を先に見る）。是正前は同一性
+//   （`[1, 2] == [1, 2]` は偽）。層4 F2: list と tuple は等しくない（`(1, 2) == [1, 2]` は False・python3 と同じ。tuple は TUPLES の印）。
+//   残る差: dict の == は同一性のまま。
+const TUPLES = new WeakSet();
+function mkTuple(arr) { TUPLES.add(arr); return arr; }
 function pyEq(a, b) {
   if ((typeof a === 'boolean' && typeof b === 'number') || (typeof a === 'number' && typeof b === 'boolean')) return Number(a) === Number(b);
-  if (Array.isArray(a) && Array.isArray(b)) {
-    if (a === b) return true;
-    if (a.length !== b.length) return false;
-    for (let k = 0; k < eqPairs.length; k += 2) if (eqPairs[k] === a && eqPairs[k + 1] === b) return true;
-    eqPairs.push(a, b);
-    try {
-      for (let i = 0; i < a.length; i++) if (!pySame(a[i], b[i])) return false;
-      return true;
-    } finally { eqPairs.length -= 2; }
-  }
+  if (Array.isArray(a) && Array.isArray(b)) return seqEq(a, b);
   return a === b;
+}
+// BK4 (6)・層4 F5: list／tuple の要素ごとの比較を、再帰でなく明示のスタックで行う（入れ子が約 9000 段でも JS の呼び出しスタックを使わない。
+//   python3 3.14.4 も 9000 段の == は True を返す・実測）。自分自身を要素に持つ別々の list 同士（`a.append(a)`・`b.append(b)` の a == b）は、
+//   比べている途中の同じ組（いまスタックにある組）に戻ったら等しいとみなす（python3 は RecursionError＝残る差）。要素は先頭から順に比べ、
+//   違いが出たらそこで止める（再帰の版と同じ順序）。
+function seqEq(a0, b0) {
+  const stack = [], onPath = new Map();
+  // 組 (x, y) を開く。等しくないと決まれば false。同じもの・途中の組は開かずに true。
+  const open = (x, y) => {
+    if (x === y) return true;
+    if (TUPLES.has(x) !== TUPLES.has(y) || x.length !== y.length) return false;
+    let ys = onPath.get(x);
+    if (ys && ys.has(y)) return true;
+    if (!ys) onPath.set(x, ys = new Set());
+    ys.add(y);
+    stack.push({ x, y, i: 0 });
+    return true;
+  };
+  if (!open(a0, b0)) return false;
+  while (stack.length) {
+    const f = stack[stack.length - 1];
+    if (f.i >= f.x.length) { stack.pop(); onPath.get(f.x).delete(f.y); continue; }
+    const u = f.x[f.i], v = f.y[f.i];
+    f.i++;
+    if (Array.isArray(u) && Array.isArray(v)) { if (!open(u, v)) return false; }
+    else if (!pySame(u, v)) return false;
+  }
+  return true;
 }
 // BK4: list の要素の比較（==・in・count・index・remove）。python3 の PyObject_RichCompare の同一性の近道と同じく、同じもの（Object.is＝
 //   同じ list・同じ nan）は等しい。それ以外は pyEq。
 function pySame(x, e) { return Object.is(x, e) || pyEq(x, e); }
 // BK4 (8): dict のキー。bool は数（Python の True は 1 と同じキー）。dict のキーは JS のプロパティ名（文字列）のままの模型。
-function pyKey(k) { return typeof k === 'boolean' ? Number(k) : k; }
+//   層4 F7: None は 'None'（表示も None・`"null" in {None: 1}` は False。是正前は JS の "null"）。残る差: `"None" in {None: 1}` は True（`"1" in {1: …}` と同じ）。
+function pyKey(k) { return typeof k === 'boolean' ? Number(k) : k === null ? 'None' : k; }
 // BK2 (10): Python の in／not in（parser_py の comparison が比較演算子と同じ段で読む＝連鎖も同じ規則）。list／tuple＝要素のどれかと
 //   ==（BK4 から pySame＝bool と数を数として比べ、要素がリストのときは要素ごと＝(6) の是正と同じ規則）・str＝部分文字列
 //   （左も str のときだけ。python3 は左が str でなければ TypeError）・dict＝キー（d[k]／d.get(k) と同じく、キーは文字列にして引く＝
@@ -922,8 +976,9 @@ function pyIn(a, b, line) {
 //   C は無改変（C の % は切り捨て剰余＝JS の % と同じ・== は === のまま）。
 // BK4 (3): py の除数の False と 0 の負のべき（`0 ** -1`・`0.0 ** -1.5`・`False ** -2`）も divZero（python3 は ZeroDivisionError）。是正前は
 //   `1 / False`・`1 // False` が Infinity・`7 % False` が NaN・`0 ** -1` が Infinity。C は従来どおり（除数の 0 だけ）。
-// BK4: py の None（null）を ==・!=・in・not in 以外の演算子に使うと実行時エラー interp.err.noneOp（python3 は TypeError。`"%s" % None` の
-//   書式は通す）。是正前は None が数の 0 で、`None + 1` は 1・`1 / None` は divZero。
+// BK4: py の None（null）を ==・!=・in・not in 以外の演算子に使うと実行時エラー interp.err.noneOp（python3 は TypeError）。左が文字列の `%`
+//   （書式）はここでは通し、書式の中の扱いは pyPercentFormat が決める（`%s` は None・数の指定子 d i f x X は noneOp）。是正前は None が数の 0 で、
+//   `None + 1` は 1・`1 / None` は divZero。
 const NONE_OK = ['==', '!=', 'in', 'not in'];
 function applyBin(op, a, b, line, lang) {
   const divErr = () => new RuntimeError('divZero', {}, line);   // AP16→AP17: /0 → 行番号付き i18n 実行時エラー
@@ -946,11 +1001,12 @@ function applyBin(op, a, b, line, lang) {
       return a / b;
     // AP16: py 文字列フォーマット ("x=%d"%5 → "x=5")。数値%数値は剰余 (0 剰余はエラー)。
     case '%':
-      if (typeof a === 'string') return pyPercentFormat(a, b);
+      if (typeof a === 'string') return pyPercentFormat(a, b, line, py);
       if (zero(b)) throw divErr();
       return lang === 'py' ? pyMod(a, b) : a % b;
     case '**':
-      if (py && zero(a) && b < 0) throw divErr();
+      // BK4 層4 F6: 指数が -inf のときは除く（`0 ** -math.inf` は python3 も inf）。
+      if (py && zero(a) && b < 0 && b !== -Infinity) throw divErr();
       return Math.pow(a, b);
     case '//':   // py だけ（C の // はコメント）
       if (zero(b)) throw divErr();
