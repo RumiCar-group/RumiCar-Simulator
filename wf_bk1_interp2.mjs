@@ -1,4 +1,4 @@
-// wf_bk1_interp2.mjs — Stage BK「インタプリタ是正 II」の常設ゲート。BK1 で新設し、BK2〜BK5 が章を足す。
+// wf_bk1_interp2.mjs — Stage BK「インタプリタ是正 II」の常設ゲート。BK1 で新設し、BK2〜BK5 が章を足す（BK2＝G 章）。
 // ════════════════════════════════════════════════════════════════════════════
 // 学習者が自力で原因に辿り着けないエラー（英語モードでも日本語・行番号の無い JS の RangeError・状況に合わない文言）の是正を、
 //   本番経路 buildController(src, lang, buildApi(world)) → setup()/tick()（と fleet の tickSlot・race_engine の runRace）で
@@ -28,6 +28,20 @@
 //      1 文字も違わない。fleet の tickSlot の実行時エラーのログにもヒントが載る。種類（i18nKey）は stepLimit のまま。
 //   F) 出荷 23 本（PROGRAMS）の不変: 1 台ずつ自分のコースで runRace（20 秒・trace）の verifyHash／traceHash／tick 数と、buildController で
 //      300 tick 走らせた出力（print／Serial）の sha256 が是正前（e65643e）の定数と一致。出荷サンプルの呼び出しの入れ子の最大が上限以下。
+//
+// BK2（Python 構文の穴 I・py だけ）— 是正前の木（06d65ab）で `--root <木>` を付けて回すと G 章（是正前と同じ形の行を除く）と A 章の BK2 新設の
+//   3 本・本数が赤になる（2026-10-13 の実測: pass=242 fail=123＝赤は A 章の 8〔新設 3 本の ja/en・本数・全種〕と G 章だけ・A〜F の BK1 の述語は緑）。A 章: `x = (1`（閉じていない括弧になった）と
+//   `a = 1; b = 2`（`;` を受理した）の 2 本を、是正前と同じ文言・行の別の本文に差し替え、parser_py の BK2 の新しい構文エラー
+//   （unclosed・augList・bytes）を足した（発生箇所は parser_py 4 → 9）。
+//   G) 本番経路の値と構文エラーを python3 3.14.4 の実測（定数・checkPy3／checkPy3Line で行まで突き合わせ）と照合する。表の最後の列は是正前の値。
+//      G-1 (18)(28) `;` で区切った単純文（トップレベル・字下げしたブロック・1 行の suite・関数の本体の global／import の後ろ）・行末の `;`・
+//          `;;`／先頭の `;` は構文エラー。G-2 (29) 文の後ろの同じ行の続きは構文エラー（字下げしたブロック・トップレベル・1 行の suite のキーワード
+//          以外の文。BJ6 の 1 行の suite の期待値〔文言・行〕は不変）。G-3 (20) 隣り合う文字列リテラルの連結（f-string・三重引用符・括弧の中の改行）・
+//          名前や数の後ろの f-string は呼び出しにしない。G-4 (21) 接頭辞 r／R・fr／rf・u／U と b（bytes＝構文エラー）・raw の `\"`・閉じていない r"。
+//          G-5 (10) in／not in（list・tuple・str・dict・連鎖・if／while／for の中）と右側の型のエラー。G-6 (9) リストの左辺・列の代入（右辺を
+//          list／tuple／str／dict に分け、数が違えばエラー）・`[a, b] += …` は構文エラー・(2) `--1`／`++x`／`not not x`・C の `++`／`--` は無改変。
+//          G-7 括弧の中の改行（暗黙の行継続）と閉じていない括弧（括弧の行で報告・括弧より前のエラーが先）。
+//      出荷 py の AST 指紋（wf_bj1_pysem E 章）・23 本の出力と runRace（F 章）は不変。
 //
 // 使い方: node wf_bk1_interp2.mjs              … 検査
 //         node wf_bk1_interp2.mjs --root <dir>  … <dir>/public/js の product で回す（改修前の木で赤になることの確認用）
@@ -111,6 +125,17 @@ function checkPy3Err(label, pySrc, re) {
   const r = py3(pySrc); py3Checked++;
   ok(!!r.err && re.test(r.err), `${label}: python3 ${PY3} も ${re} で止まる（実 ${r.err ? r.err : 'エラーなし ' + J(r.out)}）`);
 }
+// BK2: python3 でも同じ本文が re の例外で止まり、その行（traceback の最後の File "<string>", line N）が line であること（wf_bj1_pysem と同じ見方）。
+function checkPy3Line(label, pySrc, re, line) {
+  if (!PY3) return;
+  const r = spawnSync('python3', ['-I', '-W', 'ignore', '-c', pySrc], { encoding: 'utf8', timeout: 20000 });
+  py3Checked++;
+  const last = (r.stderr || '').trim().split('\n').pop();
+  const m = [...(r.stderr || '').matchAll(/File "<string>", line (\d+)/g)].pop();
+  const got = m ? Number(m[1]) : null;
+  ok(!r.error && r.status !== 0 && re.test(last) && got === line,
+    `${label}: python3 ${PY3} も ${re} で行 ${line}（実 ${r.error || r.status === 0 ? 'エラーなし' : last + '・行 ' + got}）`);
+}
 
 console.log(`[BK1] wf_bk1_interp2 — product: ${JS}${ROOT === HERE ? '' : '（--root）'}`);
 console.log(`  python3: ${PY3 ? PY3 + '（定数と同じ本文の実行結果を突き合わせる）' : '不在（定数＝2026-10-13 の Python 3.14.4 の実測で判定）'}`);
@@ -134,15 +159,25 @@ const SRC_ERR = [
     "字句エラー: 不明な文字 '@' (行 2)", "Lexical error: unknown character '@' (line 2)"],
   ['不明な文字（C の #define の置換本体）', 'c', 'int a;\n#define S @\n' + cLoop(''), 'interp.lex.badChar', 2,
     "字句エラー: 不明な文字 '@' (行 2)", "Lexical error: unknown character '@' (line 2)"],
-  ['eat の期待（py・probe の syntax err text）', 'py', 'x = (1', 'interp.syn.expected', 1,
-    "構文エラー(Py): ')' を期待しましたが 'NEWLINE' (行 1)", "Syntax error (Py): expected ')' but got 'NEWLINE' (line 1)"],
+  // BK2: 下の 2 本は本文を差し替えた（`x = (1` は閉じていない括弧 interp.syn.unclosed に・`a = 1; b = 2` は `;` の受理で通るようになった＝G 章）。
+  //   差し替えた本文の ja の文言と行も e65643e の木で採った値（是正前と同じ）。
+  ['eat の期待（py・引数の間のカンマ忘れ）', 'py', 'x = foo(1 2)', 'interp.syn.expected', 1,
+    "構文エラー(Py): ')' を期待しましたが '2' (行 1)", "Syntax error (Py): expected ')' but got '2' (line 1)"],
   ['1 行の suite のキーワードの文の続き（py）', 'py', 'x = 1\nif x: break 5', 'interp.syn.unexpected', 2,
     "構文エラー(Py): 予期しないトークン '5' (行 2)", "Syntax error (Py): unexpected token '5' (line 2)"],
   ['複合代入のタプルの左辺（py）', 'py', 'a = 1\nb = 2\na, b += 1', 'interp.syn.augTuple', 3,
     "構文エラー(Py): 複合代入 '+=' の左辺に複数の変数（a, b のようなタプル）は書けません（1 つずつ代入してください） (行 3)",
     "Syntax error (Py): the left side of the compound assignment '+=' cannot be several variables (a tuple such as a, b); assign them one at a time (line 3)"],
-  ['primary の予期しないトークン（py の ;）', 'py', 'a = 1; b = 2', 'interp.syn.unexpected', 1,
-    "構文エラー(Py): 予期しないトークン ';' (行 1)", "Syntax error (Py): unexpected token ';' (line 1)"],
+  ['primary の予期しないトークン（py の式の位置の )）', 'py', 'a = 1\nb = )', 'interp.syn.unexpected', 2,
+    "構文エラー(Py): 予期しないトークン ')' (行 2)", "Syntax error (Py): unexpected token ')' (line 2)"],
+  // BK2 新設（parser_py）: ja は BK2 の文言（是正前は別の文言＝G 章の表の最後の列）。
+  ['閉じていない括弧（py・BK2 新設）', 'py', 'x = 1\ny = (2', 'interp.syn.unclosed', 2,
+    "構文エラー(Py): '(' が閉じられていません（対応する閉じ括弧がありません） (行 2)", "Syntax error (Py): '(' was never closed (there is no matching closing bracket) (line 2)"],
+  ['リストの左辺の複合代入（py・BK2 新設）', 'py', 'a = 1\n[a, b] += 1', 'interp.syn.augList', 2,
+    "構文エラー(Py): 複合代入 '+=' の左辺にリスト（[a, b] のような）は書けません（1 つずつ代入してください） (行 2)",
+    "Syntax error (Py): the left side of the compound assignment '+=' cannot be a list (such as [a, b]); assign the variables one at a time (line 2)"],
+  ['bytes リテラル（py・BK2 新設）', 'py', 'x = 1\ny = b"ab"', 'interp.syn.bytes', 2,
+    '構文エラー(Py): bytes リテラル（b"…）は未対応です。文字列は b を付けずに書いてください (行 2)', 'Syntax error (Py): bytes literals (b"…) are not supported; write the string without the b prefix (line 2)'],
   ['eat の期待（C のキャスト）', 'c', cLoop('  float x = 3.7; int y = (int)x;'), 'interp.syn.expected', 3,
     "構文エラー(C): ';' を期待しましたが 'x' (行 3)", "Syntax error (C): expected ';' but got 'x' (line 3)"],
   ['switch の case/default（C）', 'c', cLoop('  switch (1) { x = 1; }'), 'interp.syn.caseDefault', 3,
@@ -153,7 +188,7 @@ const SRC_ERR = [
 for (const [label, lang, code, key, line, wantJa, wantEn] of SRC_ERR) {
   const { ja, en } = runBoth(code, lang);
   ok(ja.err === wantJa && ja.line === line && ja.key === key,
-    `A ${label}: ja ${J(ja.err)}・行 ${ja.line}・${ja.key}（期待 是正前と同じ ${J(wantJa)}・行 ${line}・${key}）`);
+    `A ${label}: ja ${J(ja.err)}・行 ${ja.line}・${ja.key}（期待 ${label.includes('BK2 新設') ? 'BK2 の文言' : '是正前と同じ'} ${J(wantJa)}・行 ${line}・${key}）`);
   ok(en.err === wantEn && en.line === line && en.key === key && !JP_RE.test(en.err || ''),
     `A ${label}: en ${J(en.err)}（期待 ${J(wantEn)}・日本語なし）`);
 }
@@ -161,12 +196,12 @@ for (const [label, lang, code, key, line, wantJa, wantEn] of SRC_ERR) {
   const lex = [...src('interp/lexer.js').matchAll(/throw lexErr\('([A-Za-z]+)'/g)].map((m) => m[1]);
   const py = [...src('interp/parser_py.js').matchAll(/(?<!function )\berr\('([A-Za-z]+)'/g)].map((m) => m[1]);
   const c = [...src('interp/parser_c.js').matchAll(/(?<!function )\berr\('([A-Za-z]+)'/g)].map((m) => m[1]);
-  ok(lex.length === 4 && py.length === 4 && c.length === 3,
-    `A 発生箇所の本数: lexer ${lex.length}・parser_py ${py.length}・parser_c ${c.length}（期待 4・4・3＝11）`);
+  ok(lex.length === 4 && py.length === 9 && c.length === 3,
+    `A 発生箇所の本数: lexer ${lex.length}・parser_py ${py.length}・parser_c ${c.length}（期待 4・9・3＝16。BK1 は 4・4・3＝11、BK2 が parser_py に 5 箇所〔err の中と program の末尾の unclosed・inlineCompound の unexpected・augList・bytes〕）`);
   const covered = new Set(SRC_ERR.map((r) => r[3]));
   const want = [...lex.map((s) => 'interp.lex.' + s), ...py.map((s) => 'interp.syn.' + s), ...c.map((s) => 'interp.syn.' + s)];
   const miss = [...new Set(want)].filter((k) => !covered.has(k));
-  ok(want.length === 11 && miss.length === 0, `A 発生箇所の全種（${[...new Set(want)].join('・')}）が表で起きている${miss.length ? '（未検査 ' + miss.join(', ') + '）' : ''}`);
+  ok(want.length === 16 && miss.length === 0, `A 発生箇所の全種（${[...new Set(want)].join('・')}）が表で起きている${miss.length ? '（未検査 ' + miss.join(', ') + '）' : ''}`);
   // 字句・構文エラーの line は構造値（setLang に依らない）・en の行の接尾は (line N)。
 }
 
@@ -368,6 +403,213 @@ const OUT_PIN = '129131c7aedd7e18';   // e65643e で採った値
   ok(oh === OUT_PIN, `F 23 本の 300 tick の出力（print／Serial・エラー）の sha256 先頭 ${oh}（是正前 ${OUT_PIN}）`);
   ok(ROOT !== HERE || (maxDepth >= 1 && maxDepth <= LIM), `F 出荷 23 本の呼び出しの入れ子の最大 ${maxDepth} 段 ≤ 上限 ${LIM}`);
 }
+
+// ── G) BK2 Python 構文の穴 I ─────────────────────────────────────────────────────
+console.log('\nG) BK2 Python 構文の穴 I（; ・行末の続き・隣接文字列・接頭辞・in・リストの左辺・単項の重ね・括弧の中の改行）— 是正前（06d65ab）の値は各表の最後の列');
+// 値の行: [ラベル, 本文, tick 数, 期待の出力（python3 3.14.4 の実測＝checkPy3 で突き合わせ）, 是正前（06d65ab）の結果]。
+//   tick 数が 1 以上の本文は Model A（def loop():）で、python3 には setup()／loop() の呼び出しを足して渡す（pyOf）。
+const pyOf = (code, ticks) => (ticks ? code + '\nloop()'.repeat(ticks) : code);
+function gVals(tag, rows) {
+  for (const [label, code, ticks, want, pre] of rows) {
+    const r = run(code, 'py', ticks);
+    ok(!r.err && J(r.out) === J(want), `${tag} ${label} → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ${J(want)}・是正前 ${pre}）`);
+    checkPy3(`${tag} ${label}`, pyOf(code, ticks), want);
+  }
+}
+// エラーの行: [ラベル, 本文, キー, 行, params（null＝照合しない）, python3 の例外の正規表現, 是正前（06d65ab）の結果]。
+//   ja／en の文言はカタログの文言（頭＋本体＋行の接尾）そのもの・en に日本語なし・i18nKey と line の構造値（A 章と同じ見方。新しいキーの
+//   文言そのものは A 章が定数で照合する）。
+function gErrs(tag, rows) {
+  for (const [label, code, key, line, params, py3re, pre] of rows) {
+    const { ja, en } = runBoth(code, 'py');
+    const syn = key.startsWith('interp.syn.'), lex = key.startsWith('interp.lex.');
+    const render = (msg, lang) => {
+      if (msg === undefined) return null;
+      let s = msg; for (const k in (ja.params || {})) s = s.split('{' + k + '}').join(ja.params[k]);
+      const head = syn ? (lang === 'ja' ? msgJa('interp.syn.head.py') : msgEn('interp.syn.head.py')) : lex ? (lang === 'ja' ? msgJa('interp.lex.head') : msgEn('interp.lex.head')) : '';
+      return head + s + (lang === 'ja' ? ` (行 ${line})` : ` (line ${line})`);
+    };
+    const wantJa = render(msgJa(key), 'ja'), wantEn = render(msgEn(key), 'en');
+    ok(ja.key === key && ja.line === line && (params === null || J(ja.params) === J(params)) && ja.err === wantJa && en.err === wantEn && !JP_RE.test(en.err || ''),
+      `${tag} ${label} → ${key}（行 ${line}${params ? '・' + J(params) : ''}）（実 ja ${J(ja.err)}・en ${J(en.err)}・是正前 ${pre}）`);
+    if (py3re) checkPy3Line(`${tag} ${label}`, code, py3re, line);
+  }
+}
+
+// G-1 (18)(28) `;` で区切った単純文。行末の `;` は受理・`;;` と先頭の `;` は構文エラー（python3 も SyntaxError）。
+gVals('G-1', [
+  ['a = 1; b = 2（probe の (18)）', 'a = 1; b = 2\nprint(a, b)', 0, ['1 2'], "「予期しないトークン ';' (行 1)」"],
+  ['関数の中の global x; x = 1（probe の (28)）', 'x = 0\ndef f():\n    global x; x = 1\nf()\nprint(x)', 0, ['1'], '["0"]（x = 1 が黙って消えた）'],
+  ['トップレベルの import math; x = 1', 'import math; x = 1\nprint(x)', 0, ['1'], '「未定義の変数/名前: x (行 2)」'],
+  ['字下げしたブロックの x = 1; y = 2', 'if 1:\n    x = 1; y = 2\nprint(x, y)', 0, ['1 2'], "「予期しないトークン ';' (行 2)」"],
+  ['関数の本体の a = 1; b = 2', 'def f():\n    a = 1; b = 2\n    return a + b\nprint(f())', 0, ['3'], "「予期しないトークン ';' (行 2)」"],
+  ['global x; x = 1; return x + 1', 'x = 0\ndef f():\n    global x; x = 1; return x + 1\nprint(f(), x)', 0, ['2 1'], '[" 0"]（; 以降が消え、f() は値なし・x は 0）'],
+  ['行末の ;（x = 1;）', 'x = 1;\nprint(x)', 0, ['1'], "「予期しないトークン ';' (行 1)」"],
+  ['空白を挟んだ ; と行末の ;', 'x = 1 ; y = 2 ;\nprint(x, y)', 0, ['1 2'], "「予期しないトークン ';' (行 1)」"],
+  ['1 行の suite の ;（for … : print(i); print(i * 10)）', 'for i in range(2): print(i); print(i * 10)', 0, ['0', '0', '1', '10'], "「予期しないトークン ';' (行 1)」"],
+  ['1 行の suite の ;（while … : x += 1; print(x)）', 'x = 0\nwhile x < 3: x += 1; print(x)', 0, ['1', '2', '3'], "「予期しないトークン ';' (行 2)」"],
+  ['def loop() の中の a = 1; b = 2（Model A・1 tick）', 'def loop():\n    a = 1; b = 2\n    print(a + b)', 1, ['3'], "「予期しないトークン ';' (行 2)」"],
+]);
+gErrs('G-1', [
+  ['x = 1;;', 'x = 1;;', 'interp.syn.unexpected', 1, { tok: ';' }, /^SyntaxError/, "「予期しないトークン ';' (行 1)」（同じ）"],
+  ['先頭の ;', 'x = 0\n;x = 1', 'interp.syn.unexpected', 2, { tok: ';' }, /^SyntaxError/, "「予期しないトークン ';' (行 2)」（同じ）"],
+  ['x = 1; ;', 'x = 1\n\ny = 2; ;', 'interp.syn.unexpected', 3, { tok: ';' }, /^SyntaxError/, "「予期しないトークン ';' (行 3)」（同じ）"],
+]);
+
+// G-2 (29) 文の後ろの同じ行の続きは構文エラー（行＝その行・トークン＝続きの先頭）。是正前は字下げしたブロック・トップレベル・1 行の suite の
+//   キーワード以外の単純文で、続きを次の文として黙って読んだ。1 行の suite のキーワードの文（BJ6）は同じ文言・行のまま。
+gErrs('G-2', [
+  ['x = 1 2（probe の (29)）', 'x = 1 2\nprint(x)', 'interp.syn.unexpected', 1, { tok: 2 }, /^SyntaxError/, '["1"]（2 を次の文として捨てた）'],
+  ['print(1) print(2)', 'print(1) print(2)', 'interp.syn.unexpected', 1, { tok: 'print' }, /^SyntaxError/, '["1","2"]'],
+  ['字下げしたブロックの print(1) print(2)', 'if 1:\n    print(1) print(2)', 'interp.syn.unexpected', 2, { tok: 'print' }, /^SyntaxError/, '["1","2"]'],
+  ['字下げしたブロックの x = 1 2', 'def f():\n    x = 1 2\n    return x\nprint(f())', 'interp.syn.unexpected', 2, { tok: 2 }, /^SyntaxError/, '["1"]'],
+  ['字下げしたブロックの break 5', 'for i in range(2):\n    break 5\nprint(i)', 'interp.syn.unexpected', 2, { tok: 5 }, /^SyntaxError/, '["0"]'],
+  ['関数の本体の return 1 2', 'def f():\n    return 1 2\nprint(3)', 'interp.syn.unexpected', 2, { tok: 2 }, /^SyntaxError/, '["3"]'],
+  ['字下げしたブロックの y = 2 3', 'x = 1\nif x:\n    y = 2 3', 'interp.syn.unexpected', 3, { tok: 3 }, /^SyntaxError/, 'エラー無し'],
+  ['トップレベルの break 5', 'x = 1\nbreak 5', 'interp.syn.unexpected', 2, { tok: 5 }, /^SyntaxError/, '「break はループ (for / while。C は switch も) の中に書いてください。… (行 2)」'],
+  ['1 行の suite のキーワード以外の文の続き（if 1: y = 2 3）', 'if 1: y = 2 3', 'interp.syn.unexpected', 1, { tok: 3 }, /^SyntaxError/, 'エラー無し'],
+  ['文字列の後ろの数（x = "a" 5）', 'x = "a" 5', 'interp.syn.unexpected', 1, { tok: 5 }, /^SyntaxError/, 'エラー無し'],
+  ['1 行の suite のキーワードの文の続き（BJ6 の if x: break 5・不変）', 'x = 1\nif x: break 5', 'interp.syn.unexpected', 2, { tok: 5 }, /^SyntaxError/, '同じ（BJ6）'],
+  ['1 行の suite の複合文（BJ6 の if x: if x: pass・不変）', 'x = 1\nif x: if x: pass', 'interp.syn.unexpected', 2, { tok: ':' }, /^SyntaxError/, '同じ（BJ6）'],
+]);
+{ // 是正前と同じ形: コメントは行末の続きではない・`\` の行継続の後ろの続きは継続先の行で報告。
+  gVals('G-2', [['行末のコメント', 'x = 1  # コメント\nprint(x)', 0, ['1'], '同じ'], ['\\ の行継続', 'x = 1 + \\\n    2\nprint(x)', 0, ['3'], '同じ']]);
+  gErrs('G-2', [['\\ の行継続の後ろの続き', 'x = 1 + \\\n    2 3', 'interp.syn.unexpected', 2, { tok: 3 }, /^SyntaxError/, 'エラー無し']]);
+}
+
+// G-3 (20) 隣り合う文字列リテラルの連結（f-string・三重引用符・括弧の中の改行を含む）。
+gVals('G-3', [
+  ['s = "ab" "cd"', 's = "ab" "cd"\nprint(s)', 0, ['abcd'], '["ab"]（"cd" を別の文として捨てた）'],
+  ['print("ab" "cd")（probe の (20)）', 'print("ab" "cd")', 0, ['abcd'], "「')' を期待しましたが 'cd' (行 1)」"],
+  ['("ab"⏎ "cd")', 's = ("ab"\n     "cd")\nprint(s)', 0, ['abcd'], "「')' を期待しましたが 'NEWLINE' (行 2)」"],
+  ['f"{x}" "y"', 'x = 5\ns = f"{x}" "y"\nprint(s)', 0, ['5y'], '["5"]'],
+  ['"y" f"{x}" "z" f"{x}{x}"', 'x = 5\ns = "y" f"{x}" "z" f"{x}{x}"\nprint(s)', 0, ['y5z55'], '「呼び出し対象が関数ではありません (行 2)」（"y" の後ろの f-string の括弧を呼び出しと読んだ）'],
+  ['引用符の種類の混在と三重引用符', 's = "a" \'b\' """c""" \'\'\'d\'\'\'\nprint(s)', 0, ['abcd'], '["a"]'],
+  ['括弧の中のコメントを挟む', 's = ("a"  # 1 つ目\n     "b"\n)\nprint(s)', 0, ['ab'], "「')' を期待しましたが 'NEWLINE' (行 2)」"],
+  ['連結は % より先（"%d" "x" % 3）', 'print("%d" "x" % 3)', 0, ['3x'], "「')' を期待しましたが 'x' (行 1)」"],
+  ['連結はメソッド呼び出しより先（"a" "b".upper()）', 'print("a" "b".upper())', 0, ['AB'], "「')' を期待しましたが 'b' (行 1)」"],
+  ['f-string の式の中の連結', 'x = 5\nprint(f"{f\'{x}\' \'y\'}")', 0, ['5y'], "「')' を期待しましたが 'y' (行 2)」"],
+  ['f-string と raw の連結', 'x = 5\ns = f"{x}" r"\\n"\nprint(len(s))', 0, ['3'], '「未定義の変数/名前: r (行 2)」'],
+  ['f-string のメソッド呼び出し（従来どおり）', 'x = 5\ns = f"{x}a".upper()\nprint(s)', 0, ['5A'], '同じ'],
+  ['g (f"{x}")（空白を挟んだ呼び出し・従来どおり）', 'def g(a):\n    return a\nx = 5\nprint(g (f"{x}"))', 0, ['5'], '同じ'],
+]);
+// f-string の前が文字列以外（名前・数）なら呼び出しにしない（python3 も SyntaxError）。表示するトークンは f-string の開き引用符。
+gErrs('G-3', [
+  ['print f"{x}"（Python 2 の書き方）', 'x = 5\nprint f"{x}"', 'interp.syn.unexpected', 2, { tok: 'f"' }, /^SyntaxError/, '["5"]（print("" + x) の呼び出しとして黙って走った）'],
+  ['y = 3 f"{x}"', 'x = 5\ny = 3 f"{x}"', 'interp.syn.unexpected', 2, { tok: 'f"' }, /^SyntaxError/, '「呼び出し対象が関数ではありません (行 2)」'],
+  ['引数の中の 1 f"{x}"', 'x = 5\nprint("a", 1 f"{x}")', 'interp.syn.expected', 2, { want: ')', got: 'f"' }, /^SyntaxError/, '「呼び出し対象が関数ではありません (行 2)」'],
+]);
+
+// G-4 (21) 文字列の接頭辞。r／R＝raw・fr／rf（大文字小文字を問わない）＝raw の f-string・u／U＝通常・b を含む＝構文エラー interp.syn.bytes。
+gVals('G-4', [
+  ['r"a\\nb"（probe の (21)・長さ 4）', 's = r"a\\nb"\nprint(len(s), s)', 0, ['4 a\\nb'], "「未定義の変数/名前: r (行 1)」"],
+  ['R"a\\nb"', 's = R"a\\nb"\nprint(len(s))', 0, ['4'], "「未定義の変数/名前: R (行 1)」"],
+  ['rf"{x}\\n"', 'x = 5\ns = rf"{x}\\n"\nprint(len(s), s)', 0, ['3 5\\n'], "「未定義の変数/名前: rf (行 2)」"],
+  ['fr"{x}\\t"', 'x = 5\ns = fr"{x}\\t"\nprint(len(s))', 0, ['3'], "「未定義の変数/名前: fr (行 2)」"],
+  ['Rf"\\{x}"（\\ の後ろの { は置換フィールド）', 'x = 5\ns = Rf"\\{x}"\nprint(len(s), s)', 0, ['2 \\5'], "「未定義の変数/名前: Rf (行 2)」"],
+  ['u"a\\nb"（通常の文字列）', 's = u"a\\nb"\nprint(len(s))', 0, ['3'], "「未定義の変数/名前: u (行 1)」"],
+  ['U"ab"', 's = U"ab"\nprint(s)', 0, ['ab'], "「未定義の変数/名前: U (行 1)」"],
+  ['r"\\""（\\" は閉じ引用符にしない）', 's = r"\\""\nprint(len(s))', 0, ['2'], "「未定義の変数/名前: r (行 1)」"],
+  ["r'\\''", "s = r'\\''\nprint(len(s))", 0, ['2'], "「未定義の変数/名前: r (行 1)」"],
+  ['r"""a\\nb"""', 's = r"""a\\nb"""\nprint(len(s))', 0, ['4'], "「未定義の変数/名前: r (行 1)」"],
+  ['r"a\\⏎b"（\\ と改行の 2 文字）', 's = r"a\\\nb"\nprint(len(s))', 0, ['4'], "「未定義の変数/名前: r (行 1)」"],
+  ['接頭辞の文字は名前として使える', 'r = 5\nb = 3\nu = 4\nf = 2\nrb = 1\nprint(r + b + u + f + rb)', 0, ['15'], '同じ'],
+]);
+gErrs('G-4', [
+  ['b"a"', 'print(b"a")', 'interp.syn.bytes', 1, { open: 'b"' }, null, "「')' を期待しましたが 'a' (行 1)」"],
+  ["rB'ab'（2 行目）", "x = 1\ny = rB'ab'", 'interp.syn.bytes', 2, { open: "rB'" }, null, '「未定義の変数/名前: rB (行 2)」'],
+  ['"a" b"b"（連結の途中）', 'print("a" b"b")', 'interp.syn.bytes', 1, { open: 'b"' }, /^SyntaxError: cannot mix bytes and nonbytes literals/, "「')' を期待しましたが 'b' (行 1)」"],
+  ['閉じていない r"', 'x = 1\ns = r"abc', 'interp.lex.unterminated', 2, { open: 'r"', close: '"' }, /^SyntaxError: unterminated string literal/, '同じ字句エラーで開き引用符が " （接頭辞を含まない）'],
+  ['r"a\\" は閉じていない（\\" は閉じ引用符にしない）', 's = r"a\\"', 'interp.lex.unterminated', 1, { open: 'r"', close: '"' }, /^SyntaxError: unterminated string literal/, '同じ字句エラーで開き引用符が " （接頭辞を含まない）'],
+]);
+
+// G-5 (10) in／not in（list・tuple・str〔部分文字列〕・dict〔キー〕）。真偽は `1 if (…) else 0` で数にして python3 と照合する（bool の表示は BK4）。
+{
+  const IN = [
+    ['1 in [1, 2]', '1'], ['3 in [1, 2]', '0'], ['3 not in [1, 2]', '1'], ['2 in (1, 2)', '1'], ['"x" in ["x", "y"]', '1'],
+    ['"bc" in "abc"', '1'], ['"ac" in "abc"', '0'], ['"" in "abc"', '1'], ['"a" not in "abc"', '0'],
+    ['"k" in {"k": 1}', '1'], ['"z" in {"k": 1}', '0'], ['1 in {1: "a"}', '1'], ['"k" not in {"k": 1}', '0'],
+    ['True in [1]', '1'], ['1 in [True]', '1'], ['0 in [False]', '1'], ['1.0 in [1]', '1'],
+    ['1 < 2 in [True]', '0'], ['not 1 in [1]', '0'], ['1 in [1] == True', '0'], ['(1 in [1]) == True', '1'],
+  ];
+  gVals('G-5', IN.map(([e, v]) => [e, `print(1 if (${e}) else 0)`, 0, [v], "「')' を期待しましたが 'in'／'not'」"]));
+}
+gVals('G-5', [
+  ['if 2 in x:', 'x = [1, 2]\nif 2 in x:\n    print("yes")', 0, ['yes'], "「':' を期待しましたが 'in' (行 2)」"],
+  ['while n not in [3]:', 'n = 0\nwhile n not in [3]:\n    n += 1\nprint(n)', 0, ['3'], "「':' を期待しましたが 'not' (行 2)」"],
+  ['for … in と同じ行の in（for c in "ab": … c in "xa"）', 'for c in "ab":\n    print(1 if c in "xa" else 0)', 0, ['1', '0'], "「'else' を期待しましたが 'in' (行 2)」"],
+  ['x = 1 in [1]（括弧の外）', 'x = 1 in [1]\nprint(1 if x else 0)', 0, ['1'], '「未定義の変数/名前: in (行 1)」'],
+]);
+gErrs('G-5', [
+  ['1 in 5（右が数）', 'x = 1\nprint(1 in 5)', 'interp.err.inRight', 2, {}, /^TypeError/, "「')' を期待しましたが 'in' (行 2)」"],
+  ['1 in "abc"（右が str・左が数）', 'print(1 in "abc")', 'interp.err.inStrLeft', 1, {}, /^TypeError: 'in <string>' requires string as left operand/, "「')' を期待しましたが 'in' (行 1)」"],
+]);
+
+// G-6 (9) リストの左辺・列の代入（右辺を列に分け、数が違えばエラー）・(2) 単項の重ね。
+gVals('G-6', [
+  ['[a, b] = [1, 2]（probe の (9)）', '[a, b] = [1, 2]\nprint(a, b)', 0, ['1 2'], '「代入先が不正です (行 1)」'],
+  ['[a, b] = 1, 2', '[a, b] = 1, 2\nprint(a, b)', 0, ['1 2'], '「代入先が不正です (行 1)」'],
+  ['[a, b] = "xy"', '[a, b] = "xy"\nprint(a, b)', 0, ['x y'], '「代入先が不正です (行 1)」'],
+  ['a, b = "xy"（タプルの左辺も str を分ける）', 'a, b = "xy"\nprint(a, b)', 0, ['x y'], '["xy "]（a が "xy"・b が未定義）'],
+  ['a, b = {"p": 1, "q": 2}（dict はキー）', 'a, b = {"p": 1, "q": 2}\nprint(a, b)', 0, ['p q'], '「Cannot convert object to primitive value」（JS の TypeError が漏れた・a が dict）'],
+  ['[a] = [5]（要素 1 つ）', '[a] = [5]\nprint(a + 1)', 0, ['6'], '「代入先が不正です (行 1)」'],
+  ['a, = [5]（要素 1 つのタプル）', 'a, = [5]\nprint(a + 1)', 0, ['6'], '["51"]（a が [5]）'],
+  ['(a, b), c = (1, 2), 3（入れ子）', '(a, b), c = (1, 2), 3\nprint(a, b, c)', 0, ['1 2 3'], '「代入先が不正です (行 1)」'],
+  ['[a, [b, c]] = [1, [2, 3]]（入れ子）', '[a, [b, c]] = [1, [2, 3]]\nprint(a, b, c)', 0, ['1 2 3'], '「代入先が不正です (行 1)」'],
+  ['[a, b] = [b, a]（入れ替え）', 'a = 1\nb = 2\n[a, b] = [b, a]\nprint(a, b)', 0, ['2 1'], '「代入先が不正です (行 3)」'],
+  ['[d[0], d[1]] = [3, 4]', 'd = [0, 0]\n[d[0], d[1]] = [3, 4]\nprint(d[0], d[1])', 0, ['3 4'], '「代入先が不正です (行 2)」'],
+  ['a, b = f()（従来どおり）', 'def f():\n    return 1, 2\na, b = f()\nprint(a, b)', 0, ['1 2'], '同じ'],
+  ['--1（probe の (2)）', 'print(--1)', 0, ['1'], "「予期しないトークン '--' (行 1)」"],
+  ['++x', 'x = 3\nprint(++x)', 0, ['3'], "「予期しないトークン '++' (行 2)」"],
+  ['not not x', 'x = 3\nprint(1 if not not x else 0, 1 if not not 0 else 0)', 0, ['1 0'], '同じ'],
+  ['-+-1・- - 1・3--2・3++2・--2**2', 'print(-+-1, - - 1, 3--2, 3++2, --2**2)', 0, ['1 1 5 5 4'], "「')' を期待しましたが '--' (行 1)」"],
+  ['y = x--1', 'x = 3\ny = x--1\nprint(y)', 0, ['4'], "「予期しないトークン '--' (行 2)」"],
+  ['---1・x---1・x++ + 1・--(2)・--.5', 'x = 3\nprint(---1, x---1, x++ + 1, --(2), --.5)', 0, ['-1 2 4 2 0.5'], "「予期しないトークン '--' (行 2)」"],
+  ['括弧の中で -- の後ろが次の行', 'x = 3\ny = (x--\n     1)\nprint(y)', 0, ['4'], "「')' を期待しましたが '--' (行 2)」"],
+]);
+gErrs('G-6', [
+  ['[a, b] += [1]', '[a, b] += [1]', 'interp.syn.augList', 1, { op: '+=' }, /^SyntaxError: 'list' is an illegal expression for augmented assignment/, '「未定義の変数/名前: a (行 1)」'],
+  ['[a] -= 1（2 行目）', 'a = 1\n[a] -= 1', 'interp.syn.augList', 2, { op: '-=' }, /^SyntaxError: 'list' is an illegal expression for augmented assignment/, '「代入先が不正です (行 2)」'],
+  ['a, b = [1]（足りない）', 'a, b = [1]', 'interp.err.unpack', 1, { n: 2 }, /^ValueError: not enough values to unpack/, 'エラー無し（print(a, b) は "1 "＝b が未定義）'],
+  ['a, b = [1, 2, 3]（多い）', 'x = 0\na, b = [1, 2, 3]', 'interp.err.unpack', 2, { n: 2 }, /^ValueError: too many values to unpack/, 'エラー無し（print(a, b) は "1 2"＝3 を捨てた）'],
+  ['[a, b] = 5（数）', '[a, b] = 5', 'interp.err.unpack', 1, { n: 2 }, /^TypeError: cannot unpack non-iterable int object/, '「代入先が不正です (行 1)」'],
+  ['[a] = 5（要素 1 つ・数）', 'x = 1\n[a] = 5', 'interp.err.unpack', 2, { n: 1 }, /^TypeError: cannot unpack non-iterable int object/, '「代入先が不正です (行 2)」'],
+  // 後置の `x++`／`x--`（C の癖）は従来どおり 1 トークンの構文エラー（後ろが被演算子で始まらない＝lexer が分けない）。
+  ['x++（後置）', 'x = 1\nx++\nprint(x)', 'interp.syn.unexpected', 2, { tok: '++' }, /^SyntaxError/, "同じ（「予期しないトークン '++' (行 2)」）"],
+  ['x--; と行末のコメント', 'x = 1\nx--;  # c', 'interp.syn.unexpected', 2, { tok: '--' }, /^SyntaxError/, "同じ（「予期しないトークン '--' (行 2)」）"],
+  ['print(x--)', 'x = 1\nprint(x--)', 'interp.syn.expected', 2, { want: ')', got: '--' }, /^SyntaxError/, "同じ（「')' を期待しましたが '--' (行 2)」）"],
+]);
+{ // C は無改変: `++`／`--` は 1 トークン（前置・後置）。
+  const r = run('void setup(){\n  int i = 5; i--; i++; i--;\n  print(i); print(--i); print(i++); print(i);\n}\nvoid loop(){}', 'c');
+  ok(!r.err && J(r.out) === J(['4', '3', '3', '4']), `G-6 C の i--／++i／i++ は従来どおり → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ["4","3","3","4"]）`);
+}
+
+// G-7 (20) 括弧 ( [ { の中の改行は文の続き（暗黙の行継続）・閉じていない括弧は「'(' が閉じられていません」（行＝括弧の行）。
+gVals('G-7', [
+  ['複数行のリスト', 'x = [1,\n     2]\nprint(len(x))', 0, ['2'], "「予期しないトークン 'NEWLINE' (行 2)」"],
+  ['複数行の辞書', 'd = {\n  "a": 1,\n  "b": 2\n}\nprint(d["b"])', 0, ['2'], "「予期しないトークン 'NEWLINE' (行 2)」"],
+  ['複数行の仮引数と引数', 'def f(a,\n      b):\n    return a + b\nprint(f(1,\n        2))', 0, ['3'], "「'ID' を期待しましたが 'NEWLINE' (行 2)」"],
+  ['複数行の式', 'x = (1 +\n     2)\nprint(x)', 0, ['3'], "「予期しないトークン 'NEWLINE' (行 2)」"],
+  ['複数行の if の条件', 'if (1 and\n    1):\n    print("ok")', 0, ['ok'], "「予期しないトークン 'NEWLINE' (行 2)」"],
+  ['def loop() の中の字下げより浅い続きの行（Model A・1 tick）', 'def loop():\n    v = [1,\n  2]\n    print(len(v))', 1, ['2'], "「予期しないトークン 'NEWLINE' (行 3)」"],
+  ['複数行の from … import (…)', 'from math import (sqrt,\n    floor)\nprint(1)', 0, ['1'], "「予期しないトークン 'INDENT' (行 2)」"],
+]);
+{ // 複数行の文の後ろの行番号は物理行（文字列の中の改行と同じ）。複数行の文の実行時エラーの行は文の行（python3 も式の始まりの行）。
+  const a = run('x = [1,\n 2]\ny = 1 / 0', 'py'), b = run('x = (1 +\n     2) / 0', 'py');
+  ok(a.key === 'interp.err.divZero' && a.line === 3 && b.key === 'interp.err.divZero' && b.line === 1,
+    `G-7 複数行のリストの後ろの文のゼロ除算は行 3・複数行の式のゼロ除算は文の行 1（実 ${a.line}・${b.line}・是正前はどちらも「予期しないトークン 'NEWLINE' (行 2)」）`);
+  checkPy3Line('G-7 複数行のリストの後ろの文のゼロ除算', 'x = [1,\n 2]\ny = 1 / 0', /^ZeroDivisionError/, 3);
+  checkPy3Line('G-7 複数行の式のゼロ除算', 'x = (1 +\n     2) / 0', /^ZeroDivisionError/, 1);
+}
+gErrs('G-7', [
+  ['x = (1（probe の syntax err text・末尾で閉じていない）', 'x = (1', 'interp.syn.unclosed', 1, { ch: '(' }, /^SyntaxError: '\(' was never closed/, "「')' を期待しましたが 'NEWLINE' (行 1)」"],
+  ['x = (1⏎y = 2', 'x = (1\ny = 2', 'interp.syn.unclosed', 1, { ch: '(' }, /^SyntaxError: '\(' was never closed/, "「')' を期待しましたが 'NEWLINE' (行 2)」"],
+  ['一番内側の閉じていない括弧（[）', 'x = foo(1, [2\ny = 3', 'interp.syn.unclosed', 1, { ch: '[' }, /^SyntaxError: '\[' was never closed/, "「']' を期待しましたが 'NEWLINE' (行 2)」"],
+  ['def loop() の中の閉じ忘れ（後ろに if）', 'def loop():\n    d = sensor(1\n    if d > 100:\n        motor(1)', 'interp.syn.unclosed', 2, { ch: '(' }, /^SyntaxError: '\(' was never closed/, "「')' を期待しましたが 'NEWLINE' (行 3)」"],
+  ['import の読み飛ばしが閉じていない括弧の先まで呑む形', 'from math import (sqrt\nx = 1\nprint(x)', 'interp.syn.unclosed', 1, { ch: '(' }, /^SyntaxError: '\(' was never closed/, '["1"]（是正前は括弧の中も改行で区切ったので import の後ろが走った）'],
+  ['括弧より前のエラーが先', 'x = = 1\ny = (2', 'interp.syn.unexpected', 1, { tok: '=' }, /^SyntaxError: invalid syntax/, "同じ（「予期しないトークン '=' (行 1)」）"],
+  ['余分な閉じ括弧', 'x = 1)', 'interp.syn.unexpected', 1, { tok: ')' }, /^SyntaxError: unmatched '\)'/, "同じ（「予期しないトークン ')' (行 1)」）"],
+]);
 
 console.log(`\n  python3 との突き合わせ: ${PY3 ? py3Checked + ' 件' : '0 件（python3 不在）'}`);
 console.log(`[結果] pass=${pass} fail=${fail}`);

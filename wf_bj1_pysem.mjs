@@ -78,6 +78,8 @@
 //      あれば構文エラー（Python も SyntaxError。是正前は `def f(): return 1 2` が f を呼ばなければ黙って走った）。I-4 returnOutside の文言は ja／en とも
 //      `while` を含まない（py の while True: と C の while (1) の両方で通る。是正前は C の `return;` にも「while True: の 1 回分を終えるなら continue」）。
 //      I-5 CRLF 版の AST（line を含む）・値・エラーの行が LF 版と一致。
+//      BK2（Stage BK・2026-10-13）: `;` を受理した（(18)）ので、I-3 の `;` の 6 行は「是正前と同じ構文エラー」から I_SEMI（python3 と同じ出力）へ
+//      移した。1 行の suite の複合文・キーワードの文の続きの期待値（文言・行）は BJ6 のまま。BK2 の検査は wf_bk1_interp2 の G 章。
 //   G-9（G 章に追加）: BJ3 の挙動変化のうち v10.1.0 の木を `--root` にした走査で拾えなかった 2 つを、エラーになる形で検査する（トップレベルの
 //      `for random in range(2)` の後の `random.random()` が notMethod＝ループ変数がホストの名前を隠す・`range(1,5,None)` が rangeStepZero）。
 //      v10.1.0 の木では赤になり、出力の「実 走った …」がエラー無しで走った値を示す（BJ4 の拾い上げ用）。BJ6 の陰性対照（473f95b）では緑。
@@ -1098,27 +1100,37 @@ for (const [label, src, ticks, key, line, py3re] of I_OUT) {
   ok(!r.err && J(r.out) === J(['2']), `I-3 if x: y = 2 → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ["2"]・是正前と同じ）`);
   checkPy3('I-3 if x: y = 2', src, ['2']);
 }
-// 1 行の suite の複合文と `;` は是正前（473f95b）と同じ文言の構文エラー（完全一致）。[ラベル, 本文, エラー文, python3 の本文, python3: 正規表現＝SyntaxError／配列＝受理した出力]
-//   `;` は未対応（Python は受理＝未是正の差・python3 の出力を定数で持つ）。1 行の suite の global／import の読み飛ばしは `;` の手前で止める
-//   （止めないと `def f(): global x; x = 1` の x = 1 が黙って消える。字下げしたブロックの `global x; x = 1` は従来どおり行末まで読み飛ばす＝範囲外）。
+// 1 行の suite の複合文は是正前（473f95b）と同じ文言の構文エラー（完全一致）。[ラベル, 本文, エラー文, python3 の本文, python3: 正規表現＝SyntaxError]
+//   BK2（2026-10-13・Stage BK「Python 構文の穴 I」(18)）: `;` の 6 行は BJ6 では「未是正の差」として是正前と同じ構文エラー「予期しないトークン ';'」を
+//   期待し、python3 の出力を定数で持っていた。BK2 が `;` を受理したので、その 6 行は下の I_SEMI（python3 と同じ出力）へ移した（期待値を
+//   黙って変えたのではない＝決定ログ BK2 結果）。BK2 では 1 行の suite の複合文を inlineCompound が見出しまで読んで ':' で止めるので、
+//   文言・行は BJ6 の期待値のまま。
 const I_SYN = [
   ['1 行の suite の if（if x: if x: pass）', 'x = 1\nif x: if x: pass', "構文エラー(Py): 予期しないトークン ':' (行 2)", null, /^SyntaxError: invalid syntax/],
   ['1 行の suite の for（while x: for i in range(2): pass）', 'x = 1\nwhile x: for i in range(2): pass', "構文エラー(Py): 予期しないトークン ':' (行 2)", null, /^SyntaxError: invalid syntax/],
   ['1 行の suite の while（if x: while x: pass）', 'x = 1\nif x: while x: pass', "構文エラー(Py): 予期しないトークン ':' (行 2)", null, /^SyntaxError: invalid syntax/],
   ['1 行の suite の def（if x: def g(): pass）', 'x = 1\nif x: def g(): pass', "構文エラー(Py): 予期しないトークン ':' (行 2)", null, /^SyntaxError: invalid syntax/],
   ['else: の 1 行の suite の if', 'x = 1\nif x:\n  pass\nelse: if x: pass', "構文エラー(Py): 予期しないトークン ':' (行 4)", null, /^SyntaxError: invalid syntax/],
-  ['if x: a = 1; b = 2', 'x = 1\nif x: a = 1; b = 2', "構文エラー(Py): 予期しないトークン ';' (行 2)", 'x = 1\nif x: a = 1; b = 2\nprint(a, b)', ['1 2']],
-  ['a = 1; b = 2', 'a = 1; b = 2', "構文エラー(Py): 予期しないトークン ';' (行 1)", 'a = 1; b = 2\nprint(a, b)', ['1 2']],
-  ['def f(): global x; x = 1', 'x = 0\ndef f(): global x; x = 1\nf()\nprint(x)', "構文エラー(Py): 予期しないトークン ';' (行 2)", 'x = 0\ndef f(): global x; x = 1\nf()\nprint(x)', ['1']],
-  ['if 1: import math; import time', 'if 1: import math; import time\nprint(1)', "構文エラー(Py): 予期しないトークン ';' (行 1)", 'if 1: import math; import time\nprint(1)', ['1']],
-  ['def f(): return; x = 1', 'def f(): return; x = 1\nprint(2)', "構文エラー(Py): 予期しないトークン ';' (行 1)", 'def f(): return; x = 1\nprint(2)', ['2']],
-  ['while 1: break; x = 1', 'while 1: break; x = 1\nprint(2)', "構文エラー(Py): 予期しないトークン ';' (行 1)", 'while 1: break; x = 1\nprint(2)', ['2']],
 ];
 for (const [label, src, msg, py3src, py3want] of I_SYN) {
   const r = run(src, 'py');
   ok(r.err === msg && r.out.length === 0, `I-3 ${label} → ${msg}（是正前と同じ）（実 ${r.err ? r.err : '走った ' + J(r.out)}）`);
-  if (py3want instanceof RegExp) checkPy3Err(`I-3 ${label}`, src, py3want);
-  else checkPy3(`I-3 ${label}（未是正の差: python3 は ; を受理）`, py3src, py3want);
+  checkPy3Err(`I-3 ${label}`, src, py3want);
+}
+// BK2 (18): 1 行の suite の `;`（BJ6 では未是正の差）。python3 と同じ出力（定数＝BJ6 が持っていた python3 の値・checkPy3 で突き合わせ）。
+//   [ラベル, 本文, tick 数, python3 の出力, 是正前（BJ6・473f95b〜06d65ab）の結果]。`while 1:` は Model B＝1 tick で break して後ろの print(2)。
+const I_SEMI = [
+  ['if x: a = 1; b = 2', 'x = 1\nif x: a = 1; b = 2\nprint(a, b)', 0, ['1 2'], "構文エラー(Py): 予期しないトークン ';' (行 2)"],
+  ['a = 1; b = 2', 'a = 1; b = 2\nprint(a, b)', 0, ['1 2'], "構文エラー(Py): 予期しないトークン ';' (行 1)"],
+  ['def f(): global x; x = 1', 'x = 0\ndef f(): global x; x = 1\nf()\nprint(x)', 0, ['1'], "構文エラー(Py): 予期しないトークン ';' (行 2)"],
+  ['if 1: import math; import time', 'if 1: import math; import time\nprint(1)', 0, ['1'], "構文エラー(Py): 予期しないトークン ';' (行 1)"],
+  ['def f(): return; x = 1', 'def f(): return; x = 1\nprint(2)', 0, ['2'], "構文エラー(Py): 予期しないトークン ';' (行 1)"],
+  ['while 1: break; x = 1', 'while 1: break; x = 1\nprint(2)', 1, ['2'], "構文エラー(Py): 予期しないトークン ';' (行 1)"],
+];
+for (const [label, src, ticks, want, pre] of I_SEMI) {
+  const r = run(src, 'py', ticks);
+  ok(!r.err && J(r.out) === J(want), `I-3 BK2 ${label} → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ${J(want)}＝python3・BJ6 では ${pre}）`);
+  checkPy3(`I-3 BK2 ${label}`, src, want);
 }
 // キーワードの単純文の後ろの同じ行の続きは構文エラー（Python も SyntaxError）。是正前: if x: break 5 は「未定義の変数/名前: break」・
 //   def f(): return 1 2 と def f(): pass 5 は f を呼ばなければエラー無しで走った（v10.1.0 も同じ）。

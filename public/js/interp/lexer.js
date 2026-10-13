@@ -1,7 +1,11 @@
 // 字句解析。mode = 'c' | 'py'。
 // 共通トークン: NUM, STR, ID, OP, PUNC, EOF
-// Python 専用: NEWLINE, INDENT, DEDENT
-// 戻り値: トークン配列。
+// Python 専用: NEWLINE, INDENT, DEDENT, BYTES（BK2: b"…"。parser_py が「未対応」の構文エラーにする）
+// 戻り値: トークン配列。py は配列の属性 unclosed（BK2: 末尾で開いたままの一番内側の括弧 {ch, line, idx}・無ければ undefined）も持つ。
+//   f-string の外枠の `(` は属性 fstr＝開き引用符（接頭辞込み・例 `f"`。BK2: 隣り合う文字列の連結・呼び出しと区別・エラーの表示）。
+//
+// BK2（Python 構文の穴 I・py だけ。C は無改変）: ① 括弧 ( [ { の中の改行は NEWLINE にしない（暗黙の行継続）② 接頭辞 r・u・b と
+//   fr／rf／br／rb（STR_PREFIX）③ 後ろに値が続く `++`／`--` を 1 トークンにしない（`--1`）。詳細は各箇所のコメント。
 //
 // BJ5: 文字列リテラル（通常・三重引用符・f-string。C・py 共通）は readStrBody で閉じ引用符まで読む。
 //   ① py の `"""…"""`／`'''…'''`（`f`/`F` 接頭辞付きを含む）を 1 つの文字列リテラルとして読む（中身は改行と単独の引用符を含みうる・
@@ -55,6 +59,12 @@ const ESCAPES = { n: '\n', t: '\t', r: '\r', '\\': '\\', '"': '"', "'": "'", '0'
 function unescapeChar(c) { return Object.prototype.hasOwnProperty.call(ESCAPES, c) ? ESCAPES[c] : c; }
 // BJ2: f-string の埋め込み式を py モードで字句解析したときに落とすトークン（式の中では意味を持たない）。
 const FSTR_DROP = new Set(['EOF', 'NEWLINE', 'INDENT', 'DEDENT']);
+// BK2 (21): py の文字列の接頭辞（大文字小文字を問わない・引用符の直前だけ）。r＝raw（`\` を解かない）・u＝通常の文字列（Python 3 では
+//   意味を持たない）・f＝f-string・fr／rf＝raw の f-string・b／br／rb＝bytes（未対応＝構文エラー interp.syn.bytes。トークン BYTES を
+//   parser_py の primary が報告する）。識別子の途中（`xr"a"`）は識別子の分岐が `xr` 全体を読むのでここへ来ない。Python も SyntaxError の
+//   組（ur・ub・bf・uf 等）は接頭辞にせず従来どおり識別子＋文字列（＝構文エラー）。是正前は f／F だけで、`r"a\nb"`・`u"a"`・`b"a"` は
+//   識別子 r／u／b の後ろに文字列が来る形（括弧の中なら「')' を期待しましたが 'a⏎b'」・文なら「未定義の変数/名前: r」等）だった。
+const STR_PREFIX = /^(?:[fF][rR]|[rR][fF]|[bB][rR]|[rR][bB]|[rRuUbBfF])(?=["'])/;
 
 // AP8: C プリプロセッサ `#define`（オブジェクト形式マクロのみ）。
 // macros[name] = 置換トークン列。使用箇所で単純にトークンを差し込む（テキスト置換相当）。
@@ -67,6 +77,13 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
   // Python のインデントスタック
   const indentStack = [0];
   let atLineStart = (mode === 'py');
+  // BK2 (20): py の開いている括弧 `(`・`[`・`{` の列（{ch, line, idx＝そのトークンの toks の添字}）。空でない間の改行は NEWLINE にせず、
+  //   次の行の字下げも数えない（Python の暗黙の行継続＝`("ab"⏎ "cd")`・複数行のリスト・辞書・呼び出しの引数）。閉じ括弧は種類を問わず
+  //   1 つ戻す（種類の食い違いは parser の eat が報告する）。ファイルの末尾で開いたままの一番内側の括弧を toks.unclosed に置き、parser_py が
+  //   その括弧より後ろで構文エラーになったとき「'(' が閉じられていません」（行＝括弧の行）にする（python3 の "'(' was never closed"）。
+  //   是正前は括弧の中の改行も NEWLINE と字下げになり、複数行の括弧は全て構文エラー（「予期しないトークン 'NEWLINE'」等）だった。
+  //   f-string の外枠と埋め込み式の括弧は emitFString が pushTok で直接出す＝ここには数えない（埋め込み式は自分の tokenize で数える）。
+  const opens = [];
 
   // BJ5: ln＝トークンの行（既定は現在の行）。文字列・f-string は開き引用符の行を渡す（本体の改行で line が進んだ後に push するため）。
   function pushTok(type, value, ln = line) { toks.push({ type, value, line: ln }); }
@@ -127,7 +144,7 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
   //      （f"{x:'>5} and {a}" → "5"。層 4 の指摘。是正前の 0aa4039 と python3 の書式指定を落とした値は "5 and 4"）。
   //   是正前（HEAD 0aa4039）: 式の範囲は `{`／`}` だけで決め（引用符を見ない）、切り出した式から書式指定を落としていた＝f"{'}'}" → "'}"・
   //   f"{':'}" → ""・f"{'a:b'}" → "a"・f"{'{'}" → 構文エラー・閉じ `}` の無い f"{x" → "5"（エラー無し・python3 は SyntaxError）。
-  function emitFString(units, ln) {
+  function emitFString(units, ln, open) {
     const parts = [];   // {lit:string} | {expr:string, l0:式の開始行（`{` の行）, l1:閉じ `}` の行}
     let lit = '', k = 0;
     const chAt = (j) => (j < units.length ? units[j].ch : undefined);
@@ -176,7 +193,10 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
       else { lit += c; k++; }
     }
     parts.push({ lit });
-    pushTok('PUNC', '(', ln);
+    // BK2 (20): 外枠の `(` に fstr の印＝開き引用符 open（parser_py の primary が「文字列のかたまり」として隣の文字列リテラルと連結し、
+    //   postfix は呼び出しの括弧にしない〔是正前は `"y" f"{x}"`・`x f"{y}"` が "y"／x の呼び出しになった〕。構文エラーの表示も open）。
+    //   印の無い `(` は従来どおりの括弧の式。AST は是正前と同じ＝印はトークンにだけ付く。
+    pushTok('PUNC', '(', ln); toks[toks.length - 1].fstr = open;
     let firstEmit = true;
     const plus = () => { if (!firstEmit) pushTok('OP', '+', ln); firstEmit = false; };
     for (const p of parts) {
@@ -186,7 +206,10 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
       } else {
         plus();
         pushTok('PUNC', '(', p.l0);
-        for (const t of tokenize(p.expr, 'py', undefined, p.l0).filter(t => !FSTR_DROP.has(t.type))) pushTok(t.type, t.value, t.line);
+        for (const t of tokenize(p.expr, 'py', undefined, p.l0).filter(t => !FSTR_DROP.has(t.type))) {
+          pushTok(t.type, t.value, t.line);
+          if (t.fstr) toks[toks.length - 1].fstr = t.fstr;   // BK2: 埋め込み式の中の f-string の印も保つ（f"{f'{x}' 'y'}"）
+        }
         pushTok('PUNC', ')', p.l1);
       }
     }
@@ -207,6 +230,10 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
       const u = { ch: unescapeChar(src[i + 1]), raw: src.slice(i, i + 2) };
       i += 2; return u;
     }
+    return plainUnit();
+  }
+  // エスケープを解かない 1 文字（CRLF は LF 1 文字・改行で行を進める）。strUnit の `\` 以外と、BK2 の raw 文字列の本体が使う。
+  function plainUnit() {
     if (src[i] === '\r' && src[i + 1] === '\n') { i += 2; line++; return { ch: '\n', raw: '\n' }; }
     const c = src[i++];
     if (c === '\n') line++;
@@ -216,9 +243,20 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
   // BJ5: 文字列リテラルの本体を閉じ引用符 close（'"'・"'"・'"""'・"'''"）まで読み、閉じ引用符の直後へ進めて単位の列を返す。
   //   i は本体の先頭（開き引用符の直後）を指す。ファイルの末尾まで閉じ引用符が無ければ字句エラー（行＝開き引用符の行 l0）。
   //   是正前は閉じ引用符が無くてもファイル末尾までを文字列として黙って受け取っていた。
-  function readStrBody(open, close, l0) {
+  // BK2 (21): rawStr＝r 接頭辞（r／fr／rf）。`\` は文字のまま残し、続く 1 文字も文字のまま（閉じ引用符にも行継続にもしない＝
+  //   r"\"" は `\` と `"` の 2 文字・`\`＋改行は `\` と LF・r"a\" は閉じていない文字列。python3 と同じ）。`\` とその次の文字は別の単位
+  //   （rf"\{x}" の `{` は置換フィールドの始まり＝python3 の "\5" と同じ）。
+  function readStrBody(open, close, l0, rawStr = false) {
     const units = [];
-    while (i < n && !src.startsWith(close, i)) { const l = line, u = strUnit(); u.line = l; units.push(u); }   // line＝単位の物理行（emitFString の式の行）
+    while (i < n && !src.startsWith(close, i)) {
+      const l = line;   // 単位の物理行（emitFString の式の行）
+      if (rawStr && src[i] === '\\') {
+        units.push({ ch: '\\', raw: '\\', line: l }); i++;
+        if (i < n) { const l2 = line, u = plainUnit(); u.line = l2; units.push(u); }
+        continue;
+      }
+      const u = rawStr ? plainUnit() : strUnit(); u.line = l; units.push(u);
+    }
     if (i >= n) throw lexErr('unterminated', { open, close }, l0);
     i += close.length;
     return units;
@@ -259,10 +297,10 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
     if (ch === '/' && src[i + 1] === '/' && mode === 'c') { skipLineComment(); continue; }
     if (ch === '/' && src[i + 1] === '*' && mode === 'c') { skipBlockComment(); continue; }
 
-    // 改行
+    // 改行（BK2: py の括弧の中では NEWLINE にせず字下げも数えない＝暗黙の行継続）
     if (ch === '\n') {
       i++; line++;
-      if (mode === 'py') {
+      if (mode === 'py' && opens.length === 0) {
         // 直近が有効トークンなら NEWLINE を出す
         const last = toks[toks.length - 1];
         if (last && last.type !== 'NEWLINE' && last.type !== 'INDENT' && last.type !== 'DEDENT')
@@ -306,13 +344,21 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
     //   は先頭のトップレベル `:`/`!` 以降を切り捨てる (簡易・値は素の str 化)。`{{`/`}}` は素の波括弧。
     //   BJ5: `f"""…"""`／`f'''…'''`（三重引用符）も同じ展開。外枠のトークン（STR・`(`・`)`・`+`）の行は開き引用符の行＝文の AST line。
     //   埋め込み式の中のトークンは物理行を持つ（式の中の字句・構文エラーは物理行で報告＝python3 と同じ）。
-    if (mode === 'py' && (ch === 'f' || ch === 'F') && (src[i + 1] === '"' || src[i + 1] === "'")) {
-      const l0 = line, q = src[i + 1];
-      const close = src.startsWith(q + q + q, i + 1) ? q + q + q : q;
-      i += 1 + close.length;
-      const units = readStrBody(ch + close, close, l0);   // BJ1: 実エスケープ・BJ2: 生テキストも保持＋CRLF→LF・BJ5: 改行で行を進める
-      emitFString(units, l0);
-      continue;
+    // BK2 (21): 接頭辞を STR_PREFIX に広げた（r・u・b と fr／rf／br／rb。大文字小文字を問わない）。f を含めば f-string（r も含めば本体は raw）・
+    //   b を含めば BYTES（parser_py が構文エラーにする）・それ以外は通常の文字列（r なら raw）。字句エラーの文言の開き引用符は接頭辞込み
+    //   （`r"`・`f"""`。f 単独は是正前と同じ）。
+    if (mode === 'py' && 'rRuUbBfF'.includes(ch)) {
+      const pm = STR_PREFIX.exec(src.slice(i, i + 3));
+      if (pm) {
+        const pre = pm[0], lo = pre.toLowerCase(), l0 = line, q = src[i + pre.length];
+        const close = src.startsWith(q + q + q, i + pre.length) ? q + q + q : q;
+        i += pre.length + close.length;
+        const units = readStrBody(pre + close, close, l0, lo.includes('r'));   // BJ1: 実エスケープ・BJ2: 生テキストも保持＋CRLF→LF・BJ5: 改行で行を進める
+        if (lo.includes('f')) emitFString(units, l0, pre + close);
+        else if (lo.includes('b')) pushTok('BYTES', pre + close, l0);
+        else pushTok('STR', units.map((u) => u.ch).join(''), l0);
+        continue;
+      }
     }
     // 文字列（BJ5: py は `"""`／`'''` で始まれば三重引用符。C は扱わない）
     if (ch === '"' || ch === "'") {
@@ -339,14 +385,31 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
     const three = src.substr(i, 3);
     if (OPS3.includes(three)) { pushTok('OP', three); i += 3; continue; }
     const two = src.substr(i, 2);
+    // BK2 (2): py に `++`／`--` の演算子は無い。後ろに被演算子が続くとき（`--1`・`++x`・`a--b`・`---1`）は 1 文字目だけを出して次の周回で
+    //   2 文字目を読む＝単項の重ね／二項＋単項（`--1` は 1・`++x` は x・`a--b` は a - (-b)。python3 と同じ）。後ろが行末・閉じ括弧・`,`・`;`・
+    //   `:`・`=`・コメントなど被演算子で始まらないとき（C の癖の `x++`・`i--`）は従来どおり 1 トークンにし、構文エラー「予期しないトークン
+    //   '++'」（是正前と同じ文言・行。1 文字ずつにすると「予期しないトークン 'NEWLINE'」で行も次の行になる）。括弧の中では改行も読み飛ばして見る。
+    //   是正前は常に 1 トークンで `--1` も「予期しないトークン '--'」（py の構文に `++`／`--` は無いので、出荷の py の AST は変わらない）。
+    if (mode === 'py' && (two === '++' || two === '--')) {
+      let j = i + 2;
+      while (j < n && (src[j] === ' ' || src[j] === '\t' || (opens.length && (src[j] === '\n' || src[j] === '\r')))) j++;
+      if (j < n && /[A-Za-z0-9_(\[{"'.+\-~]/.test(src[j])) { pushTok('OP', ch); i++; continue; }
+    }
     if (OPS2.includes(two)) { pushTok('OP', two); i += 2; continue; }
     if (OPS1.includes(ch)) { pushTok('OP', ch); i++; continue; }
-    if (PUNCS.includes(ch)) { pushTok('PUNC', ch); i++; continue; }
+    if (PUNCS.includes(ch)) {
+      if (mode === 'py') {   // BK2 (20): 括弧の深さ（上の opens）
+        if (ch === '(' || ch === '[' || ch === '{') opens.push({ ch, line, idx: toks.length });
+        else if ((ch === ')' || ch === ']' || ch === '}') && opens.length) opens.pop();
+      }
+      pushTok('PUNC', ch); i++; continue;
+    }
 
     throw lexErr('badChar', { ch }, line);
   }
 
   if (mode === 'py') {
+    if (opens.length) toks.unclosed = opens[opens.length - 1];   // BK2: 末尾で開いたままの一番内側の括弧（parser_py の err が使う）
     const last = toks[toks.length - 1];
     if (last && last.type !== 'NEWLINE') pushTok('NEWLINE');
     while (indentStack.length > 1) { indentStack.pop(); pushTok('DEDENT'); }

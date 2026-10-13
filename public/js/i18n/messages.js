@@ -913,6 +913,10 @@ export const MESSAGES = {
   // BK1 H1: ステップ上限に達した tick の中で millis()／micros() を呼んでいたときだけ、この文言（stepLimit の文言＋ヒント）にする。
   //   時刻の進み方は変えない（millis() は loop() 1 回の中では一定）。i18nKey は stepLimit のまま。
   'interp.err.stepLimitTime': { ja: '評価ステップ上限超過 (無限ループの可能性)。millis() と micros() は loop() 1 回 (while True: なら本体 1 回) の中では進みません。delay() か次の loop() で待ってください', en: 'Evaluation step limit exceeded (possible infinite loop). millis() and micros() do not advance within one pass of loop() (one pass of the body for while True:); wait with delay() or until the next loop()' },
+  // BK2: py の in／not in の右側の型（python3 は TypeError）と、列の代入先（`a, = …`・`[a] = …`・入れ子）の要素の数の食い違い（python3 は ValueError／TypeError）。
+  'interp.err.inRight':     { ja: 'in / not in の右側は list・tuple・str・dict にしてください', en: 'The right side of in / not in must be a list, tuple, str or dict' },
+  'interp.err.inStrLeft':   { ja: 'in / not in の右側が文字列のときは、左側も文字列にしてください (部分文字列かどうかを調べます)', en: 'When the right side of in / not in is a string, the left side must be a string too (it checks for a substring)' },
+  'interp.err.unpack':      { ja: '右辺を左辺の {n} 個の代入先に分けられません (右辺は要素が {n} 個の list・tuple・str にしてください)', en: 'Cannot unpack the right side into the {n} targets on the left (it must be a list, tuple or str with {n} items)' },
 
   // ---- BK1: 字句エラー（lexer.js）・構文エラー（parser_py.js／parser_c.js）。SourceError（lexer.js）が t('interp.' + phase + '.' + sub) で参照し、
   //   頭（head）＋文言＋行の接尾（interp.err.line）で組む。ja は是正前の日本語固定文と 1 文字も変えない（wf_bk1_interp2 A 章が是正前の文言で照合）。
@@ -928,6 +932,11 @@ export const MESSAGES = {
   'interp.syn.unexpected':    { ja: '予期しないトークン \'{tok}\'', en: 'unexpected token \'{tok}\'' },
   'interp.syn.augTuple':      { ja: '複合代入 \'{op}\' の左辺に複数の変数（a, b のようなタプル）は書けません（1 つずつ代入してください）', en: 'the left side of the compound assignment \'{op}\' cannot be several variables (a tuple such as a, b); assign them one at a time' },
   'interp.syn.caseDefault':   { ja: 'case か default を期待しましたが \'{got}\'', en: 'expected case or default but got \'{got}\'' },
+  // BK2（Python 構文の穴 I・parser_py）: bytes リテラル（b"…"・未対応）・リストの左辺の複合代入（python3 も SyntaxError）・
+  //   閉じていない括弧（括弧の中の改行が暗黙の行継続になったので、閉じ忘れを括弧の行で報告する。python3 の "'(' was never closed"）。
+  'interp.syn.bytes':         { ja: 'bytes リテラル（{open}…）は未対応です。文字列は b を付けずに書いてください', en: 'bytes literals ({open}…) are not supported; write the string without the b prefix' },
+  'interp.syn.augList':       { ja: '複合代入 \'{op}\' の左辺にリスト（[a, b] のような）は書けません（1 つずつ代入してください）', en: 'the left side of the compound assignment \'{op}\' cannot be a list (such as [a, b]); assign the variables one at a time' },
+  'interp.syn.unclosed':      { ja: '\'{ch}\' が閉じられていません（対応する閉じ括弧がありません）', en: '\'{ch}\' was never closed (there is no matching closing bracket)' },
 
   // ---- loader.js: 取込/共有の操作系エラーメッセージ ----
   'loader.urlEmpty':    { ja: 'URL が空です', en: 'URL is empty' },

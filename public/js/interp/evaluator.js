@@ -252,17 +252,36 @@ export class Interp {
     }
     let vals;
     if (targets.length === values.length) vals = values.map(v => this.evalExpr(v, scope));
-    else if (values.length === 1) {
-      const r = this.evalExpr(values[0], scope);
-      vals = Array.isArray(r) ? r : [r];
-    } else vals = values.map(v => this.evalExpr(v, scope));
+    // BK2 (9): 左辺が 2 つ以上・右辺が 1 つ（`a, b = f()`・`[a, b] = "xy"`）は右辺を列に分ける（unpackSeq: assignTo の列の代入先と同じ
+    //   規則）。是正前は配列以外を 1 要素として扱い（`a, b = "xy"` は a が "xy"・b が未定義）、要素の数の食い違いは黙って通った
+    //   （`a, b = [1]` の b は未定義・`a, b = [1, 2, 3]` は 3 を捨てた。python3 は ValueError）。出荷の py に該当する文は無い（BK2 で AST を走査）。
+    else if (values.length === 1) vals = this.unpackSeq(this.evalExpr(values[0], scope), targets.length);
+    else vals = values.map(v => this.evalExpr(v, scope));
     targets.forEach((tgt, i) => this.assignTo(tgt, vals[i], scope));
+  }
+
+  // BK2 (9): 列の代入（py）の右辺を n 個の値の列に分ける。list／tuple＝要素・str＝各文字・dict＝キー（for … in と同じ）。それ以外
+  //   （数・None・関数）や要素の数が n と違えば、行番号付きの実行時エラー interp.err.unpack（python3 は ValueError／TypeError）。
+  unpackSeq(val, n) {
+    let seq = null;
+    if (Array.isArray(val)) seq = val;
+    else if (typeof val === 'string') seq = val.split('');
+    else if (val && typeof val === 'object') seq = Object.keys(val);
+    if (!seq || seq.length !== n) throw this.rt('unpack', { n });
+    return seq;
   }
 
   assignTo(tgt, val, scope) {
     if (tgt.t === 'var') this.setVar(scope, tgt.name, val);
     else if (tgt.t === 'member') { const o = this.evalExpr(tgt.obj, scope); o[tgt.name] = val; }
     else if (tgt.t === 'index') { const o = this.evalExpr(tgt.obj, scope); o[this.pyIndex(o, this.evalExpr(tgt.idx, scope))] = val; }
+    else if (tgt.t === 'tuple' || tgt.t === 'list') {
+      // BK2 (9): 列の代入先（py の `a, = [5]`・`[a] = [5]`・入れ子 `(a, b), c = …`／`[a, [b, c]] = …` の内側。parser_py の flattenTargets が
+      //   要素 2 つ以上の左辺を平らにするので、ここへ来るのは要素 1 つの左辺と入れ子の内側だけ）。右辺の分け方と数の検査は unpackSeq。
+      //   是正前は「代入先が不正です」（タプルの `a, = [5]` は平らにされて a が [5]）。
+      const seq = this.unpackSeq(val, tgt.items.length);
+      tgt.items.forEach((it, k) => this.assignTo(it, seq[k], scope));
+    }
     else throw this.rt('badAssign');
   }
 
@@ -487,6 +506,20 @@ function pyEq(a, b) {
   if ((typeof a === 'boolean' && typeof b === 'number') || (typeof a === 'number' && typeof b === 'boolean')) return Number(a) === Number(b);
   return a === b;
 }
+// BK2 (10): Python の in／not in（parser_py の comparison が比較演算子と同じ段で読む＝連鎖も同じ規則）。list／tuple＝要素のどれかと
+//   ==（pyEq＝bool と数を数として比べる。要素がリストのときは == と同じく同一性＝(6) の未是正の差をそのまま受け継ぐ）・str＝部分文字列
+//   （左も str のときだけ。python3 は左が str でなければ TypeError）・dict＝キー（d[k]／d.get(k) と同じく、キーは文字列にして引く＝
+//   `"1" in {1: "a"}` も真・`True in {1: "a"}` は偽〔python3 は偽・真〕。dict のキーの型を持たない従来の模型のまま）。
+//   それ以外（数・None・関数）は python3 と同じくエラー（python3 3.14 は TypeError: argument of type 'int' is not a container or iterable）。
+function pyIn(a, b, line) {
+  if (Array.isArray(b)) return b.some((e) => pyEq(a, e));
+  if (typeof b === 'string') {
+    if (typeof a !== 'string') throw new RuntimeError('inStrLeft', {}, line);
+    return b.includes(a);
+  }
+  if (b && typeof b === 'object') return Object.prototype.hasOwnProperty.call(b, a);
+  throw new RuntimeError('inRight', {}, line);
+}
 
 // line = 直近実行文の行 (ゼロ除算/未対応演算子エラーに付与)。AP17: i18n キー化 (interp.err.*)。
 // BJ2: lang = 'py' | 'c'（Interp.load が ast.lang から決める this.lang）。py だけ % を床剰余・== / != を pyEq にする。
@@ -527,6 +560,8 @@ function applyBin(op, a, b, line, lang) {
     case '<=': return a <= b;
     case '>': return a > b;
     case '>=': return a >= b;
+    case 'in': return pyIn(a, b, line);          // BK2 (10): py だけ（parser_py の comparison）
+    case 'not in': return !pyIn(a, b, line);
     default: throw new RuntimeError('badOp', { op }, line);
   }
 }
