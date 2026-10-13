@@ -63,7 +63,8 @@
 //      （f"""{'''it's'''}"""。初版は構文エラー）・閉じ `}` の無い置換フィールドは字句エラー（f"{x" は是正前も初版も "5"）・式の中の
 //      字句エラー・構文エラーの行は物理行（初版は「開き引用符の行＋式の中の改行の数」と開き引用符の行＝H-3）。
 //      未是正の差: f-string の埋め込み式で出た実行時エラーの行は文の行（＝開き引用符の行。python3 は式のある行）・書式指定は落とす（H_SPEC に
-//      python3 の値を定数で持つ）。
+//      python3 の値を定数で持つ）。→ 書式指定と単独の `}` は BK3（Stage BK・v10.3.0）で是正し、H_SPEC・F-3・H-1 の該当行と H-3 の単独の `}` の
+//      期待値を python3 の値に改めた（wf_bk1_interp2 H 章が書式指定の本体を見る）。
 //
 // BJ6（1 行の suite の break／continue／pass／return・その文の行番号・return のエラー文言）— 是正前（HEAD 473f95b）の値は I 章の見出しと各表に
 //   書いた。`--root <是正前の木>` で回すと I 章が赤になる（A〜H は緑）。
@@ -459,7 +460,8 @@ const FSTR = [
   ["f\"{f'{x}'}\"（入れ子の f-string）", "s = f\"{f'{x}'}\"", '"5"'],
   ["f\"{d['k']}\"", "s = f\"{d['k']}\"", '"1"'],
   ['f"a{x}b{{c}}\\n"（文字列部分・{{ }}・エスケープは従来どおり）', 's = f"a{x}b{{c}}\\n"', '"a5b{c}\\n"'],
-  ['f"{x:>3}"（書式指定は従来どおり落とす）', 's = f"{x:>3}"', null],
+  // BK3（Stage BK）で書式指定を是正した: 是正前（BJ2〜v10.2.0）は書式指定を落として "5"（この行の期待値は null＝"5" だった）。
+  ['f"{x:>3}"（書式指定・BK3 で python3 と同じ）', 's = f"{x:>3}"', '"  5"'],
 ];
 for (const [label, body, want] of FSTR) {
   const src = 'x = 5\nd = {"k": 1}\n' + body;
@@ -790,7 +792,8 @@ const H_VALS = [
   ["s = f\"{'a' + '}:'}\"（式の中の文字列の } と : の後ろも式）", "s = f\"{'a' + '}:'}\"", '"a}:"'],
   ["s = f\"{ {'a': x}['a'] }\"（式の中の dict の : は書式指定ではない）", "s = f\"{ {'a': x}['a'] }\"", '"5"'],
   ["s = f\"{({'a': x})['a']}\"（括弧の中の dict の :）", "s = f\"{({'a': x})['a']}\"", '"5"'],
-  ['s = f"{x:>3}"（書式指定は従来どおり落とす・F-3 と同じ）', 's = f"{x:>3}"', null],
+  // BK3: 書式指定を是正（是正前は落として "5"＝この行の期待値は null だった）。
+  ['s = f"{x:>3}"（書式指定・BK3 で python3 と同じ・F-3 と同じ）', 's = f"{x:>3}"', '"  5"'],
 ];
 const H_PRE = 'x = 5\nd = {"k": 1}\n';
 // 文の数（x・d・s の 3 つ）。是正前は三重引用符が `""`＋`"…"`＋`""` に割れて文が増えた（値がたまたま同じ  もここで赤になる）。
@@ -803,8 +806,11 @@ for (const [label, body, want] of H_VALS) {
   ok(got === want && ns === 3, `H-1 ${label} → ${got}・文 ${ns}（期待 ${want}・文 3）`);
   checkPy3(`H-1 ${label}`, 'import json\n' + H_PRE + body + '\nprint(json.dumps(s))', [want]);
 }
-// H-1 書式指定（`:` 以降）と変換（`!r` 等）の中の引用符は文字（区切りではない）。本処理系は書式指定を落とす（値は素の str 化・従来どおり）ので、
-//   期待値は「書式指定を除いた本文」を python3 で走らせた値（checkPy3 で照合）、python3 の書式指定どおりの値は未是正の差として定数で持つ。
+// H-1 書式指定（`:` 以降）と変換（`!r` 等）の中の引用符は文字（区切りではない）。BJ5〜v10.2.0 は書式指定を落とした（値は素の str 化）ので、
+//   期待値は「書式指定を除いた本文」を python3 で走らせた値で、python3 の書式指定どおりの値は未是正の差として定数で持っていた。
+//   BK3（Stage BK・v10.3.0）で書式指定を是正したので、期待値を python3 の書式指定どおりの値（最後の列・null＝python3 は ValueError ＝
+//   本処理系は interp.err.fmtSpec の実行時エラー〔行 3〕）に改めた。引用符を区切りにしない検査（閉じ `}` の見落とし＝初版の回帰）は値に
+//   後ろのフィールドが残ること（" and 4"・"|1"・"\nend"）で引き続き見ている。「書式指定を除いた本文」の python3 の値の照合は残す。
 //   BJ5 の初版は書式指定の中の引用符を文字列の区切りとして追い、閉じ `}` を見落として本体の末尾まで読み、書式指定として黙って落とした
 //   （f"{x:'>5} and {a}" → "5"・f'{x:"^5} units' → "5"・f"""{"a"}⏎{x:'>2}⏎end""" → "a\n5"）＝層 4 の指摘の回帰。是正前の 0aa4039 は
 //   三重引用符の行を除いて今と同じ値（引用符を見ずに `{`／`}` だけで閉じていた）＝`--root 0aa4039` では緑・初版の木では赤。
@@ -822,10 +828,11 @@ const H_SPEC = [
 for (const [label, body, plain, want, py3spec] of H_SPEC) {
   const r = run(H_PRE + body, 'py');
   const got = r.vars ? J(r.vars.s) : 'ERR ' + r.err;
-  ok(got === want, `H-1 書式指定 ${label} → ${got}（期待 ${want}＝書式指定を除いた値・python3 の書式指定どおりの値は ${py3spec === null ? 'ValueError' : py3spec}）`);
+  if (py3spec !== null) ok(got === py3spec, `H-1 書式指定 ${label} → ${got}（期待 ${py3spec}＝python3 の書式指定どおりの値・BK3。BJ5〜v10.2.0 は書式指定を除いた ${want}）`);
+  else ok(!r.vars && r.key === 'interp.err.fmtSpec' && r.line === 3, `H-1 書式指定 ${label} → ${got}（期待 interp.err.fmtSpec〔行 3〕＝python3 の ValueError・BK3。BJ5〜v10.2.0 は書式指定を除いた ${want}）`);
   checkPy3(`H-1 書式指定 ${label}（書式指定を除いた本文）`, 'import json\n' + H_PRE + plain + '\nprint(json.dumps(s))', [want]);
-  if (py3spec !== null) checkPy3(`H-1 書式指定 ${label}（未是正の差・書式指定どおりの値）`, 'import json\n' + H_PRE + body + '\nprint(json.dumps(s))', [py3spec]);
-  else checkPy3Err(`H-1 書式指定 ${label}（未是正の差・python3 は書式指定を解釈して ValueError）`, H_PRE + body, /^ValueError/);
+  if (py3spec !== null) checkPy3(`H-1 書式指定 ${label}（書式指定どおりの値）`, 'import json\n' + H_PRE + body + '\nprint(json.dumps(s))', [py3spec]);
+  else checkPy3Err(`H-1 書式指定 ${label}（python3 は書式指定を解釈して ValueError）`, H_PRE + body, /^ValueError/);
 }
 { // len（受け入れ基準の値）
   for (const [label, body, want] of [['len("""a""")', 's = """a"""\nprint(len(s))', ['1']], ['len("""a⏎b""")', 's = """a\nb"""\nprint(len(s))', ['3']]]) {
@@ -979,9 +986,10 @@ for (const [label, lang, src, line, py3re] of H_OPEN) {
 { // 未是正の差（決定ログ BJ-11 ②）: f-string のリテラル部分の単独の `}` はそのまま文字（python3 は SyntaxError・出力に `}` が見える）。
   //   同じ種類の引用符の入れ子（PEP 701・python 3.12 以降）は未対応で字句エラー（外側の文字列が式の中の引用符で閉じる。3.11 以前の python も SyntaxError。
   //   是正前・初版は構文エラー「予期しないトークン ')'」＝文言が変わった＝`--root` の木では赤）。単独の `}` は是正前・初版と同じ値（`--root` でも緑）。
+  //   BK3（Stage BK・v10.3.0）: 単独の `}` は是正した＝構文エラー interp.syn.fstrRBrace（行 2・python3 と同じ SyntaxError。是正前の期待値は "a}b5"）。
   const r1 = run('x = 5\ns = f"a}b{x}"', 'py');
-  ok(!r1.err && J(r1.vars.s) === '"a}b5"', `H-3 未是正の差: f"a}b{x}" → ${r1.err ? 'ERR ' + r1.err : J(r1.vars.s)}（期待 "a}b5"・python3 は SyntaxError）`);
-  checkPy3Err('H-3 未是正の差: f"a}b{x}"', 'x = 5\ns = f"a}b{x}"', /^SyntaxError: f-string: single '}' is not allowed/);
+  ok(!r1.vars && r1.key === 'interp.syn.fstrRBrace' && r1.line === 2, `H-3 f"a}b{x}"（BK3 で是正）→ ${r1.err ? 'ERR ' + r1.err : J(r1.vars.s)}（期待 interp.syn.fstrRBrace〔行 2〕・python3 は SyntaxError・BJ5〜v10.2.0 は "a}b5"）`);
+  checkPy3Err('H-3 f"a}b{x}"', 'x = 5\ns = f"a}b{x}"', /^SyntaxError: f-string: single '}' is not allowed/);
   const r2 = run('d = {"k": 1}\ns = f"{d["k"]}"', 'py');
   ok(r2.err === '字句エラー: f-string の { に対応する } がありません (行 2)', `H-3 未是正の差: f"{d["k"]}"（同じ引用符の入れ子）→ ${r2.err ? r2.err : '走った ' + J(r2.vars && r2.vars.s)}（期待 字句エラー（行 2）・python3.12 以降は 1）`);
 }

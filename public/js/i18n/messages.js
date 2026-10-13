@@ -917,6 +917,13 @@ export const MESSAGES = {
   'interp.err.inRight':     { ja: 'in / not in の右側は list・tuple・str・dict にしてください', en: 'The right side of in / not in must be a list, tuple, str or dict' },
   'interp.err.inStrLeft':   { ja: 'in / not in の右側が文字列のときは、左側も文字列にしてください (部分文字列かどうかを調べます)', en: 'When the right side of in / not in is a string, the left side must be a string too (it checks for a substring)' },
   'interp.err.unpack':      { ja: '右辺を左辺の {n} 個の代入先に分けられません (右辺は要素が {n} 個の list・tuple・str にしてください)', en: 'Cannot unpack the right side into the {n} targets on the left (it must be a list, tuple or str with {n} items)' },
+  // BK3: 書式指定ミニ言語（f-string の `{x:spec}` と str.format・evaluator.js の formatValue／pyStrFormat）。python3 は ValueError／TypeError／
+  //   IndexError／KeyError。{spec}／{field}＝利用者の書いた字面（BK-2 ②: 利用者の値を入れる変数は最後）。
+  'interp.err.fmtSpec':     { ja: '書式指定 \'{spec}\' は未対応か、書き方が正しくありません (使えるのは [[埋め文字]揃え][符号][#][0][幅][,][.精度][型]・型は d f e g s % x b など)', en: 'Format specifier \'{spec}\' is not supported or is invalid (use [[fill]align][sign][#][0][width][,][.precision][type], with types such as d f e g s % x b)' },
+  'interp.err.fmtType':     { ja: '書式指定 \'{spec}\' は {type} の値には使えません', en: 'Format specifier \'{spec}\' cannot be used with a {type} value' },
+  'interp.err.fmtField':    { ja: 'str.format() の置換フィールド {{field}} の値がありません (引数が足りない・名前の引数が無い・添字が範囲外。属性 .名前 は未対応)', en: 'str.format() replacement field {{field}} has no value (too few arguments, no argument with that name, or index out of range; .attribute is not supported)' },
+  'interp.err.fmtMix':      { ja: 'str.format() で自動の番号 {} と番号の指定 {0} を混ぜることはできません', en: 'str.format() cannot mix automatic field numbering {} with manual field numbers {0}' },
+  'interp.err.fmtBrace':    { ja: 'str.format() の文字列に対応の無い { か } があります (波括弧そのものは {{ と }} と書きます)', en: 'str.format() string has an unmatched { or } (write {{ and }} for literal braces)' },
 
   // ---- BK1: 字句エラー（lexer.js）・構文エラー（parser_py.js／parser_c.js）。SourceError（lexer.js）が t('interp.' + phase + '.' + sub) で参照し、
   //   頭（head）＋文言＋行の接尾（interp.err.line）で組む。ja は是正前の日本語固定文と 1 文字も変えない（wf_bk1_interp2 A 章が是正前の文言で照合）。
@@ -937,6 +944,12 @@ export const MESSAGES = {
   'interp.syn.bytes':         { ja: 'bytes リテラル（{open}…）は未対応です。文字列は b を付けずに書いてください', en: 'bytes literals ({open}…) are not supported; write the string without the b prefix' },
   'interp.syn.augList':       { ja: '複合代入 \'{op}\' の左辺にリスト（[a, b] のような）は書けません（1 つずつ代入してください）', en: 'the left side of the compound assignment \'{op}\' cannot be a list (such as [a, b]); assign the variables one at a time' },
   'interp.syn.unclosed':      { ja: '\'{ch}\' が閉じられていません（対応する閉じ括弧がありません）', en: '\'{ch}\' was never closed (there is no matching closing bracket)' },
+  // BK3: f-string のリテラル部の単独の `}`（python3 の "f-string: single '}' is not allowed"）とキーワード引数（使えるのは .format(…) だけ・
+  //   位置引数はキーワード引数より前・同じ名前は 1 回。python3 の SyntaxError と同じ並べ方）。
+  'interp.syn.fstrRBrace':    { ja: 'f-string の中の単独の \'}\' は使えません (\'}\' という文字は \'}}\' と書きます)', en: 'a single \'}\' is not allowed in an f-string (write \'}}\' for a literal \'}\')' },
+  'interp.syn.kwArg':         { ja: 'キーワード引数 \'{name}=\' は未対応です (キーワード引数を使えるのは str.format() だけです)', en: 'keyword argument \'{name}=\' is not supported (only str.format() accepts keyword arguments)' },
+  'interp.syn.posAfterKw':    { ja: 'キーワード引数の後ろに位置引数は書けません', en: 'positional argument follows keyword argument' },
+  'interp.syn.kwRepeat':      { ja: 'キーワード引数 \'{name}\' が 2 回あります', en: 'keyword argument repeated: \'{name}\'' },
 
   // ---- loader.js: 取込/共有の操作系エラーメッセージ ----
   'loader.urlEmpty':    { ja: 'URL が空です', en: 'URL is empty' },

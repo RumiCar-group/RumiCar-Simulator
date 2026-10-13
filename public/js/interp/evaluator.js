@@ -368,6 +368,8 @@ export class Interp {
       case 'member': { const o = this.evalExpr(node.obj, scope); return o == null ? undefined : o[node.name]; }
       case 'index': { const o = this.evalExpr(node.obj, scope); return o[this.pyIndex(o, this.evalExpr(node.idx, scope))]; }
       case 'call': return this.evalCall(node, scope);
+      // BK3: f-string の置換フィールド（parser_py の fmt の節）。書式指定は文字列の式（入れ子のフィールドを含む）。
+      case 'fmt': return pyFormatField(this.evalExpr(node.v, scope), node.conv, node.spec ? '' + this.evalExpr(node.spec, scope) : '', this.curLine);
       default: throw this.rt('badExpr', { t: node.t });
     }
   }
@@ -375,9 +377,16 @@ export class Interp {
   evalCall(node, scope) {
     this.tick();
     const args = node.args.map(a => this.evalExpr(a, scope));
+    // BK3: キーワード引数（parser_py が `.format(…)` の呼び出しにだけ許す）。位置引数の後に書いた順で評価する。
+    let kw = null;
+    if (node.kwargs) { kw = Object.create(null); for (const k of node.kwargs) kw[k.name] = this.evalExpr(k.value, scope); }
     const callee = node.callee;
     if (callee.t === 'member') {
       const obj = this.evalExpr(callee.obj, scope);
+      // BK3: str.format は書式指定ミニ言語・名前・変換を扱う pyStrFormat（エラーの行＝この文の行）。文字列以外の .format は従来どおり
+      //   下の経路（list／dict には無い＝notMethod）。キーワード引数が付いたまま文字列以外へは渡さない。
+      if (typeof obj === 'string' && callee.name === 'format') return pyStrFormat(obj, args, kw, this.curLine);
+      if (kw) throw this.rt('notMethod', { name: callee.name });
       // AP9: str/list/dict の Python メソッドを JS ネイティブより優先 (.replace/.sort 等の意味論差を吸収)。
       const pm = pyMethod(obj, callee.name);
       if (pm) return pm(...args);
@@ -422,10 +431,294 @@ function trimChars(s, chars, left, right) {
   if (right) while (b > a && set.has(s[b - 1])) b--;
   return s.slice(a, b);
 }
-function pyFormat(tpl, args) {
-  let idx = 0;
-  // `{}` は順番・`{n}` は位置指定。`:書式指定` は簡易のため無視して素の str 化。
-  return String(tpl).replace(/\{(\d*)(?::[^}]*)?\}/g, (_m, n) => String(args[n === '' ? idx++ : Number(n)]));
+// ===== BK3: Python の書式指定ミニ言語（f-string の `{x:spec}`・`!r`/`!s`/`!a`・`{x=}` と str.format）=====
+// 正本＝Python 公式「Format Specification Mini-Language」。期待値は python3 3.14.4 の実測（wf_bk1_interp2 H 章が突き合わせる）。
+//   `[[fill]align][sign][z][#][0][width][grouping][.precision][type]`・type＝b c d e E f F g G o s x X %・省略。
+//   本処理系は int と float を区別しない（JS の数）＝整数値の数は int として書式化する（`f"{3.0:d}"` は "3"・python3 は ValueError／
+//   `f"{x:>5}"` の x=3.0 は "    3"・python3 は "  3.0"）。整数値でない数・±inf・nan・|x|≥2^53 の整数値は float。-0 は 0 と同じに扱う
+//   （JS の -0 は int の演算〔`0 * -1`・`round(-0.4)`〕からも出る。python3 の int 0 と同じ表示）。bool は int（`f"{True:>5}"` は "    1"・
+//   書式指定が空なら pyStr）。None は 0 の数（BK4 の範囲）。list／dict／関数に空でない書式指定は実行時エラー（python3 は TypeError）。
+//   丸めは 2 進の値の正確な 10 進展開に対する偶数丸め（python3 と同じ＝`f"{2.5:.0f}"` は "2"・`f"{0.125:.2f}"` は "0.12"・`f"{2.675:.2f}"` は
+//   "2.67"）。JS の toFixed は同点を切り上げ（0.5→"1"）、1e21 以上は指数表記になるので使わない。
+//   未対応（`n`・`z` 以外の 3.14 の小数部の区切り）と書き方の誤りは interp.err.fmtSpec、型に使えない指定（文字列に `d`・符号、整数値でない数に
+//   `d`・`x`、整数に精度・`z` など）は interp.err.fmtType（行＝その文の行）。幅と精度は 10000 まで（超えたら fmtSpec。python3 は上限なし）。
+const SPEC_RE = /^(?:([\s\S])?([<>=^]))?([+\- ])?(z)?(#)?(0)?(\d+)?([,_])?(?:\.(\d+))?([bcdeEfFgGnosxX%])?$/u;
+const FMT_MAX = 10000;
+// 値の文字列化（f-string の書式指定の無いフィールド・`!s`・str.format の `{}`）。是正前の f-string の展開 `"" + (式)` と同じ値。
+function pyStr(v) { return '' + v; }
+// repr（`!r`）。文字列だけ python3 の repr（引用符の選び方・エスケープ・表示できない文字）。それ以外は pyStr（list の repr〔[1, 'a']〕は
+//   本処理系の list の文字列化〔1,a〕のまま＝未是正の差）。ascii（`!a`）は repr の ASCII 以外の文字を \x／\u／\U にする。
+const NONPRINT = /[\p{Cc}\p{Cf}\p{Cs}\p{Co}\p{Cn}\p{Zl}\p{Zp}\p{Zs}]/u;
+const hexN = (c, n) => c.toString(16).padStart(n, '0');
+function pyRepr(v, ascii) {
+  if (typeof v !== 'string') return pyStr(v);
+  const q = v.includes("'") && !v.includes('"') ? '"' : "'";
+  let out = q;
+  for (const ch of v) {
+    const c = ch.codePointAt(0);
+    if (ch === q || ch === '\\') out += '\\' + ch;
+    else if (ch === '\t') out += '\\t';
+    else if (ch === '\n') out += '\\n';
+    else if (ch === '\r') out += '\\r';
+    else if (c < 0x20 || c === 0x7f) out += '\\x' + hexN(c, 2);
+    else if (c < 0x7f) out += ch;
+    else if (ascii || NONPRINT.test(ch)) out += c <= 0xff ? '\\x' + hexN(c, 2) : c <= 0xffff ? '\\u' + hexN(c, 4) : '\\U' + hexN(c, 8);
+    else out += ch;
+  }
+  return out + q;
+}
+// 有限で 0 以上の x の正確な 10 進展開 x = D / 10^k（D・k は BigInt／数）。
+const F64 = new DataView(new ArrayBuffer(8));
+function exactDec(x) {
+  F64.setFloat64(0, x);
+  const hi = F64.getUint32(0), lo = F64.getUint32(4), eb = (hi >>> 20) & 0x7ff;
+  let m = (BigInt(hi & 0xfffff) << 32n) | BigInt(lo), e;
+  if (eb === 0) e = -1074; else { m |= 1n << 52n; e = eb - 1075; }
+  if (e >= 0) return { D: m << BigInt(e), k: 0 };
+  return { D: m * 5n ** BigInt(-e), k: -e };
+}
+// D を 10^s で割って偶数丸め（s ≤ 0 なら 10^-s を掛ける）。
+function divRound(D, s) {
+  if (s <= 0) return D * 10n ** BigInt(-s);
+  const div = 10n ** BigInt(s), q = D / div, r2 = 2n * (D % div);
+  return (r2 > div || (r2 === div && (q & 1n) === 1n)) ? q + 1n : q;
+}
+// 固定小数点（p 桁）の数字列（符号なし）。
+function fixedDigits(x, p) {
+  const { D, k } = exactDec(x);
+  const s = divRound(D, k - p).toString();
+  if (p === 0) return s;
+  const t = s.padStart(p + 1, '0');
+  return t.slice(0, -p) + '.' + t.slice(-p);
+}
+// 有効数字 n 桁に丸めた数字列 digits（n 文字）と指数 exp（x ≈ d.ddd × 10^exp）。x＝0 は '0'×n・0。
+function sigDigits(x, n) {
+  if (x === 0) return { digits: '0'.repeat(n), exp: 0 };
+  const { D, k } = exactDec(x);
+  const s = D.toString();
+  let exp = s.length - 1 - k;
+  let r = divRound(D, s.length - n).toString();
+  if (r.length > n) { r = r.slice(0, n); exp++; }   // 9.99… → 10.0（繰り上がり）
+  return { digits: r, exp };
+}
+const expStr = (e) => (e < 0 ? '-' : '+') + String(Math.abs(e)).padStart(2, '0');
+// 指数表記: digits の先頭 1 桁＋'.'＋残り（keepPoint＝残りが空でも '.' を付ける〔'#'〕）＋'e±XX'。
+function sciStr(digits, exp, keepPoint) {
+  const rest = digits.slice(1);
+  return digits[0] + (rest || keepPoint ? '.' + rest : '') + 'e' + expStr(exp);
+}
+// 有効数字の列と指数から固定小数点の数字列（-4 ≤ exp の範囲だけで使う）。
+function plainFromSig(digits, exp) {
+  if (exp < 0) return '0.' + '0'.repeat(-exp - 1) + digits;
+  const ip = digits.slice(0, exp + 1).padEnd(exp + 1, '0'), fp = digits.slice(exp + 1);
+  return fp ? ip + '.' + fp : ip;
+}
+// 小数部の末尾の 0 と、残らなければ '.' を外す（指数表記は仮数の小数部だけ）。
+const stripZeros = (s) => {
+  const e = s.indexOf('e'), m = e < 0 ? s : s.slice(0, e), t = e < 0 ? '' : s.slice(e);
+  return (m.includes('.') ? m.replace(/0+$/, '').replace(/\.$/, '') : m) + t;
+};
+// float の本体（符号なし・x ≥ 0 有限）。type＝e E f F g G % ''（''＝省略: prec が null なら repr、あれば g の変形）。
+function floatBody(x, type, prec, alt) {
+  const lo = type.toLowerCase();
+  if (lo === 'f') return fixedDigits(x, prec == null ? 6 : prec) + (alt && prec === 0 ? '.' : '');
+  if (lo === '%') {
+    const y = x * 100;   // python3 と同じく float の掛け算（1e307 の 100 倍は inf）
+    if (!Number.isFinite(y)) return 'inf%';
+    return fixedDigits(y, prec == null ? 6 : prec) + (alt && prec === 0 ? '.' : '') + '%';
+  }
+  if (lo === 'e') { const p = prec == null ? 6 : prec; const { digits, exp } = sigDigits(x, p + 1); return sciStr(digits, exp, alt); }
+  if (type === '' && prec == null) {
+    // repr: 最短の往復できる数字列（JS の toExponential() と同じ桁）・指数は -4 ≤ exp < 16 なら固定小数点（python3 の float_repr）。
+    const m = /^(\d)(?:\.(\d+))?e([+-]\d+)$/.exec(x.toExponential());
+    const digits = m[1] + (m[2] || ''), exp = Number(m[3]);
+    if (exp < -4 || exp >= 16) return sciStr(digits, exp, alt);   // '#' は指数表記でも '.' を残す（1.e-05）
+    const s = plainFromSig(digits, exp);
+    return s.includes('.') ? s : s + '.0';
+  }
+  // g と、型の省略＋精度（python3 は g と同じだが固定小数点のときは小数部を最低 1 桁・指数表記に切り替える境目が 1 つ手前）。
+  const P = prec == null ? 6 : (prec === 0 ? 1 : prec);
+  const { digits, exp } = sigDigits(x, P);
+  const addDot0 = type === '';
+  const useExp = exp < -4 || exp >= (addDot0 ? P - 1 : P);
+  let s = useExp ? sciStr(digits, exp, alt) : plainFromSig(digits, exp);
+  if (alt) { if (!useExp && !s.includes('.')) s += '.'; }
+  else s = stripZeros(s);
+  if (addDot0 && !useExp && !s.includes('.')) s += '.0';
+  return s;
+}
+// 整数部の区切り（Python の _PyUnicode_InsertThousandsGrouping と同じ手順・minWidth＝'0' 埋めの '=' のときの最小幅）。
+function groupDigits(d, sep, size, minWidth) {
+  const groups = [];
+  let rem = d.length, mw = minWidth, end = d.length;
+  for (;;) {
+    const l = Math.min(Math.max(rem, mw, 1), size);
+    const nChars = Math.max(0, Math.min(rem, l)), nZeros = Math.max(0, l - rem);
+    groups.unshift('0'.repeat(nZeros) + d.slice(end - nChars, end));
+    end -= nChars; rem -= nChars; mw -= l;
+    if (rem <= 0 && mw <= 0) break;
+    mw -= sep.length;
+  }
+  return groups.join(sep);
+}
+const cpLen = (s) => { let n = 0; for (const _ of s) n++; return n; };
+function pad(body, width, fill, align, head = '') {
+  const n = width - cpLen(head + body);
+  if (n <= 0) return head + body;
+  if (align === '<') return head + body + fill.repeat(n);
+  if (align === '^') { const l = Math.floor(n / 2); return fill.repeat(l) + head + body + fill.repeat(n - l); }
+  if (align === '=') return head + fill.repeat(n) + body;
+  return fill.repeat(n) + head + body;
+}
+const typeName = (v) => (typeof v === 'boolean' ? 'bool' : typeof v === 'number' ? (Number.isInteger(v) ? 'int' : 'float')
+  : typeof v === 'string' ? 'str' : Array.isArray(v) ? 'list' : v == null ? 'None' : typeof v === 'function' ? 'function' : 'dict');
+// 値 v を書式指定 spec で文字列にする。line＝実行時エラーの行。
+function formatValue(v, spec, line) {
+  if (spec === '') return pyStr(v);
+  const bad = () => new RuntimeError('fmtSpec', { spec }, line);
+  const m = SPEC_RE.exec(spec);
+  if (!m) throw bad();
+  let [, fill, align, sign, z, alt, zero, width, group, prec, type] = m;
+  type = type || '';
+  width = width ? Number(width) : 0;
+  prec = prec != null ? Number(prec) : null;
+  if (type === 'n' || width > FMT_MAX || (prec != null && prec > FMT_MAX)) throw bad();
+  const tname = typeName(v);
+  const badType = () => new RuntimeError('fmtType', { type: tname, spec }, line);
+  if (typeof v === 'string') {
+    if ((type && type !== 's') || sign || z || alt || group || align === '=') throw badType();
+    if (zero && fill === undefined) fill = '0';
+    let s = v;
+    if (prec != null) s = Array.from(s).slice(0, prec).join('');
+    return pad(s, width, fill === undefined ? ' ' : fill, align || '<');
+  }
+  if (typeof v !== 'number' && typeof v !== 'boolean') throw badType();
+  const x = Number(v);
+  if (zero && fill === undefined) { fill = '0'; if (!align) align = '='; }
+  fill = fill === undefined ? ' ' : fill;
+  align = align || '>';
+  const neg = x < 0;
+  const ax = Math.abs(x);
+  const intType = 'bcdoxX'.includes(type) && type !== '';
+  let prefix = '', body, isInt = false;
+  // int として書式化: 型 b c d o x X と、型も精度も z も無い安全な整数値（|x| < 2^53）。それ以外は float（型の省略は repr／g の変形）。
+  if (intType || (type === '' && prec == null && !z && Number.isSafeInteger(x))) {
+    if (!Number.isInteger(x)) throw badType();
+    if (z || prec != null || type === 's') throw badType();
+    if (type === 'c') {
+      if (sign || alt || group || x < 0 || x > 0x10ffff) throw badType();
+      return pad(String.fromCodePoint(x), width, fill, align);
+    }
+    isInt = true;
+    const base = { b: 2, o: 8, x: 16, X: 16 }[type] || 10;
+    body = BigInt(ax).toString(base);
+    if (type === 'X') body = body.toUpperCase();
+    if (alt && base !== 10) prefix = '0' + (type === 'X' ? 'X' : type);
+    if (group === ',' && base !== 10) throw badType();
+  } else {
+    if (type === 's') throw badType();
+    if (!Number.isFinite(x)) {
+      body = Number.isNaN(x) ? 'nan' : 'inf';
+      if ('EFG'.includes(type) && type !== '') body = body.toUpperCase();
+      if (type === '%') body += '%';
+    } else {
+      body = floatBody(ax, type, prec, !!alt);
+      if ('EG'.includes(type) && type !== '') body = body.toUpperCase();
+    }
+  }
+  const plusSg = sign === '+' ? '+' : sign === ' ' ? ' ' : '';
+  let sg = neg ? '-' : plusSg;
+  // z（負のゼロを 0 に）: 丸めた結果が 0 の負の float は符号を外す（`f"{-0.0001:z.2f}"` は 0.00）。
+  if (z && neg && Number.isFinite(x) && !/[1-9]/.test(body.replace(/e[+-]\d+$/i, ''))) sg = plusSg;
+  // 整数部（int は本体全体・float は先頭の数字の並び）に区切りを入れる。'0' 埋めの '=' なら区切りを含めて幅まで 0 で埋める（python3 と
+  //   同じ 0,001,234・b／o／x／X の '_' は 4 桁ごと）。
+  const im = isInt ? [body] : /^\d+/.exec(body);
+  if (im && group) {
+    const size = (group === '_' && 'boxX'.includes(type) && type !== '') ? 4 : 3;
+    const rest = body.slice(im[0].length);
+    const mw = (fill === '0' && align === '=') ? Math.max(0, width - sg.length - prefix.length - rest.length) : 0;
+    body = groupDigits(im[0], group, size, mw) + rest;
+  }
+  return pad(body, width, fill, align, sg + prefix);
+}
+// f-string の置換フィールド（lexer の FMT・parser の fmt の節）: 変換（'r'・'s'・'a'・''）の後に書式指定。
+function pyFormatField(v, conv, spec, line) {
+  if (conv === 'r') v = pyRepr(v, false);
+  else if (conv === 'a') v = pyRepr(v, true);
+  else if (conv === 's') v = pyStr(v);
+  return formatValue(v, spec, line);
+}
+// str.format（位置 `{}`・番号 `{0}`・名前 `{a}`〔キーワード引数 kw〕・添字 `{0[1]}`／`{a[k]}`・変換 `!r`/`!s`/`!a`・書式指定〔入れ子の
+//   `{}` を 1 段まで・自動の番号は外側のフィールドの次〕・`{{`/`}}`）。python3 の ValueError／IndexError／KeyError に当たるものは
+//   行番号付きの実行時エラー（fmtBrace＝単独の `{`／`}`・fmtField＝当てはまる引数が無い／属性 `.x`（未対応）・fmtMix＝自動の番号と
+//   番号指定の混在・fmtSpec／fmtType は f-string と同じ）。是正前（v10.2.0）は正規表現 `\{(\d*)(?::[^}]*)?\}` で `{}`/`{n}` だけを
+//   素の str 化し、書式指定・名前・変換・`{{` は無視（`"{:.2f}".format(x)` は 3.14159・`"{a}"` はそのまま残った）。
+function pyStrFormat(tpl, args, kw, line) {
+  const st = { auto: 0, mode: null };
+  const render = (s, depth) => {
+    let out = '', i = 0;
+    while (i < s.length) {
+      const c = s[i];
+      if (c === '}') {
+        if (s[i + 1] === '}') { out += '}'; i += 2; continue; }
+        throw new RuntimeError('fmtBrace', {}, line);
+      }
+      if (c !== '{') { out += c; i++; continue; }
+      if (s[i + 1] === '{') { out += '{'; i += 2; continue; }
+      if (depth >= 2) throw new RuntimeError('fmtSpec', { spec: s }, line);   // python3: Max string recursion exceeded
+      // 対応する `}` まで（入れ子の `{…}` を数える）。
+      let j = i + 1, d = 1;
+      for (; j < s.length; j++) { if (s[j] === '{') d++; else if (s[j] === '}' && --d === 0) break; }
+      if (j >= s.length) throw new RuntimeError('fmtBrace', {}, line);
+      const body = s.slice(i + 1, j);
+      // フィールド名（`[` … `]` の中の `:`・`!` は区切りにしない）・変換・書式指定。
+      let k = 0;
+      for (; k < body.length; k++) {
+        if (body[k] === '[') { const e = body.indexOf(']', k); if (e < 0) { k = body.length; break; } k = e; continue; }
+        if (body[k] === ':' || body[k] === '!') break;
+      }
+      const name = body.slice(0, k);
+      let conv = '', spec = '';
+      if (body[k] === '!') {
+        conv = body[k + 1] || '';
+        if (!'rsa'.includes(conv) || conv === '' || (k + 2 < body.length && body[k + 2] !== ':')) throw new RuntimeError('fmtSpec', { spec: body.slice(k) }, line);
+        k += 2;
+      }
+      if (body[k] === ':') spec = body.slice(k + 1);
+      const v = fieldValue(name);
+      const sp = spec.includes('{') || spec.includes('}') ? render(spec, depth + 1) : spec;
+      out += pyFormatField(v, conv, sp, line);
+      i = j + 1;
+    }
+    return out;
+  };
+  const noArg = (name) => new RuntimeError('fmtField', { field: name }, line);
+  function fieldValue(name) {
+    const hm = /^[^.[]*/.exec(name), head = hm[0];
+    let rest = name.slice(head.length), v;
+    if (head === '' || /^\d+$/.test(head)) {
+      const want = head === '' ? 'auto' : 'manual';
+      if (st.mode && st.mode !== want) throw new RuntimeError('fmtMix', {}, line);
+      st.mode = want;
+      const idx = head === '' ? st.auto++ : Number(head);
+      if (idx >= args.length) throw noArg(name);
+      v = args[idx];
+    } else {
+      if (!kw || !Object.prototype.hasOwnProperty.call(kw, head)) throw noArg(name);
+      v = kw[head];
+    }
+    while (rest) {
+      const im = /^\[([^\]]*)\]/.exec(rest);
+      if (!im) throw noArg(name);   // `.属性`（未対応）・壊れた添字
+      const key = /^\d+$/.test(im[1]) ? Number(im[1]) : im[1];
+      if (v == null || typeof v !== 'object' && typeof v !== 'string') throw noArg(name);
+      if (Array.isArray(v) || typeof v === 'string' ? !(typeof key === 'number' && key < v.length) : !Object.prototype.hasOwnProperty.call(v, key)) throw noArg(name);
+      v = v[key];
+      rest = rest.slice(im[0].length);
+    }
+    return v;
+  }
+  return render(String(tpl), 0);
 }
 const STR_METHODS = {
   upper: (s) => () => s.toUpperCase(),
@@ -439,7 +732,7 @@ const STR_METHODS = {
   endswith: (s) => (p) => s.endsWith(String(p)),
   find: (s) => (x) => s.indexOf(String(x)),
   count: (s) => (x) => { const t = String(x); return t === '' ? s.length + 1 : s.split(t).length - 1; },
-  format: (s) => (...a) => pyFormat(s, a),
+  // format は evalCall が直接 pyStrFormat を呼ぶ（BK3: キーワード引数と実行時エラーの行を渡すため）。
   join: (s) => (arr) => (Array.isArray(arr) ? arr : [arr]).map(String).join(s),
 };
 const LIST_METHODS = {
@@ -473,7 +766,7 @@ function pyMethod(obj, name) {
 
 // AP16: Python 風の printf フォーマット ("x=%d"%5 → "x=5")。%d/%i/%s/%f(.N)/%x/%X/%% を最小サポート。
 // 引数はタプル (配列) or 単一値。位置は左から順に消費。未知指定子はそのまま残す。
-// (str.format の `{}`-式 pyFormat とは別＝`%` 演算子専用。)
+// (str.format の `{}`-式 pyStrFormat〔BK3〕とは別＝`%` 演算子専用。)
 function pyPercentFormat(fmt, args) {
   const list = Array.isArray(args) ? args : [args];
   let i = 0;

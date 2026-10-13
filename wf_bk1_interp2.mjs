@@ -1,4 +1,4 @@
-// wf_bk1_interp2.mjs — Stage BK「インタプリタ是正 II」の常設ゲート。BK1 で新設し、BK2〜BK5 が章を足す（BK2＝G 章）。
+// wf_bk1_interp2.mjs — Stage BK「インタプリタ是正 II」の常設ゲート。BK1 で新設し、BK2〜BK5 が章を足す（BK2＝G 章・BK3＝H 章）。
 // ════════════════════════════════════════════════════════════════════════════
 // 学習者が自力で原因に辿り着けないエラー（英語モードでも日本語・行番号の無い JS の RangeError・状況に合わない文言）の是正を、
 //   本番経路 buildController(src, lang, buildApi(world)) → setup()/tick()（と fleet の tickSlot・race_engine の runRace）で
@@ -42,6 +42,19 @@
 //          list／tuple／str／dict に分け、数が違えばエラー）・`[a, b] += …` は構文エラー・(2) `--1`／`++x`／`not not x`・C の `++`／`--` は無改変。
 //          G-7 括弧の中の改行（暗黙の行継続）と閉じていない括弧（括弧の行で報告・括弧より前のエラーが先）。
 //      出荷 py の AST 指紋（wf_bj1_pysem E 章）・23 本の出力と runRace（F 章）は不変。
+//
+// BK3（f-string と str.format の書式指定・py だけ）— 是正前の木（b93bb43）で `--root <木>` を付けて回すと H 章（是正前と同じ値の 4 行を除く）と
+//   A 章の BK3 新設の 4 本（ja/en）・本数・全種が赤になる（2026-10-14 の実測: pass=430 fail=75＝赤は A 章の 10 と H 章の 65 だけ・A〜G の
+//   既存の述語は緑）。A 章: parser_py に fstrRBrace・kwArg・posAfterKw・kwRepeat（9 → 13）・lexer に書式指定の中の閉じ } の無い fstrBrace（4 → 5）。
+//   H) 本番経路の値とエラーを python3 3.14.4 の実測（定数・checkPy3／checkPy3Line）と照合する。表の最後の列は是正前の値。
+//      H-1 (7) 書式指定ミニ言語（fill・align・sign・0・width・,／_・.precision・type d f e g s % x X b o と省略・# の接頭辞・偶数丸め）を f-string と
+//          str.format（位置・番号・名前付き・添字・入れ子の幅・{{ }}・!r）で・未対応の指定（n）と書き方の誤りは interp.err.fmtSpec・型に使えない
+//          指定は fmtType・str.format の引数は fmtField／fmtMix／fmtBrace（行番号付き）・書式指定の無いフィールドと % の書式は是正前と同じ。
+//      H-2 (25) 自己記述 `{x=}`・`{x = }`・`{x=:.2f}`・変換 `!r`／`!s`／`!a`（`!r` の文字列は 'a'）。H-3 (26) 書式指定の中の入れ子のフィールド。
+//      H-4 (23) リテラル部の単独の `}` は構文エラー interp.syn.fstrRBrace（行＝その `}` の物理行）・`}}` は `}`・`\{`／`\}` は `\` を残す。
+//      H-5 キーワード引数は `.format(…)` だけ（それ以外は構文エラー kwArg・位置引数の後ろ・同じ名前は 1 回）・キーワード引数の無い呼び出しの
+//          AST は是正前と同じ形。
+//      wf_bj1_pysem の F-3・H-1（H_SPEC）・H-3 の書式指定と単独の `}` の行は、是正前の値（書式指定を落とす・a}b5）から python3 の値に改めた。
 //
 // 使い方: node wf_bk1_interp2.mjs              … 検査
 //         node wf_bk1_interp2.mjs --root <dir>  … <dir>/public/js の product で回す（改修前の木で赤になることの確認用）
@@ -178,6 +191,15 @@ const SRC_ERR = [
     "Syntax error (Py): the left side of the compound assignment '+=' cannot be a list (such as [a, b]); assign the variables one at a time (line 2)"],
   ['bytes リテラル（py・BK2 新設）', 'py', 'x = 1\ny = b"ab"', 'interp.syn.bytes', 2,
     '構文エラー(Py): bytes リテラル（b"…）は未対応です。文字列は b を付けずに書いてください (行 2)', 'Syntax error (Py): bytes literals (b"…) are not supported; write the string without the b prefix (line 2)'],
+  // BK3 新設（parser_py）: f-string のリテラル部の単独の `}`（lexer の印 FSTRERR を primary が報告）とキーワード引数（.format(…) だけ）。
+  ['f-string の単独の }（py・BK3 新設）', 'py', 'x = 5\ns = f"a}b"', 'interp.syn.fstrRBrace', 2,
+    "構文エラー(Py): f-string の中の単独の '}' は使えません ('}' という文字は '}}' と書きます) (行 2)", "Syntax error (Py): a single '}' is not allowed in an f-string (write '}}' for a literal '}') (line 2)"],
+  ['.format 以外のキーワード引数（py・BK3 新設）', 'py', 'x = 1\nprint(x, end="")', 'interp.syn.kwArg', 2,
+    "構文エラー(Py): キーワード引数 'end=' は未対応です (キーワード引数を使えるのは str.format() だけです) (行 2)", "Syntax error (Py): keyword argument 'end=' is not supported (only str.format() accepts keyword arguments) (line 2)"],
+  ['キーワード引数の後ろの位置引数（py・BK3 新設）', 'py', 'print("{}".format(a=1, 2))', 'interp.syn.posAfterKw', 1,
+    '構文エラー(Py): キーワード引数の後ろに位置引数は書けません (行 1)', 'Syntax error (Py): positional argument follows keyword argument (line 1)'],
+  ['同じ名前のキーワード引数（py・BK3 新設）', 'py', 'print("{a}".format(a=1, a=2))', 'interp.syn.kwRepeat', 1,
+    "構文エラー(Py): キーワード引数 'a' が 2 回あります (行 1)", "Syntax error (Py): keyword argument repeated: 'a' (line 1)"],
   ['eat の期待（C のキャスト）', 'c', cLoop('  float x = 3.7; int y = (int)x;'), 'interp.syn.expected', 3,
     "構文エラー(C): ';' を期待しましたが 'x' (行 3)", "Syntax error (C): expected ';' but got 'x' (line 3)"],
   ['switch の case/default（C）', 'c', cLoop('  switch (1) { x = 1; }'), 'interp.syn.caseDefault', 3,
@@ -188,7 +210,7 @@ const SRC_ERR = [
 for (const [label, lang, code, key, line, wantJa, wantEn] of SRC_ERR) {
   const { ja, en } = runBoth(code, lang);
   ok(ja.err === wantJa && ja.line === line && ja.key === key,
-    `A ${label}: ja ${J(ja.err)}・行 ${ja.line}・${ja.key}（期待 ${label.includes('BK2 新設') ? 'BK2 の文言' : '是正前と同じ'} ${J(wantJa)}・行 ${line}・${key}）`);
+    `A ${label}: ja ${J(ja.err)}・行 ${ja.line}・${ja.key}（期待 ${label.includes('BK2 新設') ? 'BK2 の文言' : label.includes('BK3 新設') ? 'BK3 の文言' : '是正前と同じ'} ${J(wantJa)}・行 ${line}・${key}）`);
   ok(en.err === wantEn && en.line === line && en.key === key && !JP_RE.test(en.err || ''),
     `A ${label}: en ${J(en.err)}（期待 ${J(wantEn)}・日本語なし）`);
 }
@@ -196,12 +218,13 @@ for (const [label, lang, code, key, line, wantJa, wantEn] of SRC_ERR) {
   const lex = [...src('interp/lexer.js').matchAll(/throw lexErr\('([A-Za-z]+)'/g)].map((m) => m[1]);
   const py = [...src('interp/parser_py.js').matchAll(/(?<!function )\berr\('([A-Za-z]+)'/g)].map((m) => m[1]);
   const c = [...src('interp/parser_c.js').matchAll(/(?<!function )\berr\('([A-Za-z]+)'/g)].map((m) => m[1]);
-  ok(lex.length === 4 && py.length === 9 && c.length === 3,
-    `A 発生箇所の本数: lexer ${lex.length}・parser_py ${py.length}・parser_c ${c.length}（期待 4・9・3＝16。BK1 は 4・4・3＝11、BK2 が parser_py に 5 箇所〔err の中と program の末尾の unclosed・inlineCompound の unexpected・augList・bytes〕）`);
+  ok(lex.length === 5 && py.length === 13 && c.length === 3,
+    `A 発生箇所の本数: lexer ${lex.length}・parser_py ${py.length}・parser_c ${c.length}（期待 5・13・3＝21。BK1 は 4・4・3＝11、BK2 が parser_py に 5 箇所〔err の中と program の末尾の unclosed・inlineCompound の unexpected・augList・bytes〕、` +
+    `BK3 が lexer に 1 箇所〔書式指定の中で閉じ } の無い fstrBrace〕・parser_py に 4 箇所〔fstrRBrace・kwRepeat・posAfterKw・kwArg〕）`);
   const covered = new Set(SRC_ERR.map((r) => r[3]));
   const want = [...lex.map((s) => 'interp.lex.' + s), ...py.map((s) => 'interp.syn.' + s), ...c.map((s) => 'interp.syn.' + s)];
   const miss = [...new Set(want)].filter((k) => !covered.has(k));
-  ok(want.length === 16 && miss.length === 0, `A 発生箇所の全種（${[...new Set(want)].join('・')}）が表で起きている${miss.length ? '（未検査 ' + miss.join(', ') + '）' : ''}`);
+  ok(want.length === 21 && miss.length === 0, `A 発生箇所の全種（${[...new Set(want)].join('・')}）が表で起きている${miss.length ? '（未検査 ' + miss.join(', ') + '）' : ''}`);
   // 字句・構文エラーの line は構造値（setLang に依らない）・en の行の接尾は (line N)。
 }
 
@@ -610,6 +633,116 @@ gErrs('G-7', [
   ['括弧より前のエラーが先', 'x = = 1\ny = (2', 'interp.syn.unexpected', 1, { tok: '=' }, /^SyntaxError: invalid syntax/, "同じ（「予期しないトークン '=' (行 1)」）"],
   ['余分な閉じ括弧', 'x = 1)', 'interp.syn.unexpected', 1, { tok: ')' }, /^SyntaxError: unmatched '\)'/, "同じ（「予期しないトークン ')' (行 1)」）"],
 ]);
+
+// ── H) BK3 f-string と str.format の書式指定（(7)(23)(25)(26)）──────────────────────────────────
+console.log('\nH) BK3 書式指定ミニ言語・自己記述 {x=}・変換 !r/!s/!a・入れ子のフィールド・単独の }・str.format — 是正前（b93bb43）の値は各表の最後の列');
+// H-1 (7) 書式指定ミニ言語 `[[fill]align][sign][#][0][width][,][.precision][type]`（f-string と str.format の位置・番号・名前付き）。
+//   期待値は python3 3.14.4 の実測（checkPy3 で突き合わせる）。是正前は書式指定を落として素の str 化（`f"{x:.2f}"` は 3.14159）・
+//   str.format は `{}`／`{n}` だけ（名前・変換・`{{` は無視、キーワード引数は構文エラー）。
+gVals('H-1', [
+  ['f"{x:.2f}"（probe の (7)）', 'x = 3.14159\nprint(f"{x:.2f}")', 0, ['3.14'], '["3.14159"]'],
+  ['f"{x:>5}"', 'x = 5\nprint(f"[{x:>5}]")', 0, ['[    5]'], '["[5]"]'],
+  ['f"{i:03d}"', 'i = 7\nprint(f"{i:03d}")', 0, ['007'], '["7"]'],
+  ['f"{n:,}"', 'n = 1234567\nprint(f"{n:,}")', 0, ['1,234,567'], '["1234567"]'],
+  ['f"{p:.1%}"', 'p = 0.256\nprint(f"{p:.1%}")', 0, ['25.6%'], '["0.256"]'],
+  ['"{:>8.3f}".format(x)', 'x = 3.14159\nprint("[" + "{:>8.3f}".format(x) + "]")', 0, ['[   3.142]'], '["[3.14159]"]'],
+  ['"{0} {1}".format(a, b)（従来どおり）', 'a = 1\nb = "two"\nprint("{0} {1}".format(a, b))', 0, ['1 two'], '同じ'],
+  ['"{a}".format(a=1)（キーワード引数）', 'print("{a}".format(a=1))', 0, ['1'], "「')' を期待しましたが '=' (行 1)」"],
+  ['埋め文字と揃え（< ^ > と文字列の既定は左）', 's = "ab"\nprint(f"[{s:*<6}][{s:-^6}][{s:>4}][{s:<4}]")', 0, ['[ab****][--ab--][  ab][ab  ]'], '["[ab][ab][ab][ab]"]'],
+  ['符号（+ - 空白）', 'v = 5\nw = -5\nprint(f"[{v:+}][{w:+}][{v:-}][{v: }][{w: }]")', 0, ['[+5][-5][5][ 5][-5]'], '["[5][-5][5][5][-5]"]'],
+  ['0 埋め・符号と = の揃え', 'v = -12.5\nprint(f"[{v:08.2f}][{v:+08.2f}][{v:=+9.2f}]")', 0, ['[-0012.50][-0012.50][-   12.50]'], '["[-12.5][-12.5][-12.5]"]'],
+  ['区切り（, と _・float の整数部・0 埋めの区切り）', 'print(f"{1234567.891:,}|{1234567:_}|{12345.678:,.2f}|{-1234:010,}")', 0, ['1,234,567.891|1_234_567|12,345.68|-0,001,234'], '["1234567.891|1234567|12345.678|-1234"]'],
+  ['型 e／E（指数は 2 桁以上）', 'x = 12345.678\nprint(f"{x:e}|{x:.2e}|{0.000123:E}")', 0, ['1.234568e+04|1.23e+04|1.230000E-04'], '["12345.678|12345.678|0.000123"]'],
+  ['型 g（有効数字・末尾の 0 を外す・指数への切り替え）', 'print(f"{1234.5:g}|{0.00001234:g}|{123456789:g}|{1.0:g}|{3.14159:.3g}")', 0, ['1234.5|1.234e-05|1.23457e+08|1|3.14'], '["1234.5|0.00001234|123456789|1|3.14159"]'],
+  ['型 s と精度（文字列の切り詰め）', 's = "abcdef"\nprint(f"[{s:s}][{s:.3}][{s:>5.2}]")', 0, ['[abcdef][abc][   ab]'], '["[abcdef][abcdef][abcdef]"]'],
+  ['型 x X b o と # の接頭辞・_ は 4 桁ごと', 'print(f"{255:x}|{255:X}|{255:#x}|{5:b}|{5:#b}|{8:o}|{255:_b}")', 0, ['ff|FF|0xff|101|0b101|10|1111_1111'], '["255|255|255|5|5|8|255"]'],
+  ['型 %（100 倍・既定 6 桁）', 'print(f"{0.5:%}|{0.125:.0%}|{1:.1%}")', 0, ['50.000000%|12%|100.0%'], '["0.5|0.125|1"]'],
+  ['型の省略＋精度（float は g の変形）', 'print(f"{3.14159:.3}|{12.5:.3}|{123.4:.3}|{0.00001:.3}")', 0, ['3.14|12.5|1.23e+02|1e-05'], '["3.14159|12.5|123.4|0.00001"]'],
+  ['丸めは 2 進の正確な値の偶数丸め（toFixed は 0.5→"1"）', 'print(f"{2.5:.0f}|{0.125:.2f}|{2.675:.2f}|{1.5:.0f}|{0.5:.0f}")', 0, ['2|0.12|2.67|2|0'], '["2.5|0.125|2.675|1.5|0.5"]'],
+  ['幅だけ（数は右・文字列は左）', 'print(f"[{42:6}][{\'hi\':6}]")', 0, ['[    42][hi    ]'], '["[42][hi]"]'],
+  ['1e21 以上の f（toFixed は指数表記になる）', 'print(f"{1e22:.1f}")', 0, ['10000000000000000000000.0'], '["1e+22"]'],
+  ['str.format の名前・番号・添字・入れ子の幅', 'print("{name}: {val:.1f}|{0[1]}|{1:{2}}|".format([1, 2], 7, 4, name="spd", val=1.25))', 0, ['spd: 1.2|2|   7|'], "「')' を期待しましたが '=' (行 1)」"],
+  ['str.format の {{ }} と !r', 'print("{{{}}} {!r}".format(5, "a"))', 0, ["{5} 'a'"], '["{{5}} {!r}"]'],
+  ['str.format の幅を引数で（{:{}}・自動の番号は外側が先）', 'print("[" + "{:{}}".format("a", 5) + "]")', 0, ['[a    ]'], '["[a}]"]'],
+  ['センサー値の整形（Model A の loop()・1 tick）', 'def loop():\n    d = 123.456\n    print(f"d={d:6.1f}mm")', 1, ['d= 123.5mm'], '["d=123.456mm"]'],
+]);
+// 未対応の指定と書き方の誤り（interp.err.fmtSpec）・型に使えない指定（fmtType）・str.format の引数（fmtField・fmtMix・fmtBrace）は
+//   行番号付きの実行時エラー（python3 は ValueError／TypeError／IndexError／KeyError・同じ行）。`n`（ロケール依存）は python3 では有効だが未対応。
+gErrs('H-1', [
+  ['未対応の型 n（python3 は "5"）', 'x = 5\nprint(f"{x:n}")', 'interp.err.fmtSpec', 2, { spec: 'n' }, null, '["5"]（書式指定を落とした）'],
+  ['書き方の誤り {x:abc}', 'x = 5\nprint(f"{x:abc}")', 'interp.err.fmtSpec', 2, { spec: 'abc' }, /^ValueError: Invalid format specifier/, '["5"]'],
+  ['書き方の誤り "{:5.2.1}"', 'print("{:5.2.1}".format(1.5))', 'interp.err.fmtSpec', 1, { spec: '5.2.1' }, /^ValueError: Invalid format specifier/, '["1.5"]'],
+  ['文字列に d', 's = "a"\nprint(f"{s:d}")', 'interp.err.fmtType', 2, { type: 'str', spec: 'd' }, /^ValueError: Unknown format code 'd' for object of type 'str'/, '["a"]'],
+  ['整数値でない数に d', 'x = 3.5\nprint(f"{x:d}")', 'interp.err.fmtType', 2, { type: 'float', spec: 'd' }, /^ValueError: Unknown format code 'd' for object of type 'float'/, '["3.5"]'],
+  ['list に幅', 'x = [1]\nprint(f"{x:>5}")', 'interp.err.fmtType', 2, { type: 'list', spec: '>5' }, /^TypeError: unsupported format string passed to list\.__format__/, '["1"]'],
+  ['文字列に符号', "print(f\"{'a':+}\")", 'interp.err.fmtType', 1, { type: 'str', spec: '+' }, /^ValueError: Sign not allowed in string format specifier/, '["a"]'],
+  ['x に , の区切り', 'print(f"{255:,x}")', 'interp.err.fmtType', 1, { type: 'int', spec: ',x' }, /^ValueError: Cannot specify ',' with 'x'/, '["255"]'],
+  ['関数の中の書式のエラーの行（return の行）', 'def f(v):\n    return f"{v:d}"\nprint(f(1.5))', 'interp.err.fmtType', 2, { type: 'float', spec: 'd' }, /^ValueError: Unknown format code 'd'/, '["1.5"]'],
+  ['str.format の引数が足りない', 'print("{}{}".format(1))', 'interp.err.fmtField', 1, { field: '' }, /^IndexError: Replacement index 1 out of range/, '["1undefined"]'],
+  ['str.format の名前の引数が無い', 'print("{a}".format(b=1))', 'interp.err.fmtField', 1, { field: 'a' }, /^KeyError: 'a'/, "「')' を期待しましたが '=' (行 1)」"],
+  ['str.format の添字が範囲外', 'print("{0[5]}".format([1]))', 'interp.err.fmtField', 1, { field: '0[5]' }, /^IndexError: list index out of range/, '["{0[5]}"]'],
+  ['str.format の属性（未対応・python3 は AttributeError）', 'print("{0.x}".format(1))', 'interp.err.fmtField', 1, { field: '0.x' }, /^AttributeError/, '["{0.x}"]'],
+  ['str.format の自動の番号と番号の指定の混在', 'print("{0}{}".format(1, 2))', 'interp.err.fmtMix', 1, {}, /^ValueError: cannot switch from manual field specification to automatic field numbering/, '["11"]'],
+  ['str.format の単独の }（2 行目）', 'x = 1\nprint("}".format())', 'interp.err.fmtBrace', 2, {}, /^ValueError: Single '}' encountered in format string/, '["}"]'],
+  ['str.format の閉じていない {', 'print("{".format())', 'interp.err.fmtBrace', 1, {}, /^ValueError: Single '\{' encountered in format string/, '["{"]'],
+  ['str.format の不明な変換 !x', 'print("{0!x}".format(1))', 'interp.err.fmtSpec', 1, { spec: '!x' }, /^ValueError: Unknown conversion specifier x/, '["{0!x}"]'],
+]);
+{ // 変わらないもの: 書式指定の無いフィールドの値（是正前の `"" + (式)` と同じ＝list は 1,2・float は JS の表示。python3 は [1, 2]・1e-07＝未是正の差）と `%` の書式。
+  const r = run('x = [1, 2]\ny = 0.1 + 0.2\nz = 1e-7\nprint(f"{x}|{y}|{z}|{x!s}")', 'py');
+  ok(!r.err && J(r.out) === J(['1,2|0.30000000000000004|1e-7|1,2']), `H-1 書式指定の無いフィールドの値は是正前と同じ → ${r.err ? 'ERR ' + r.err : J(r.out)}（是正前 ["1,2|0.30000000000000004|1e-7|1,2"]・python3 は ["[1, 2]|0.30000000000000004|1e-07|[1, 2]"]）`);
+  const p = run('x = 3.14159\nprint("%.2f" % x, "%d" % 7)', 'py');
+  ok(!p.err && J(p.out) === J(['3.14 7']), `H-1 % の書式は従来どおり → ${p.err ? 'ERR ' + p.err : J(p.out)}（期待 ["3.14 7"]）`);
+}
+
+// H-2 (25) 自己記述 `{x=}`（式の本文・= と空白を残す。変換も書式指定も無ければ repr）と変換 `!r`／`!s`／`!a`。
+gVals('H-2', [
+  ['f"{x=}"（probe の (25)）', 'x = 5\nprint(f"{x=}")', 0, ['x=5'], "「')' を期待しましたが '=' (行 2)」"],
+  ['f"{x = }"（空白を残す）', 'x = 5\nprint(f"{x = }")', 0, ['x = 5'], "「')' を期待しましたが '=' (行 2)」"],
+  ['f"{x=:.2f}"', 'x = 3.14159\nprint(f"{x=:.2f}")', 0, ['x=3.14'], "「')' を期待しましたが '=' (行 2)」"],
+  ["f\"{s=}\"＝s='a'・空の書式指定 {s=:} と !s は str・!r は 'a'（probe の (25) !r）", 's = "a"\nprint(f"{s=}|{s=:}|{s=!s}|{s!r}|{s!s}|{s!a}")', 0, ["s='a'|s=a|s=a|'a'|a|'a'"], "「')' を期待しましたが '=' (行 2)」（!r だけなら a）"],
+  ['!r の引用符の選び方とエスケープ', 's = "it\'s\\n"\nprint(f"{s!r}")', 0, ['"it\'s\\n"'], '["it\'s⏎"]'],
+  ['!a は ASCII 以外を \\x・\\u に', 's = "é日"\nprint(f"{s!a}|{s!r}")', 0, ["'\\xe9\\u65e5'|'é日'"], '["é日|é日"]'],
+  ['式の自己記述と書式指定', 'x = 5\nprint(f"{x+1=}|{x * 2 = :>4}|")', 0, ['x+1=6|x * 2 =   10|'], "「')' を期待しましたが '=' (行 2)」"],
+  ['変換の後の書式指定', 'x = 5\nprint(f"{x!r:>4}|{x=!r:>4}|")', 0, ['   5|x=   5|'], "「')' を期待しましたが '=' (行 2)」"],
+  ['入れ子の f-string の中の自己記述', "x = 5\nprint(f\"{f'{x=}'}\")", 0, ['x=5'], "「')' を期待しましたが '=' (行 2)」"],
+]);
+// H-3 (26) 書式指定の中の入れ子の置換フィールド。
+gVals('H-3', [
+  ['f"{x:{w}}"', 'x = 5\nw = 6\nprint(f"{x:{w}}|")', 0, ['     5|'], '["5|"]'],
+  ["f\"{x:{'>'}{w}}\"", "x = 5\nw = 6\nprint(f\"{x:{'>'}{w}}|\")", 0, ['     5|'], '["5|"]'],
+  ['f"{x:{w}.{p}f}"', 'x = 3.14159\nw = 8\np = 3\nprint(f"{x:{w}.{p}f}|")', 0, ['   3.142|'], '["3.14159|"]'],
+  ["f\"{x:{'*'}^{9}}\"", "x = 5\nprint(f\"{x:{'*'}^{9}}|\")", 0, ['****5****|'], '["5|"]'],
+  ['f"{x:{w=}}"（入れ子の自己記述＝書式指定 "w=6"）', 'x = 5\nw = 6\nprint(f"{x:{w=}}|")', 0, ['wwwww5|'], '["5|"]'],
+]);
+// H-4 (23) リテラル部の単独の `}` は構文エラー（行＝その `}` の物理行・python3 と同じ SyntaxError）。`}}` は `}`。通常の f-string の `\{`／`\}` は
+//   `\` と波括弧（python3 は未知のエスケープの `\` を残す。是正前は `\` を落とした波括弧 1 文字）。
+gErrs('H-4', [
+  ['f"a}b"（2 行目）', 'x = 5\ns = f"a}b"', 'interp.syn.fstrRBrace', 2, {}, /^SyntaxError: f-string: single '}' is not allowed/, '[]（s は "a}b"）'],
+  ['三重引用符の 2 行目の }（物理行）', 'x = 5\ns = f"""a\n}"""', 'interp.syn.fstrRBrace', 3, {}, /^SyntaxError: f-string: single '}' is not allowed/, '[]（s は "a⏎}"）'],
+  ['f"{x}}"（フィールドの後ろの単独の }）', 'x = 5\nprint(f"{x}}")', 'interp.syn.fstrRBrace', 2, {}, /^SyntaxError: f-string: single '}' is not allowed/, '["5}"]'],
+  ['f"a\\}b"（\\ の後ろの単独の }）', 'x = 5\nprint(f"a\\}b")', 'interp.syn.fstrRBrace', 2, {}, /^SyntaxError: f-string: single '}' is not allowed/, '["a}b"]'],
+]);
+gVals('H-4', [
+  ['f"a}}b{{c}}"（従来どおり）', 'print(f"a}}b{{c}}")', 0, ['a}b{c}'], '同じ'],
+  ['f"a\\}}b"・f"a\\{x}b"（\\ を残す）', 'x = 5\nprint(f"a\\}}b|a\\{x}b")', 0, ['a\\}b|a\\5b'], '["a}b|a5b"]'],
+]);
+// H-5 キーワード引数（使えるのは .format(…) だけ・位置引数の後ろ・同じ名前は 1 回）。.format 以外のキーワード引数（print の end= 等）は
+//   python3 では有効だが未対応＝読み込みの時点の構文エラー kwArg（是正前も構文エラー「')' を期待しましたが '='」）。
+gErrs('H-5', [
+  ['print(x, end="")（未対応・python3 は 1）', 'x = 1\nprint(x, end="")', 'interp.syn.kwArg', 2, { name: 'end' }, null, "「')' を期待しましたが '=' (行 2)」"],
+  ['ユーザー関数のキーワード引数（未対応・python3 は 1）', 'def f(a):\n    return a\nprint(f(a=1))', 'interp.syn.kwArg', 3, { name: 'a' }, null, "「')' を期待しましたが '=' (行 3)」"],
+  ['キーワード引数の後ろの位置引数', 'print("{}".format(a=1, 2))', 'interp.syn.posAfterKw', 1, {}, /^SyntaxError: positional argument follows keyword argument/, "「')' を期待しましたが '=' (行 1)」"],
+  ['同じ名前のキーワード引数', 'print("{a}".format(a=1, a=2))', 'interp.syn.kwRepeat', 1, { name: 'a' }, /^SyntaxError: keyword argument repeated: a/, "「')' を期待しましたが '=' (行 1)」"],
+]);
+{ // キーワード引数の無い呼び出しの AST は是正前と同じ形（kwargs を持たない）・ある呼び出しだけ kwargs を持つ。
+  const { parsePy } = await imp('interp/parser_py.js');
+  const calls = (n, acc = []) => { if (Array.isArray(n)) n.forEach((x) => calls(x, acc)); else if (n && typeof n === 'object') { if (n.t === 'call') acc.push(n); Object.values(n).forEach((x) => calls(x, acc)); } return acc; };
+  const a = calls(parsePy('print(len("ab"), "{}".format(1))'));
+  let b = [];
+  try { b = calls(parsePy('print("{a}".format(a=1))')); } catch (e) { b = []; }   // 是正前の木（--root）は構文エラー
+  ok(a.length === 3 && a.every((c) => !('kwargs' in c)) && b.length === 2 && J(b.map((c) => c.kwargs ? c.kwargs.map((k) => k.name) : null)) === J([null, ['a']]),
+    `H-5 キーワード引数の無い呼び出しの節に kwargs は無い（${a.length} 本）・ある呼び出しだけ kwargs（${J(b.map((c) => c.kwargs ? c.kwargs.map((k) => k.name) : null))}）`);
+}
 
 console.log(`\n  python3 との突き合わせ: ${PY3 ? py3Checked + ' 件' : '0 件（python3 不在）'}`);
 console.log(`[結果] pass=${pass} fail=${fail}`);

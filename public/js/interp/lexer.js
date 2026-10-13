@@ -1,6 +1,7 @@
 // 字句解析。mode = 'c' | 'py'。
 // 共通トークン: NUM, STR, ID, OP, PUNC, EOF
 // Python 専用: NEWLINE, INDENT, DEDENT, BYTES（BK2: b"…"。parser_py が「未対応」の構文エラーにする）
+//   BK3: FMT（f-string の置換フィールドの頭・値＝変換）・FSTRERR（f-string のリテラル部の単独の `}`。parser_py が構文エラーにする）。emitFString。
 // 戻り値: トークン配列。py は配列の属性 unclosed（BK2: 末尾で開いたままの一番内側の括弧 {ch, line, idx}・無ければ undefined）も持つ。
 //   f-string の外枠の `(` は属性 fstr＝開き引用符（接頭辞込み・例 `f"`。BK2: 隣り合う文字列の連結・呼び出しと区別・エラーの表示）。
 //
@@ -137,84 +138,139 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
   //      実行時エラーの行は従来どおり文の行（`\` で続けた複数行の文と同じ。python3 は式のある行）。
   //   ② 埋め込み式の範囲は 1 回の走査で決める。式の中の文字列リテラル（'…'・"…"・'''…'''・"""…"""。`\'` 等のエスケープは raw が 2 文字＝
   //      引用符に数えない）の中では `{`・`}`・`:`・`!` を区切りにしない（f"{'}'}" → "}"・f"{':'}" → ":"・f"{'''it's'''}" → "it's"）。
-  //      括弧の外の最初の `:`（書式指定）／`!r`・`!s`・`!a`（変換）から後ろは落とし（値は素の str 化・従来どおり）、その中の引用符は文字として
+  //      括弧の外の最初の `:`（書式指定）／`!r`・`!s`・`!a`（変換）から後ろは式に入れず（BK3 で書式指定・変換として評価する。BJ5 では落とした）、その中の引用符は文字として
   //      扱う（python3 と同じ。f"{x:'>5}" の `'` は埋め文字＝区切りではない）。書式指定の中では入れ子の `{…}` だけを数えて閉じ `}` を探す。
   //   ③ 閉じ `}` が無い置換フィールドは字句エラー（行＝`{` の行。式の中に字句エラー〔閉じていない文字列・`\` 等〕があればそちらを先に報告）。
   //      BJ5 の初版は書式指定の中の引用符も文字列の区切りとして追い、閉じ `}` を見落として本体の末尾まで読み、書式指定として黙って落としていた
   //      （f"{x:'>5} and {a}" → "5"。層 4 の指摘。是正前の 0aa4039 と python3 の書式指定を落とした値は "5 and 4"）。
   //   是正前（HEAD 0aa4039）: 式の範囲は `{`／`}` だけで決め（引用符を見ない）、切り出した式から書式指定を落としていた＝f"{'}'}" → "'}"・
   //   f"{':'}" → ""・f"{'a:b'}" → "a"・f"{'{'}" → 構文エラー・閉じ `}` の無い f"{x" → "5"（エラー無し・python3 は SyntaxError）。
-  function emitFString(units, ln, open) {
-    const parts = [];   // {lit:string} | {expr:string, l0:式の開始行（`{` の行）, l1:閉じ `}` の行}
-    let lit = '', k = 0;
+  // BK3（(7)(23)(25)(26)・py の f-string の書式指定・変換・自己記述・単独の `}`）: 置換フィールドは
+  //   `FMT(変換) ( ( 式のトークン ) [, 書式指定] )` で出す（FMT の値＝変換 ''／'r'／'s'／'a'・行＝`{` の行）。parser_py の primary が
+  //   { t: 'fmt', conv, v, spec } の節にし、評価器が pyFormatField（evaluator.js）で python3 と同じ文字列にする。書式指定は
+  //   `( STR + FMT(…) + STR … )` の文字列の式（入れ子の置換フィールド `{x:{w}}`・`{x:{'>'}{w}}` を含む・(26)）。書式指定の無い
+  //   フィールドも同じ FMT で出す（値は是正前の `"" + (式)` と同じ文字列＝pyStr）。
+  //   ① 変換: 括弧の外の `!r`／`!s`／`!a`（直後が `}` か `:`）。② 自己記述 (25): 式の本文が `=`（前後の空白を含む。直前が `=`・`!`・`<`・`>`
+  //      でない＝`==`・`!=`・`<=`・`>=` は式のまま）で終われば、本文（`=` と空白を含む）をリテラル部に足し、変換も書式指定も無ければ変換を
+  //      `r` にする（python3 と同じ＝`f"{s=}"` は s='a'・`f"{s=:}"` は s=a）。③ 書式指定の中の `{` は入れ子の置換フィールド（再帰）・
+  //      `}` は閉じ（`}}` に意味は無い＝python3 と同じ）。④ (23) リテラル部の単独の `}` は構文エラー（`}}` は `}`）: ここでは投げずに
+  //      トークン FSTRERR（行＝その `}` の物理行）を出し、parser_py の primary が interp.syn.fstrRBrace にする（字句エラーではなく構文エラー
+  //      ＝python3 の SyntaxError「f-string: single '}' is not allowed」。文の順に報告）。⑤ 通常の f-string の `\{`／`\}`（未知のエスケープ）は
+  //      `\` と波括弧の 2 単位に分ける（python3 は未知のエスケープの `\` を残す＝`f"a\{x}b"` は a\5b・`f"a\}b"` は単独の `}`・`f"{x:\}"` の
+  //      書式指定は `\`）。是正前は `\` を落とした波括弧 1 文字で、`f"a\{x}b"` は a5b・`f"a\}b"` は a}b だった。raw の f-string は BK2 から
+  //      `\` と次の文字が別の単位（変更なし）。外枠の `(` の印 fstr（BK-5 ①）と units の形は変えない。
+  //   是正前（v10.2.0）: 書式指定・変換は落として値は素の str 化（`f"{x:.2f}"` は 3.14159・`f"{'a'!r}"` は a）・`f"{x=}"` は構文エラー・
+  //   リテラル部の単独の `}` はそのまま文字（`f"a}b"` は a}b）。
+  function emitFString(units0, ln, open) {
+    const units = [];
+    for (const u of units0) {
+      if (u.raw.length === 2 && u.raw[0] === '\\' && (u.raw[1] === '{' || u.raw[1] === '}')) {
+        units.push({ ch: '\\', raw: '\\', line: u.line }, { ch: u.raw[1], raw: u.raw[1], line: u.line });
+      } else units.push(u);
+    }
     const chAt = (j) => (j < units.length ? units[j].ch : undefined);
     const rawAt = (j) => (j < units.length ? units[j].raw : undefined);
+    // 置換フィールド 1 つを読む。k＝`{` の直後。戻り値 { f: {expr, l0, l1, conv, spec（parts か null）}, k: 閉じ `}` の次 }。
+    function field(k, l0) {
+      // braces＝`{`／`}` の深さ（閉じ `}` の判定）・brackets＝`(`・`[`・`{` の深さ（書式指定の `:`／変換の `!` の判定）・
+      // q＝式の中の文字列リテラルの開き引用符（中にいる間だけ。三重引用符は 3 文字）。
+      // 式の中の判定は raw（本文の生テキスト）で行う＝`\'` 等のエスケープ（raw が 2 文字）は区切りに数えず式にそのまま残す（式の中の
+      // `\` は字句エラー＝python3 と同じ SyntaxError）。
+      let braces = 1, brackets = 0, etext = '', q = null, term = null;
+      while (k < units.length) {
+        const r = units[k].raw;
+        if (q) {
+          if (r === q[0] && (q.length === 1 || (rawAt(k + 1) === r && rawAt(k + 2) === r))) { etext += q; k += q.length; q = null; }
+          else { etext += r; k++; }
+          continue;
+        }
+        if (r === '"' || r === "'") { q = (rawAt(k + 1) === r && rawAt(k + 2) === r) ? r + r + r : r; etext += q; k += q.length; continue; }
+        if (r === '{') { braces++; brackets++; }
+        else if (r === '}') { if (--braces === 0) { term = '}'; break; } brackets--; }
+        else if (r === '(' || r === '[') brackets++;
+        else if (r === ')' || r === ']') brackets--;
+        else if (brackets === 0 && r === ':') { term = ':'; break; }
+        else if (brackets === 0 && r === '!' && /^[rsa]$/.test(rawAt(k + 1) || '') && (rawAt(k + 2) === '}' || rawAt(k + 2) === ':')) { term = '!'; break; }
+        etext += r; k++;
+      }
+      if (k >= units.length) {
+        tokenize(etext, 'py', undefined, l0);   // 式の中の字句エラー（閉じていない文字列・`\` 等）があれば先に報告（行＝物理行）
+        throw lexErr('fstrBrace', {}, l0);
+      }
+      let conv = '', spec = null, debug = null, expr = etext;
+      const m = /=\s*$/.exec(etext);
+      if (m && !/[=!<>]$/.test(etext.slice(0, m.index))) { debug = etext; expr = etext.slice(0, m.index); }
+      if (term === '!') { conv = units[k + 1].raw; k += 2; term = units[k].raw; }
+      if (term === ':') {
+        k++;
+        spec = [];
+        let lit = '';
+        while (k < units.length) {
+          const d = units[k].ch;
+          if (d === '{') {
+            const r = field(k + 1, units[k].line);
+            spec.push({ lit: lit + (r.f.debug !== null ? r.f.debug : '') }); lit = '';   // 入れ子の自己記述 `{x:{w=}}` も本文を足す（python3 と同じ）
+            spec.push(r.f); k = r.k; continue;
+          }
+          if (d === '}') break;
+          lit += d; k++;
+        }
+        if (k >= units.length) throw lexErr('fstrBrace', {}, l0);
+        spec.push({ lit });
+      }
+      if (debug !== null && !conv && spec === null) conv = 'r';
+      return { f: { expr, l0, l1: units[k].line, conv, spec, debug }, k: k + 1 };
+    }
+    // リテラル部と置換フィールドの列（{lit}・{f}・{bad: 単独の `}` の行}）。
+    const parts = [];
+    let lit = '', k = 0;
     while (k < units.length) {
       const c = units[k].ch;
       if (c === '{') {
         if (chAt(k + 1) === '{') { lit += '{'; k += 2; continue; }
+        const r = field(k + 1, units[k].line);
+        if (r.f.debug !== null) lit += r.f.debug;
         parts.push({ lit }); lit = '';
-        const l0 = units[k].line; k++;
-        // braces＝`{`／`}` の深さ（閉じ `}` の判定）・brackets＝`(`・`[`・`{` の深さ（書式指定の `:`／`!` の判定）・
-        // q＝式の中の文字列リテラルの開き引用符（中にいる間だけ。三重引用符は 3 文字）・spec＝書式指定／変換の中。
-        // 式の中の判定は raw（本文の生テキスト）で行う＝`\}`・`\:` 等のエスケープ（raw が 2 文字）は区切りに数えず式にそのまま残す（式の中の
-        // `\` は字句エラー＝python3 と同じ SyntaxError。是正前は ch で判定し `\}` で式を閉じて `\` を黙って落とした＝f"{x\}" → "5"）。
-        // 書式指定の中は従来どおり ch で `{`／`}` を数える（`\` は書式指定の文字で、続く `}` は閉じ＝python3 と同じ）。
-        let braces = 1, brackets = 0, etext = '', q = null, spec = false;
-        while (k < units.length) {
-          const r = units[k].raw;
-          if (spec) {
-            const d = units[k].ch;
-            if (d === '{') braces++;
-            else if (d === '}' && --braces === 0) break;
-            k++; continue;
-          }
-          if (q) {
-            if (r === q[0] && (q.length === 1 || (rawAt(k + 1) === r && rawAt(k + 2) === r))) { etext += q; k += q.length; q = null; }
-            else { etext += r; k++; }
-            continue;
-          }
-          if (r === '"' || r === "'") { q = (rawAt(k + 1) === r && rawAt(k + 2) === r) ? r + r + r : r; etext += q; k += q.length; continue; }
-          if (r === '{') { braces++; brackets++; }
-          else if (r === '}') { if (--braces === 0) break; brackets--; }
-          else if (r === '(' || r === '[') brackets++;
-          else if (r === ')' || r === ']') brackets--;
-          else if (brackets === 0 && (r === ':' || (r === '!' && /^[rsa]$/.test(rawAt(k + 1) || '') &&
-                   (rawAt(k + 2) === '}' || rawAt(k + 2) === ':')))) { spec = true; k++; continue; }
-          etext += r; k++;
-        }
-        if (k >= units.length) {
-          tokenize(etext, 'py', undefined, l0);   // 式の中の字句エラー（閉じていない文字列・`\` 等）があれば先に報告（行＝物理行）
-          throw lexErr('fstrBrace', {}, l0);
-        }
-        parts.push({ expr: etext, l0, l1: units[k].line });
-        k++;                                   // 閉じ '}' を消費
-      } else if (c === '}' && chAt(k + 1) === '}') { lit += '}'; k += 2; }
-      else { lit += c; k++; }
+        parts.push(r.f); k = r.k;
+      } else if (c === '}') {
+        if (chAt(k + 1) === '}') { lit += '}'; k += 2; continue; }
+        parts.push({ lit }); lit = '';
+        parts.push({ bad: units[k].line }); k++;
+      } else { lit += c; k++; }
     }
     parts.push({ lit });
     // BK2 (20): 外枠の `(` に fstr の印＝開き引用符 open（parser_py の primary が「文字列のかたまり」として隣の文字列リテラルと連結し、
     //   postfix は呼び出しの括弧にしない〔是正前は `"y" f"{x}"`・`x f"{y}"` が "y"／x の呼び出しになった〕。構文エラーの表示も open）。
-    //   印の無い `(` は従来どおりの括弧の式。AST は是正前と同じ＝印はトークンにだけ付く。
-    pushTok('PUNC', '(', ln); toks[toks.length - 1].fstr = open;
-    let firstEmit = true;
-    const plus = () => { if (!firstEmit) pushTok('OP', '+', ln); firstEmit = false; };
-    for (const p of parts) {
-      if (p.lit !== undefined) {
-        if (p.lit === '' && !firstEmit) continue;   // 中間の空リテラルは省く (先頭は文字列文脈のため残す)
-        plus(); pushTok('STR', p.lit, ln);
-      } else {
-        plus();
-        pushTok('PUNC', '(', p.l0);
-        for (const t of tokenize(p.expr, 'py', undefined, p.l0).filter(t => !FSTR_DROP.has(t.type))) {
-          pushTok(t.type, t.value, t.line);
-          if (t.fstr) toks[toks.length - 1].fstr = t.fstr;   // BK2: 埋め込み式の中の f-string の印も保つ（f"{f'{x}' 'y'}"）
+    //   印の無い `(` は従来どおりの括弧の式（BK3 の書式指定の式の括弧も印無し）。
+    function emitParts(ps, pl, mark) {
+      pushTok('PUNC', '(', pl);
+      if (mark) toks[toks.length - 1].fstr = open;
+      let firstEmit = true;
+      const plus = () => { if (!firstEmit) pushTok('OP', '+', pl); firstEmit = false; };
+      for (const p of ps) {
+        if (p.lit !== undefined) {
+          if (p.lit === '' && !firstEmit) continue;   // 中間の空リテラルは省く (先頭は文字列文脈のため残す)
+          plus(); pushTok('STR', p.lit, pl);
+        } else if (p.bad !== undefined) {
+          plus(); pushTok('FSTRERR', '}', p.bad);
+        } else {
+          plus();
+          pushTok('FMT', p.conv, p.l0);
+          pushTok('PUNC', '(', p.l0);
+          pushTok('PUNC', '(', p.l0);
+          for (const t of tokenize(p.expr, 'py', undefined, p.l0).filter(t => !FSTR_DROP.has(t.type))) {
+            pushTok(t.type, t.value, t.line);
+            if (t.fstr) toks[toks.length - 1].fstr = t.fstr;   // BK2: 埋め込み式の中の f-string の印も保つ（f"{f'{x}' 'y'}"）
+          }
+          pushTok('PUNC', ')', p.l1);
+          if (p.spec) { pushTok('PUNC', ',', p.l1); emitParts(p.spec, p.l1, false); }
+          pushTok('PUNC', ')', p.l1);
         }
-        pushTok('PUNC', ')', p.l1);
       }
+      if (firstEmit) pushTok('STR', '', pl);        // f"" → ""
+      pushTok('PUNC', ')', pl);
     }
-    if (firstEmit) pushTok('STR', '', ln);        // f"" → ""
-    pushTok('PUNC', ')', ln);
+    emitParts(parts, ln, true);
   }
 
   // 文字列リテラル（通常・f-string 共通）の中身を 1 単位読む。i は単位の先頭を指し、読んだ分だけ進める。
@@ -340,8 +396,8 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
     }
     // AP9: Python f-string `f"..."` / `f'...'` (F 大文字も可)。接頭辞 f が引用符直前のときだけ。
     //   `( "lit0" + (expr1) + "lit1" + ... )` へトークン展開する (先頭は必ず STR ＝文字列連結文脈)。
-    //   埋め込み式は再帰 tokenize (既存 #define と同じ流儀)。フォーマット指定 `{x:.2f}`/変換 `{x!r}`
-    //   は先頭のトップレベル `:`/`!` 以降を切り捨てる (簡易・値は素の str 化)。`{{`/`}}` は素の波括弧。
+    //   埋め込み式は再帰 tokenize (既存 #define と同じ流儀)。`{{`/`}}` は素の波括弧。BK3: 書式指定 `{x:.2f}`・変換 `{x!r}`・
+    //   自己記述 `{x=}` は FMT の節として評価する（是正前は先頭のトップレベル `:`/`!` 以降を切り捨てて値は素の str 化）。
     //   BJ5: `f"""…"""`／`f'''…'''`（三重引用符）も同じ展開。外枠のトークン（STR・`(`・`)`・`+`）の行は開き引用符の行＝文の AST line。
     //   埋め込み式の中のトークンは物理行を持つ（式の中の字句・構文エラーは物理行で報告＝python3 と同じ）。
     // BK2 (21): 接頭辞を STR_PREFIX に広げた（r・u・b と fr／rf／br／rb。大文字小文字を問わない）。f を含めば f-string（r も含めば本体は raw）・

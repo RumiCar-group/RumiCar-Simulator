@@ -298,10 +298,26 @@ export function parsePy(src) {
     for (;;) {
       // BK2: f-string の外枠の `(`（印 fstr）は呼び出しの括弧にしない（`x f"{y}"`・`print f"{x}"` は python3 と同じく構文エラー。是正前は
       //   x("" + y) の呼び出しとして黙って走った）。
+      // BK3: キーワード引数 `name=値`（`"{a}".format(a=1)`）。位置引数の後ろだけ（キーワード引数の後ろの位置引数・同じ名前の 2 回は
+      //   python3 と同じく構文エラー）。使えるのは `.format(…)` の呼び出しだけ（それ以外〔`print(x, end="")`・ユーザー関数〕は構文エラー
+      //   kwArg＝読み込みの時点で知らせる。是正前はどれも「')' を期待しましたが '='」）。キーワード引数のある呼び出しだけ節に kwargs
+      //   （[{name, value}]）を持つ＝無い呼び出しの AST は是正前と同じ（出荷サンプルの AST 指紋は wf_bj1_pysem E 章）。
       if (isPunc('(') && !peek().fstr) {
-        next(); const args = [];
-        if (!isPunc(')')) do { args.push(ternary()); } while (isPunc(',') && next());
-        eat('PUNC', ')'); e = { t: 'call', callee: e, args };
+        next(); const args = []; let kwargs = null, kwLine = 0;
+        if (!isPunc(')')) do {
+          if (peek().type === 'ID' && peek(1).type === 'OP' && peek(1).value === '=') {
+            const nt = next(); next();
+            if (!kwargs) { kwargs = []; kwLine = nt.line; }
+            if (kwargs.some((k) => k.name === nt.value)) err('kwRepeat', { name: nt.value }, nt.line);
+            kwargs.push({ name: nt.value, value: ternary() });
+          } else {
+            if (kwargs) err('posAfterKw', {});
+            args.push(ternary());
+          }
+        } while (isPunc(',') && next());
+        eat('PUNC', ')');
+        if (kwargs && !(e.t === 'member' && e.name === 'format')) err('kwArg', { name: kwargs[0].name }, kwLine);
+        e = kwargs ? { t: 'call', callee: e, args, kwargs } : { t: 'call', callee: e, args };
       } else if (isPunc('.')) {
         next(); const name = eat('ID').value; e = { t: 'member', obj: e, name };
       } else if (isPunc('[')) {
@@ -326,6 +342,18 @@ export function parsePy(src) {
   function primary() {
     const t = peek();
     if (t.type === 'NUM') { next(); return { t: 'num', v: t.value }; }
+    // BK3: f-string の置換フィールド `FMT(変換) ( ( 式 ) [, 書式指定の文字列の式] )`（lexer の emitFString）→ { t: 'fmt', conv, v, spec }。
+    //   書式指定の無いフィールドは spec が null。値は評価器の pyFormatField。
+    if (t.type === 'FMT') {
+      next(); eat('PUNC', '(');
+      const v = ternary(); let spec = null;
+      if (isPunc(',')) { next(); spec = ternary(); }
+      eat('PUNC', ')');
+      return { t: 'fmt', conv: t.value, v, spec };
+    }
+    // BK3 (23): f-string のリテラル部の単独の `}`（lexer の印 FSTRERR・行＝その `}` の物理行）は構文エラー（python3 の SyntaxError
+    //   「f-string: single '}' is not allowed」。`}}` は `}` 1 文字）。是正前はそのまま文字（`f"a}b"` は a}b）。
+    if (t.type === 'FSTRERR') err('fstrRBrace', {}, t.line);
     if (isStrAtom()) {
       let node = strAtom();
       while (isStrAtom()) {
