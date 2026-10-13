@@ -365,7 +365,9 @@ export function parsePy(src) {
     if (t.type === 'ID') {
       if (t.value === 'True') { next(); return { t: 'bool', v: true }; }
       if (t.value === 'False') { next(); return { t: 'bool', v: false }; }
-      if (t.value === 'None') { next(); return { t: 'num', v: 0 }; }
+      // BK4 (5): None は専用の節（評価器の値は null）。是正前は数の 0 の節で、print(None) が "0"・`None == 0` が真だった。
+      //   runner の isTrueLiteral は num／bool だけを見る＝`while None:` は Model B のループにならない（是正前と同じ）。
+      if (t.value === 'None') { next(); return { t: 'none' }; }
       next(); return { t: 'var', name: t.value };
     }
     if (isPunc('(')) { next(); const e = expr(); eat('PUNC', ')'); return e; }

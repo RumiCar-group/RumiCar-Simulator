@@ -924,6 +924,12 @@ export const MESSAGES = {
   'interp.err.fmtField':    { ja: 'str.format() の置換フィールド {{field}} の値がありません (引数が足りない・名前の引数が無い・添字が範囲外。属性 .名前 は未対応)', en: 'str.format() replacement field {{field}} has no value (too few arguments, no argument with that name, or index out of range; .attribute is not supported)' },
   'interp.err.fmtMix':      { ja: 'str.format() で自動の番号 {} と番号の指定 {0} を混ぜることはできません', en: 'str.format() cannot mix automatic field numbering {} with manual field numbers {0}' },
   'interp.err.fmtBrace':    { ja: 'str.format() の文字列に対応の無い { か } があります (波括弧そのものは {{ と }} と書きます)', en: 'str.format() string has an unmatched { or } (write {{ and }} for literal braces)' },
+  // BK4: 値の意味論（evaluator.js）。range() の引数の型（python3 は TypeError: '…' object cannot be interpreted as an integer）・list の index／remove の
+  //   値が無い（python3 は ValueError）・None の演算と添字（python3 は TypeError）。{type}＝None・float・str・list・dict など（typeName）。
+  'interp.err.rangeArg':    { ja: 'range() の引数は整数にしてください ({type} は使えません)', en: 'range() arguments must be integers ({type} cannot be used)' },
+  'interp.err.notInList':   { ja: 'list.{method}(x): x がリストの中にありません', en: 'list.{method}(x): x is not in the list' },
+  'interp.err.noneOp':      { ja: 'None に演算子 {op} は使えません (値を代入していない変数か、return で値を返さない関数の結果かもしれません)', en: 'The operator {op} cannot be used with None (it may be a variable that was never given a value, or the result of a function that does not return a value)' },
+  'interp.err.noneIndex':   { ja: 'None に添字 [ ] は使えません (値を代入していない変数か、return で値を返さない関数の結果かもしれません)', en: 'None cannot be indexed with [ ] (it may be a variable that was never given a value, or the result of a function that does not return a value)' },
 
   // ---- BK1: 字句エラー（lexer.js）・構文エラー（parser_py.js／parser_c.js）。SourceError（lexer.js）が t('interp.' + phase + '.' + sub) で参照し、
   //   頭（head）＋文言＋行の接尾（interp.err.line）で組む。ja は是正前の日本語固定文と 1 文字も変えない（wf_bk1_interp2 A 章が是正前の文言で照合）。

@@ -83,6 +83,8 @@
 //      移した。1 行の suite の複合文・キーワードの文の続きの期待値（文言・行）は BJ6 のまま。BK2 の検査は wf_bk1_interp2 の G 章。
 //   G-9（G 章に追加）: BJ3 の挙動変化のうち v10.1.0 の木を `--root` にした走査で拾えなかった 2 つを、エラーになる形で検査する（トップレベルの
 //      `for random in range(2)` の後の `random.random()` が notMethod＝ループ変数がホストの名前を隠す・`range(1,5,None)` が rangeStepZero）。
+//      BK4（Stage BK・v10.3.0）: `range(1,5,None)` は None が数の 0 でなくなり、python3 と同じ種類の rangeArg（「range() の引数は整数」・
+//      python3 は TypeError）に改めた（wf_bk1_interp2 I-7 が range の引数の型を見る）。
 //      v10.1.0 の木では赤になり、出力の「実 走った …」がエラー無しで走った値を示す（BJ4 の拾い上げ用）。BJ6 の陰性対照（473f95b）では緑。
 //
 // 使い方: node wf_bj1_pysem.mjs              … 検査
@@ -730,8 +732,9 @@ for (const [label, src, lang, ticks, key, line, py3re] of G_LINE) {
 const G9 = [
   ['トップレベルの for random in range(2) の後の random.random()（ループ変数がホストの名前を隠す）', 'for random in range(2):\n  pass\nx = random.random()', 'notMethod', 3,
     /^AttributeError: 'int' object has no attribute 'random'/, null],
-  ['for i in range(1,5,None)（None はステップ 0 と同じ扱い）', 'for i in range(1,5,None):\n  print(i)', 'rangeStepZero', 1,
-    null, /^TypeError: 'NoneType' object cannot be interpreted as an integer/],
+  // BK4: None は数の 0 でなくなった＝rangeStepZero から rangeArg（python3 と同じ TypeError の種類）へ期待値を改めた。
+  ['for i in range(1,5,None)（BK4 から rangeArg）', 'for i in range(1,5,None):\n  print(i)', 'rangeArg', 1,
+    /^TypeError: 'NoneType' object cannot be interpreted as an integer/, null],
 ];
 for (const [label, src, key, line, py3same, py3diff] of G9) {
   setLang('en'); const en = run(src, 'py'); setLang('ja');

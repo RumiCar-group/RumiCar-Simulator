@@ -1,4 +1,4 @@
-// wf_bk1_interp2.mjs — Stage BK「インタプリタ是正 II」の常設ゲート。BK1 で新設し、BK2〜BK5 が章を足す（BK2＝G 章・BK3＝H 章）。
+// wf_bk1_interp2.mjs — Stage BK「インタプリタ是正 II」の常設ゲート。BK1 で新設し、BK2〜BK5 が章を足す（BK2＝G 章・BK3＝H 章・BK4＝I 章）。
 // ════════════════════════════════════════════════════════════════════════════
 // 学習者が自力で原因に辿り着けないエラー（英語モードでも日本語・行番号の無い JS の RangeError・状況に合わない文言）の是正を、
 //   本番経路 buildController(src, lang, buildApi(world)) → setup()/tick()（と fleet の tickSlot・race_engine の runRace）で
@@ -55,6 +55,18 @@
 //      H-5 キーワード引数は `.format(…)` だけ（それ以外は構文エラー kwArg・位置引数の後ろ・同じ名前は 1 回）・キーワード引数の無い呼び出しの
 //          AST は是正前と同じ形。
 //      wf_bj1_pysem の F-3・H-1（H_SPEC）・H-3 の書式指定と単独の `}` の行は、是正前の値（書式指定を落とす・a}b5）から python3 の値に改めた。
+//
+// BK4（値の意味論・py だけ・C は従来どおり）— 是正前の木（850bbb2）で `--root <木>` を付けて回すと I 章（是正前と同じ値の行を除く）だけが赤になる
+//   （2026-10-14 の実測: pass=595 fail=73＝赤は I 章の 73 だけ・A〜H は緑）。
+//   I) 本番経路の値とエラーを python3 3.14.4 の実測（定数・checkPy3／checkPy3Line）と照合する。表の最後の列は是正前の値。
+//      I-1 (3) 除数の False・0 の負のべきは divZero。I-2 (4) and／or は被演算子の値・py の真偽は空の list／tuple／dict も偽（if・while・not・
+//          bool()。是正前は空の list／dict が真＝PLAN の `[] or 0`＝0 はこれ無しに成り立たない）。I-3 (5) print／str／f-string／str.format／`%s` の
+//          True／False／None・return の無い関数は None・C の print(true) は "true" のまま。I-4 (6) list／tuple の ==／!= は要素ごと（`is` は構文
+//          エラーのまま）。I-5 (8)(11) count／index／remove・dict のキーと添字の bool は数・index と remove の未発見は interp.err.notInList。
+//          I-6 (11) // は CPython の床除算（1 // 0.1 は 9.0）。I-7 (17) range の引数は整数（interp.err.rangeArg）・式の range の 0 のステップ。
+//          I-8 None（null）の演算と添字は interp.err.noneOp／noneIndex（==・!=・in・`%s` は通す）。
+//      出荷 23 本の出力と runRace（F 章）・出荷 py の AST 指紋（wf_bj1_pysem E 章）は不変。wf_bj1_pysem の G-9 `range(1,5,None)` は rangeStepZero から
+//      rangeArg（python3 と同じ TypeError の種類）に改めた。
 //
 // 使い方: node wf_bk1_interp2.mjs              … 検査
 //         node wf_bk1_interp2.mjs --root <dir>  … <dir>/public/js の product で回す（改修前の木で赤になることの確認用）
@@ -743,6 +755,131 @@ gErrs('H-5', [
   ok(a.length === 3 && a.every((c) => !('kwargs' in c)) && b.length === 2 && J(b.map((c) => c.kwargs ? c.kwargs.map((k) => k.name) : null)) === J([null, ['a']]),
     `H-5 キーワード引数の無い呼び出しの節に kwargs は無い（${a.length} 本）・ある呼び出しだけ kwargs（${J(b.map((c) => c.kwargs ? c.kwargs.map((k) => k.name) : null))}）`);
 }
+
+// ── I) BK4 値の意味論（(3)(4)(5)(6)(8)(11)(17)）──────────────────────────────────────────
+console.log('\nI) BK4 値の意味論（ゼロ除算・and/or の値と空の list の真偽・True/None の表示・list の ==・bool と数のキー・// ・range の引数）— 是正前（850bbb2）の値は各表の最後の列');
+// I-1 (3) 除数の False・0 の負のべき・0.0 の除数は divZero（行番号付き・python3 は ZeroDivisionError）。2 ** -1・0 ** 0 は不変。
+gErrs('I-1', [
+  ['0 ** -1（probe の (3)）', 'x = 1\nprint(0 ** -1)', 'interp.err.divZero', 2, {}, /^ZeroDivisionError/, '["Infinity"]'],
+  ['1 / False（probe の (3)）', 'print(1 / False)', 'interp.err.divZero', 1, {}, /^ZeroDivisionError/, '["Infinity"]'],
+  ['1 // False', 'print(1 // False)', 'interp.err.divZero', 1, {}, /^ZeroDivisionError/, '["Infinity"]'],
+  ['7 % False', 'print(7 % False)', 'interp.err.divZero', 1, {}, /^ZeroDivisionError/, '["NaN"]'],
+  ['1 / 0.0（従来どおり）', 'print(1 / 0.0)', 'interp.err.divZero', 1, {}, /^ZeroDivisionError/, '同じ'],
+  ['0.0 ** -1.5', 'print(0.0 ** -1.5)', 'interp.err.divZero', 1, {}, /^ZeroDivisionError/, '["Infinity"]'],
+  ['False ** -2', 'print(False ** -2)', 'interp.err.divZero', 1, {}, /^ZeroDivisionError/, '["Infinity"]'],
+  ['x //= False（複合代入・2 行目）', 'x = 7\nx //= False', 'interp.err.divZero', 2, {}, /^ZeroDivisionError/, 'x が Infinity'],
+  ['関数の中の 0 ** -1（return の行）', 'def f(b):\n    return 0 ** b\nprint(f(-1))', 'interp.err.divZero', 2, {}, /^ZeroDivisionError/, '["Infinity"]'],
+]);
+gVals('I-1', [
+  ['2 ** -1・0 ** 0・0 ** 2（不変）', 'print(2 ** -1, 0 ** 0, 0 ** 2)', 0, ['0.5 1 0'], '同じ'],
+]);
+// I-2 (4) and／or は被演算子の値を返す。py の真偽（if・while・not・and・or・三項・bool()）は空の list／tuple／dict も偽（python3 と同じ）。
+//   是正前は `0 and 1` が false（表示 false）・空の list／dict が真（`[] or 0` が []・`if []:` が本体を走らせた）。
+gVals('I-2', [
+  ['0 and 1（probe の (4)）', 'print(0 and 1)', 0, ['0'], '["false"]'],
+  ['"" or "x"', 'print("" or "x")', 0, ['x'], '同じ'],
+  ['[] or 0', 'print([] or 0)', 0, ['0'], '[""]（[] は真）'],
+  ['1 and 2・5 and None・None or 5・0 or ""', 'print(1 and 2, 5 and None, None or 5, 0 or "")', 0, ['2 None 5 '], '["2 0 5 "]'],
+  ['1 and 0 or 3・not 0 and 2・len([] and 1)', 'print(1 and 0 or 3, not 0 and 2, len([] and 1))', 0, ['3 2 0'], 'len(1) のエラー（[] は真）'],
+  ['x = 0 and f()（短絡・f を呼ばない）', 'def f():\n    print("called")\n    return 1\nx = 0 and f()\nprint(x)', 0, ['0'], '["false"]'],
+  ['if／while の判定（数・文字列・None・list）', 'n = 0\nfor v in [0, 1, "", "a", None, [], [0], {}, {"k": 1}]:\n    if v:\n        n += 1\nprint(n)', 0, ['4'], '["6"]（[]・{} が真）'],
+  ['while q:（空になったら止まる）', 'q = [1, 2, 3]\nn = 0\nwhile q:\n    q.pop()\n    n += 1\nprint(n)', 0, ['3'], 'ステップ上限エラー（[] が真）'],
+  ['not []・bool([])・bool([0])・bool({})', 'print(not [], bool([]), bool([0]), bool({}))', 0, ['True False True False'], '["false true true true"]'],
+  ['if x and y:（真偽の判定は従来どおり）', 'x = 2\ny = 0\nif x and y:\n    print("a")\nelif x or y:\n    print("b")', 0, ['b'], '同じ'],
+]);
+// I-3 (5) py の print／str／f-string／str.format／`%s` の bool は True／False・None は None（python3 と同じ）。値の無い return・return の無い関数・
+//   dict.get の見つからないキーは None。bool に空でない書式指定は int（従来どおり・python3 と同じ）。是正前は true／false・None が数の 0。
+gVals('I-3', [
+  ['print(True, None, False)（probe の (5)）', 'print(True, None, False)', 0, ['True None False'], '["true 0 false"]'],
+  ['print(None)', 'print(None)', 0, ['None'], '["0"]'],
+  ['str(False)・str(None)・str(True) + "!"', 'print(str(False), str(None), str(True) + "!")', 0, ['False None True!'], '["false 0 true!"]'],
+  ['f"{True}"・f"{None}"・f"{True!r}"', 'print(f"{True}|{None}|{True!r}|{False!s}")', 0, ['True|None|True|False'], '["true|0|true|false"]'],
+  ['"{}".format(False)・"%s" % True', 'print("{} {}".format(False, None), "%s" % True)', 0, ['False None True'], '["false 0 true"]'],
+  ['比較の結果の表示', 'print(1 == 1, 2 < 1, not 0, [1] == [1])', 0, ['True False True True'], '["true false true false"]'],
+  ['return の無い関数・値の無い return・dict.get', 'def f():\n    pass\ndef g():\n    return\nd = {}\nprint(f(), g(), d.get("k"))', 0, ['None None None'], '["  "]'],
+  ['bool に書式指定は int（従来どおり）', 'print(f"[{True:>5}][{False:d}]")', 0, ['[    1][0]'], '同じ'],
+  ['True + 1・True * 3（数として）', 'print(True + 1, True * 3)', 0, ['2 3'], '同じ'],
+  ['Model A の loop() の中の print(True)（1 tick）', 'def loop():\n    print(5 > 3)', 1, ['True'], '["true"]'],
+]);
+{ // C は従来どおり（print(true) は "true"・&& は偽のとき false・除数の false は Infinity・配列の == は同一性）。
+  const r = run('void setup() {\n  int a[2] = {1, 2};\n  int b[2] = {1, 2};\n  print(true); print(false); Serial.println(true);\n  print(0 && 5); print(2 && 5); print(0 || 7);\n  print(1 / false); print(a == b);\n}\nvoid loop() {}', 'c');
+  const want = ['true', 'false', 'true', 'false', '5', '7', 'Infinity', 'false'];
+  ok(!r.err && J(r.out) === J(want), `I-3 C は従来どおり → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ${J(want)}＝是正前と同じ）`);
+}
+// I-4 (6) list／tuple の ==／!= は要素ごと（入れ子・長さ違い・要素の型違い）。`in` も同じ規則。`is` は未対応のまま（構文エラー）。
+//   残る差: list と tuple を区別しない（`[1, 2] == (1, 2)` は True・python3 は False）・dict の == は同一性のまま。
+{
+  const EQ = [
+    ['[1, 2] == [1, 2]', 'True'], ['[1, 2] != [1, 2]', 'False'], ['[1, [2, 3]] == [1, [2, 3]]', 'True'], ['[1, 2] == [1, 2, 3]', 'False'],
+    ['[1] == ["1"]', 'False'], ['[True] == [1]', 'True'], ['[1.0, 2] == [1, 2]', 'True'], ['(1, 2) == (1, 2)', 'True'],
+    ['[1, 2] == [2, 1]', 'False'], ['[] == []', 'True'], ['[1, 2] == 1', 'False'], ['[[1]] != [[2]]', 'True'],
+    ['[1, 2] in [[1, 2]]', 'True'], ['[None] == [None]', 'True'], ['[0] == [False]', 'True'], ['["a", [1]] == ["a", [True]]', 'True'],
+  ];
+  gVals('I-4', EQ.map(([e, v]) => [e, `print(${e})`, 0, [v], (e.includes('!=') ? '["true"]' : '["false"]') + '（同一性）']));
+}
+gVals('I-4', [
+  ['同じ list（a = b）', 'a = [1]\nb = a\nprint(a == b, a != b)', 0, ['True False'], '["true false"]'],
+  ['if x == [1, 2]:', 'x = [1, 2]\nif x == [1, 2]:\n    print("eq")\nelse:\n    print("ne")', 0, ['eq'], '["ne"]'],
+]);
+{ // 自分自身を要素に持つ別々の list 同士は、比べている途中の同じ組に戻ったら等しいとみなす（python3 は RecursionError＝未是正の差。組を覚えないと
+  //   JS の呼び出しスタックが尽き、トップレベルでは RangeError が素のまま出る）。
+  const r = run('a = [1]\na.append(a)\nb = [1]\nb.append(b)\nc = [2]\nc.append(c)\nprint(a == b, a == c, a == a)', 'py');
+  ok(!r.err && J(r.out) === J(['True False True']), `I-4 自分自身を要素に持つ list の == → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ["True False True"]・RangeError を出さない・是正前 ["false false true"]）`);
+}
+gErrs('I-4', [
+  ['x is None（未対応・python3 は True）', 'x = None\nprint(x is None)', 'interp.syn.expected', 2, null, null, '同じ'],
+]);
+// I-5 (8) bool と数を数として比べる: list の count／index／remove（pySame）・dict のキー（リテラル・添字・get・pop・in）・list／str の添字。
+//   (11) index は start／end（負は末尾から）・index と remove は見つからなければ interp.err.notInList（python3 は ValueError）。
+gVals('I-5', [
+  ['[True].count(1)・[1, True, 1.0].count(True)・[0, False].count(0)', 'print([True].count(1), [1, True, 1.0].count(True), [0, False].count(0))', 0, ['1 3 2'], '["0 1 1"]'],
+  ['[1].index(True)・[2, 3].index(3)', 'print([1].index(True), [2, 3].index(3))', 0, ['0 1'], '["-1 1"]'],
+  ['{1: "a"}.get(True)・{True: "t"}[1]・{1: "a"}.pop(True)', 'print({1: "a"}.get(True), {True: "t"}[1], {1: "a"}.pop(True))', 0, ['a t a'], '["  "]（キー "true"・get／pop は None＝表示は空）'],
+  ['True in {1: "a"}・[5, 6][True]・"ab"[True]', 'print(True in {1: "a"}, [5, 6][True], "ab"[True])', 0, ['True 6 b'], '["false  "]'],
+  ['index の start／end', 'print([1, 2, 1].index(1, 1), [1, 2, 1].index(1, -2), [1, 2, 1].index(2, 0, 2))', 0, ['2 2 1'], '["0 0 1"]'],
+  ['x.remove(True)（最初の 1 と等しい要素）', 'x = [2, 1, True]\nx.remove(True)\nprint(len(x), x[0], x[1])', 0, ['2 2 True'], '["2 2 1"]（True そのものを消した）'],
+  ['[[1, 2]].index([1, 2])（list も要素ごと）', 'print([[1, 2]].index([1, 2]), [[1], [1]].count([1]))', 0, ['0 2'], '["-1 0"]'],
+]);
+gErrs('I-5', [
+  ['[1].index(5)（2 行目）', 'x = [1]\nprint(x.index(5))', 'interp.err.notInList', 2, { method: 'index' }, /^ValueError/, '["-1"]'],
+  ['index の start より後ろに無い', 'print([1, 2, 1].index(2, 2))', 'interp.err.notInList', 1, { method: 'index' }, /^ValueError/, '["1"]'],
+  ['[1].remove(5)', 'x = [1]\nx.remove(5)\nprint(x)', 'interp.err.notInList', 2, { method: 'remove' }, /^ValueError: list\.remove\(x\): x not in list/, '["1"]（黙って何もしない）'],
+]);
+// I-6 (11) // は python3 と同じ床除算（CPython の float の divmod の手順・1 // 0.1 は 9.0）。値は == で比べて True で照合する（float の表示は未是正の差）。
+gVals('I-6', [
+  ['1 // 0.1 == 9（probe の (11)）', 'print(1 // 0.1 == 9, int(1 // 0.1))', 0, ['True 9'], '["false 10"]'],
+  ['-1 // 0.1 == -10・7.5 // 2 == 3・5 // -0.5 == -10・-0.5 // 1 == -1', 'print(-1 // 0.1 == -10, 7.5 // 2 == 3, 5 // -0.5 == -10, -0.5 // 1 == -1)', 0, ['True True True True'], '["true true true true"]（表示だけ違う）'],
+  ['整数（従来どおり）', 'print(7 // 2, -7 // 2, 7 // -2, -8 // 3, 0 // 5)', 0, ['3 -4 -4 -3 0'], '同じ'],
+  ['inf（1 // inf・-1 // inf・1e300 // 1e-10）', 'import math\nprint(1 // math.inf == 0, -1 // math.inf == -1, 1e300 // 1e-10 == math.inf)', 0, ['True True True'], '["true false true"]（-1 // inf が -0）'],
+  ['x //= 0.1', 'x = 1\nx //= 0.1\nprint(x == 9)', 0, ['True'], '["false"]'],
+  ['0.3 // 0.1 == 2・2.0 // 0.5 == 4', 'print(0.3 // 0.1 == 2, 2.0 // 0.5 == 4)', 0, ['True True'], '["true true"]（表示だけ違う）'],
+]);
+// I-7 (17) range の引数は整数（bool は数）。それ以外は interp.err.rangeArg（python3 は TypeError）・式の range(…) の 0 のステップも rangeStepZero。
+gErrs('I-7', [
+  ['for i in range(1, 5, None)（probe の (17)）', 'for i in range(1, 5, None):\n    print(i)', 'interp.err.rangeArg', 1, { type: 'None' }, /^TypeError: 'NoneType' object cannot be interpreted as an integer/, '「range() のステップ (3 番目の引数) に 0 は使えません」'],
+  ['list(range(1, 5, None))（2 行目）', 'x = 1\nprint(list(range(1, 5, None)))', 'interp.err.rangeArg', 2, { type: 'None' }, /^TypeError: 'NoneType' object cannot be interpreted as an integer/, '[""]（黙って空）'],
+  ['range(2.5)', 'print(list(range(2.5)))', 'interp.err.rangeArg', 1, { type: 'float' }, /^TypeError: 'float' object cannot be interpreted as an integer/, '["0,1,2"]'],
+  ['for i in range("3")', 'for i in range("3"):\n    pass', 'interp.err.rangeArg', 1, { type: 'str' }, /^TypeError: 'str' object cannot be interpreted as an integer/, '0 回'],
+  ['list(range(1, 5, 0))（式の range）', 'print(list(range(1, 5, 0)))', 'interp.err.rangeStepZero', 1, {}, /^ValueError: range\(\) arg 3 must not be zero/, '[""]（黙って空）'],
+]);
+gVals('I-7', [
+  ['range(True, 3)・range(4 // 2)・負のステップ（従来どおり）', 'for i in range(True, 3):\n    print(i)\nprint(len(range(4 // 2)), list(range(3, 0, -1))[2])', 0, ['1', '2', '2 1'], '["true","2","2 1"]'],
+]);
+// I-8 None（null）の演算と添字は実行時エラー（python3 は TypeError）。==・!=・in と `%s` の書式は通す。是正前は None が数の 0。
+gErrs('I-8', [
+  ['x = None; x += 1（2 行目）', 'x = None\nx += 1', 'interp.err.noneOp', 2, { op: '+' }, /^TypeError: unsupported operand/, 'x が 1'],
+  ['1 / None', 'print(1 / None)', 'interp.err.noneOp', 1, { op: '/' }, /^TypeError: unsupported operand/, '「0 で割ることはできません」'],
+  ['None < 1', 'print(None < 1)', 'interp.err.noneOp', 1, { op: '<' }, /^TypeError: '<' not supported/, '["true"]'],
+  ['-None', 'print(-None)', 'interp.err.noneOp', 1, { op: '-' }, /^TypeError: bad operand type for unary -/, '["0"]'],
+  ['return の無い関数の値 + 1', 'def f():\n    pass\ny = f() + 1', 'interp.err.noneOp', 3, { op: '+' }, /^TypeError: unsupported operand/, 'y が NaN'],
+  ['None[0]', 'x = None\nprint(x[0])', 'interp.err.noneIndex', 2, {}, /^TypeError: 'NoneType' object is not subscriptable/, '[""]'],
+  ['f"{None:>5}"（書式指定・fmtType）', 'print(f"{None:>5}")', 'interp.err.fmtType', 1, { type: 'None', spec: '>5' }, /^TypeError: unsupported format string passed to NoneType\.__format__/, '["    0"]'],
+]);
+gVals('I-8', [
+  ['None == 0・None == None・None != 0・None in [None]・"%s" % None', 'print(None == 0, None == None, None != 0, None in [None], "%s" % None)', 0, ['False True True True None'], '["true true false true 0"]'],
+  ['d.get("k") == None・f() == None', 'def f():\n    pass\nd = {}\nprint(d.get("k") == None, f() == None)', 0, ['True True'], '["false false"]'],
+  ['while None:（Model B にしない・従来どおり）', 'while None:\n    print(1)\nprint("end")', 0, ['end'], '同じ'],
+]);
 
 console.log(`\n  python3 との突き合わせ: ${PY3 ? py3Checked + ' 件' : '0 件（python3 不在）'}`);
 console.log(`[結果] pass=${pass} fail=${fail}`);
