@@ -17,6 +17,26 @@
 //   通常の引用符の文字列の中の改行は従来どおり受理し（Python は SyntaxError）、`\`＋改行は従来どおり LF を残す（三重引用符も同じ。
 //   Python は行継続＝`"""a\⏎b"""` は "ab"）。
 
+import { t } from '../i18n.js';
+
+// BK1: 字句エラー・構文エラーを i18n キー＋行番号で表す（実行時エラー RuntimeError〔evaluator.js〕と同じ機構）。
+//   message は throw 時点の言語で翻訳済み＝表示層（fleet/main/race）は従来どおり e.message を使う。
+//   phase＝'lex'（字句・本ファイル）／'syn'（構文・parser_py/parser_c）。文言のキーは interp.<phase>.<sub>。
+//   head＝文言の頭（'lex'＝「字句エラー: 」・'py'／'c'＝「構文エラー(Py): 」／「構文エラー(C): 」・null＝頭なし〔関数形式マクロ〕）。
+//   行の接尾は実行時エラーと同じ interp.err.line（ja「 (行 N)」・en「 (line N)」）で、字句・構文エラーは常に付ける（是正前と同じ）。
+//   ja の文言は是正前（素の Error に載せた日本語固定文）と 1 文字も変えない（wf_bj1_pysem の既存の期待値・wf_bk1_interp2 A 章）。
+//   是正前は en モードでも日本語が出た（BJ-16 F1 の既知）。i18nKey＝文言のキー・i18nParams・line は RuntimeError と同じ名前の構造値。
+export class SourceError extends Error {
+  constructor(phase, sub, params, line, head) {
+    const hd = head ? t('interp.' + phase + '.head' + (head === 'lex' ? '' : '.' + head)) : '';
+    super(hd + t('interp.' + phase + '.' + sub, params || {}) + t('interp.err.line', { n: line }));
+    this.i18nKey = 'interp.' + phase + '.' + sub;
+    this.i18nParams = params || {};
+    this.line = line;
+  }
+}
+const lexErr = (sub, params, line, head = 'lex') => new SourceError('lex', sub, params, line, head);
+
 // BJ1: py の複合代入 `%=`・`//=` を 1 トークンに（`**=` は従来から在る）。C の `//` は行コメントの判定が演算子より先なので
 //   `//=` は C に現れない。C の `%=` は 1 トークンになるが parser_c は従来どおり受理しない（是正前も構文エラー＝受理範囲は不変）。
 const OPS3 = ['**=', '<<=', '>>=', '//='];
@@ -67,7 +87,7 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
     const name = nm[0];
     const after = rest.slice(name.length);
     if (after[0] === '(') {                            // 直後 '('（空白なし）＝関数形式マクロ
-      throw new Error(`未対応の関数形式マクロ '#define ${name}(...)' (行 ${line})`);
+      throw lexErr('funcMacro', { name }, line, null);
     }
     // 置換本体をトークン化（既に定義済みのマクロは展開・自己/前方参照は素の ID のまま＝C 相当）。
     // BJ5: 開始行＝指令の行（置換本体の字句エラー〔閉じていない文字列・不明な文字〕の行。是正前は常に行 1。
@@ -148,7 +168,7 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
         }
         if (k >= units.length) {
           tokenize(etext, 'py', undefined, l0);   // 式の中の字句エラー（閉じていない文字列・`\` 等）があれば先に報告（行＝物理行）
-          throw new Error(`字句エラー: f-string の { に対応する } がありません (行 ${l0})`);
+          throw lexErr('fstrBrace', {}, l0);
         }
         parts.push({ expr: etext, l0, l1: units[k].line });
         k++;                                   // 閉じ '}' を消費
@@ -199,7 +219,7 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
   function readStrBody(open, close, l0) {
     const units = [];
     while (i < n && !src.startsWith(close, i)) { const l = line, u = strUnit(); u.line = l; units.push(u); }   // line＝単位の物理行（emitFString の式の行）
-    if (i >= n) throw new Error(`字句エラー: 閉じていない文字列（${open} で始まる文字列の終わりの ${close} がありません） (行 ${l0})`);
+    if (i >= n) throw lexErr('unterminated', { open, close }, l0);
     i += close.length;
     return units;
   }
@@ -323,7 +343,7 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
     if (OPS1.includes(ch)) { pushTok('OP', ch); i++; continue; }
     if (PUNCS.includes(ch)) { pushTok('PUNC', ch); i++; continue; }
 
-    throw new Error(`字句エラー: 不明な文字 '${ch}' (行 ${line})`);
+    throw lexErr('badChar', { ch }, line);
   }
 
   if (mode === 'py') {

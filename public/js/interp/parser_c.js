@@ -1,5 +1,5 @@
 // Arduino C++ 風パーサ → 共通 AST。
-import { tokenize } from './lexer.js';
+import { tokenize, SourceError } from './lexer.js';
 
 // 型語と宣言修飾子。skipType() がまとめて読み飛ばす (この処理系は型を追跡しない)。
 // AS4: 修飾子 const/static/volatile/signed と幅つき整数型を追加。配列サイズ定数の定石
@@ -14,11 +14,13 @@ export function parseC(src) {
   const next = () => toks[pos++];
   const isEOF = () => peek().type === 'EOF';
 
-  function err(msg) { throw new Error(`構文エラー(C): ${msg} (行 ${peek().line})`); }
+  // BK1: 構文エラーは i18n キー＋行番号（SourceError・lexer.js）。sub＝interp.syn.<sub>・行＝読めなかったトークンの行（是正前と同じ）。
+  //   是正前は素の Error に「構文エラー(C): <文言> (行 N)」の日本語固定文を載せていた（ja の文言は 1 文字も変えない）。
+  function err(sub, params) { throw new SourceError('syn', sub, params, peek().line, 'c'); }
   function eat(type, value) {
     const t = peek();
     if (t.type !== type || (value !== undefined && t.value !== value))
-      err(`'${value ?? type}' を期待しましたが '${t.value ?? t.type}'`);
+      err('expected', { want: value ?? type, got: t.value ?? t.type });
     return next();
   }
   const isPunc = (v) => peek().type === 'PUNC' && peek().value === v;
@@ -184,7 +186,7 @@ export function parseC(src) {
       let test = null;
       if (isKw('case')) { next(); test = expr(); eat('PUNC', ':'); }
       else if (isKw('default')) { next(); eat('PUNC', ':'); }
-      else err(`case か default を期待しましたが '${peek().value ?? peek().type}'`);
+      else err('caseDefault', { got: peek().value ?? peek().type });
       const body = [];
       while (!isKw('case') && !isKw('default') && !isPunc('}') && !isEOF()) body.push(statement());
       cases.push({ test, body });
@@ -299,7 +301,7 @@ export function parseC(src) {
       next(); return { t: 'var', name: t.value };
     }
     if (isPunc('(')) { next(); const e = expr(); eat('PUNC', ')'); return e; }
-    err(`予期しないトークン '${t.value ?? t.type}'`);
+    err('unexpected', { tok: t.value ?? t.type });
   }
 
   return program();

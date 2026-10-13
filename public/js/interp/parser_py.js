@@ -1,5 +1,5 @@
 // Python 風パーサ → 共通 AST。
-import { tokenize } from './lexer.js';
+import { tokenize, SourceError } from './lexer.js';
 
 export function parsePy(src) {
   const toks = tokenize(src, 'py');
@@ -7,11 +7,13 @@ export function parsePy(src) {
   const peek = (k = 0) => toks[pos + k];
   const next = () => toks[pos++];
   const isEOF = () => peek().type === 'EOF';
-  function err(msg) { throw new Error(`構文エラー(Py): ${msg} (行 ${peek().line})`); }
+  // BK1: 構文エラーは i18n キー＋行番号（SourceError・lexer.js）。sub＝interp.syn.<sub>・行＝読めなかったトークンの行（是正前と同じ）。
+  //   是正前は素の Error に「構文エラー(Py): <文言> (行 N)」の日本語固定文を載せていた（ja の文言は 1 文字も変えない）。
+  function err(sub, params) { throw new SourceError('syn', sub, params, peek().line, 'py'); }
   function eat(type, value) {
     const t = peek();
     if (t.type !== type || (value !== undefined && t.value !== value))
-      err(`'${value ?? type}' を期待しましたが '${t.value ?? t.type}'`);
+      err('expected', { want: value ?? type, got: t.value ?? t.type });
     return next();
   }
   const isPunc = (v) => peek().type === 'PUNC' && peek().value === v;
@@ -48,7 +50,7 @@ export function parsePy(src) {
     //   字下げしたブロックの `break 5` は従来どおり 5 を次の文として読む＝是正前からの差・BJ6 の範囲外）。
     const ln = peek().line;
     const kw = kwStmt(true);
-    if (kw && peek().type !== 'NEWLINE' && !isEOF()) err(`予期しないトークン '${peek().value ?? peek().type}'`);
+    if (kw && peek().type !== 'NEWLINE' && !isEOF()) err('unexpected', { tok: peek().value ?? peek().type });
     const node = kw || simpleStmt();
     if (node.line == null) node.line = ln;
     return [node];
@@ -137,7 +139,7 @@ export function parsePy(src) {
       // BJ2: 複合代入の左辺は 1 つだけ（Python も `a, b += 1` は SyntaxError）。是正前は通って先頭の a だけ更新していた
       //   （execMassign の複合代入は targets[0] しか見ない＝黙って b を無視）。括弧付き `(a, b) += 1` も同じ tuple ノード。
       if (!isOp('=') && first && first.t === 'tuple')
-        err(`複合代入 '${peek().value}' の左辺に複数の変数（a, b のようなタプル）は書けません（1 つずつ代入してください）`);
+        err('augTuple', { op: peek().value });
       const op = next().value;
       const targets = [first];
       // タプル代入の左辺は first が 'tuple' の場合あり (下の expr で処理しないため簡易対応)
@@ -266,7 +268,7 @@ export function parsePy(src) {
       } while (isPunc(',') && next());
       eat('PUNC', '}'); return { t: 'dict', entries };
     }
-    err(`予期しないトークン '${t.value ?? t.type}'`);
+    err('unexpected', { tok: t.value ?? t.type });
   }
 
   return program();

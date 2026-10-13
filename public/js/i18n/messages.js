@@ -902,6 +902,32 @@ export const MESSAGES = {
   //   依らない文言にした（BJ3 の初版は「while True: の 1 回分を終えるなら continue」で、C の return; にも while True: を案内していた）。
   'interp.err.returnOutside':   { ja: 'return は関数の中に書いてください。関数の外では使えません (ループの 1 回分を終えるなら continue、ループを抜けるなら break)', en: '\'return\' must be inside a function; it cannot be used outside one (to end one pass of a loop use continue; to leave the loop use break)' },
   'interp.err.rangeStepZero':   { ja: 'range() のステップ (3 番目の引数) に 0 は使えません', en: 'range() step (3rd argument) must not be zero' },
+  // BK1: (30) ループの外の break／continue の文言は、loop() 関数を持つプログラム（Model A）の関数の直下に届いたときだけ上の loop() 向け。
+  //   トップレベル（関数の外・どのモデルでも）と、loop() を持たないプログラム（while True: 型・1 回だけ走る型）の関数の直下は下の文言
+  //   （是正前は 1 回だけ走るプログラムのトップレベルの continue にも「loop() 関数そのものは…」が出た）。i18nKey は breakOutside／continueOutside のまま。
+  'interp.err.breakOutsideGeneric':    { ja: 'break はループ (for / while。C は switch も) の中に書いてください。関数の中の break は、その関数を呼んだループには効きません', en: '\'break\' must be inside a loop (for / while, or a switch in C), and a break inside a function does not affect the loop that called it' },
+  'interp.err.continueOutsideGeneric': { ja: 'continue はループ (for / while) の中に書いてください。関数の中の continue は、その関数を呼んだループには効きません', en: '\'continue\' must be inside a loop (for / while), and a continue inside a function does not affect the loop that called it' },
+  // BK1: 深い再帰（ユーザー関数の呼び出しの入れ子が SIM.maxCallDepth に達した・または実行環境の呼び出しスタックが尽きた）。
+  //   {n}＝そのときの入れ子の段数。是正前は JS の RangeError「Maximum call stack size exceeded」が行番号なしで漏れた。
+  'interp.err.recursion':     { ja: '関数の呼び出しが深すぎます (呼び出しの入れ子が {n} 段に達しました)。再帰を止める条件が正しいか確かめるか、ループで書き直してください', en: 'Function calls are nested too deeply (the nesting reached {n} levels). Check the condition that stops the recursion, or rewrite it as a loop' },
+  // BK1 H1: ステップ上限に達した tick の中で millis()／micros() を呼んでいたときだけ、この文言（stepLimit の文言＋ヒント）にする。
+  //   時刻の進み方は変えない（millis() は loop() 1 回の中では一定）。i18nKey は stepLimit のまま。
+  'interp.err.stepLimitTime': { ja: '評価ステップ上限超過 (無限ループの可能性)。millis() と micros() は loop() 1 回 (while True: なら本体 1 回) の中では進みません。delay() か次の loop() で待ってください', en: 'Evaluation step limit exceeded (possible infinite loop). millis() and micros() do not advance within one pass of loop() (one pass of the body for while True:); wait with delay() or until the next loop()' },
+
+  // ---- BK1: 字句エラー（lexer.js）・構文エラー（parser_py.js／parser_c.js）。SourceError（lexer.js）が t('interp.' + phase + '.' + sub) で参照し、
+  //   頭（head）＋文言＋行の接尾（interp.err.line）で組む。ja は是正前の日本語固定文と 1 文字も変えない（wf_bk1_interp2 A 章が是正前の文言で照合）。
+  //   是正前は en モードでも日本語が出た（BJ-16 F1）。 ----
+  'interp.lex.head':          { ja: '字句エラー: ', en: 'Lexical error: ' },
+  'interp.lex.funcMacro':     { ja: '未対応の関数形式マクロ \'#define {name}(...)\'', en: 'Unsupported function-like macro \'#define {name}(...)\'' },
+  'interp.lex.fstrBrace':     { ja: 'f-string の { に対応する } がありません', en: 'f-string { has no matching }' },
+  'interp.lex.unterminated':  { ja: '閉じていない文字列（{open} で始まる文字列の終わりの {close} がありません）', en: 'unterminated string (the string that starts with {open} has no closing {close})' },
+  'interp.lex.badChar':       { ja: '不明な文字 \'{ch}\'', en: 'unknown character \'{ch}\'' },
+  'interp.syn.head.py':       { ja: '構文エラー(Py): ', en: 'Syntax error (Py): ' },
+  'interp.syn.head.c':        { ja: '構文エラー(C): ', en: 'Syntax error (C): ' },
+  'interp.syn.expected':      { ja: '\'{want}\' を期待しましたが \'{got}\'', en: 'expected \'{want}\' but got \'{got}\'' },
+  'interp.syn.unexpected':    { ja: '予期しないトークン \'{tok}\'', en: 'unexpected token \'{tok}\'' },
+  'interp.syn.augTuple':      { ja: '複合代入 \'{op}\' の左辺に複数の変数（a, b のようなタプル）は書けません（1 つずつ代入してください）', en: 'the left side of the compound assignment \'{op}\' cannot be several variables (a tuple such as a, b); assign them one at a time' },
+  'interp.syn.caseDefault':   { ja: 'case か default を期待しましたが \'{got}\'', en: 'expected case or default but got \'{got}\'' },
 
   // ---- loader.js: 取込/共有の操作系エラーメッセージ ----
   'loader.urlEmpty':    { ja: 'URL が空です', en: 'URL is empty' },

@@ -192,6 +192,12 @@ const GATES = [
   //   AST も同じ）を固定する。期待値は python3 の実測を定数で持ち、python3 があるホストでは同じ本文を実行して突き合わせる。
   //   改修前の木（--root）では A〜D が赤。所要は本ホスト実測 約 1.3s（単独・2026-10-11）。
   'wf_bj1_pysem.mjs',
+  // BK1: インタプリタ是正 II（Stage BK の常設ゲート・BK2〜BK5 が章を足す）。本番経路 buildController＋buildApi・fleet の tickSlot・
+  //   race_engine の runRace で A) 字句・構文エラーの全種（11 箇所）の i18n（ja は是正前と同一・en は英語・行は是正前と同じ）B) 配線
+  //   （lexer／parser の throw new Error( が 0 件・参照キーが ja/en 非空）C) 深い再帰（interp.err.recursion・SIM.maxCallDepth・スタック切れの
+  //   変換）D) (30) ループの外の break／continue の文言 E) H1 ステップ上限の millis() のヒント F) 出荷 23 本の不変（runRace と出力）を固定する。
+  //   改修前の木（--root）では A〜E が赤。所要は本ホスト実測 約 4.4s（単独・2026-10-13）。
+  'wf_bk1_interp2.mjs',
 ].map((name) => ({ name, args: [] }));
 
 // official_result は決定論2回照合→result.json 再検証→Node pin 照合の複合ゲート (AP20)。

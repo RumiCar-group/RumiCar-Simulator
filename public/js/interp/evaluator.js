@@ -11,20 +11,34 @@ class ContinueSignal { constructor(line) { this.line = line; } }
 //   message は throw 時点の言語で翻訳済み＝表示層 (fleet/main/race) は従来どおり e.message を使う。
 //   line は直近に実行した文の行 (execStmt が curLine を更新)。行があれば ` (行 N)` / ` (line N)` を付す。
 //   ※ `t('interp.err.' + sub, …)` の動的キーは wf_i18n_check の接頭辞機構で参照済み扱いになる (孤児誤検知回避)。
+// BK1: kind＝エラーの種類 (i18nKey。既定は sub)。同じ種類で文言だけを状況で変えるとき、sub に文言のキー・kind に種類を渡す
+//   (breakOutside の Generic 版・stepLimit の millis() ヒント付き版)。i18nMsgKey＝実際に描画した文言のキー。
 export class RuntimeError extends Error {
-  constructor(sub, params, line) {
+  constructor(sub, params, line, kind) {
     let msg = t('interp.err.' + sub, params || {});
     if (line) msg += t('interp.err.line', { n: line });
     super(msg);
-    this.i18nKey = 'interp.err.' + sub;
+    this.i18nKey = 'interp.err.' + (kind || sub);
+    this.i18nMsgKey = 'interp.err.' + sub;
     this.i18nParams = params || {};
     this.line = line || 0;
   }
 }
 // ステップ上限 (無限ループ検出) も行番号つき実行時エラーの一種。
+// BK1 H1: その tick の中で millis()／micros() を呼んでいたら (timeRead)、文言を stepLimitTime (stepLimit の文言＋「millis() は
+//   loop() 1 回の中では進みません…」のヒント) にする。種類 (i18nKey) は stepLimit のまま・時刻の進み方は変えない。
 export class StepLimit extends RuntimeError {
-  constructor(line) { super('stepLimit', {}, line); }
+  constructor(line, timeRead) { super(timeRead ? 'stepLimitTime' : 'stepLimit', {}, line, 'stepLimit'); }
 }
+// BK1: 実行環境の呼び出しスタック切れ (V8／JSC は RangeError「Maximum call stack size exceeded」・SpiderMonkey は InternalError
+//   「too much recursion」)。他の RangeError (toFixed の桁数・配列の長さ等) は含めない。
+//   正規表現を使わない: スタックが尽きかけた所で初めて正規表現をコンパイルすると、V8 はそれ自体を SyntaxError「Invalid regular
+//   expression」にし (変換されずに漏れる)、プロセスが OOM で落ちたこともある (BK1 の実測)。文字列の indexOf だけで判定する。
+const isStackOverflow = (e) => {
+  if (!e || !(e instanceof RangeError || e.name === 'InternalError')) return false;
+  const m = String(e.message);
+  return m.indexOf('call stack') >= 0 || m.indexOf('too much recursion') >= 0;
+};
 
 export class Interp {
   constructor(hostEnv) {
@@ -33,6 +47,8 @@ export class Interp {
     this.global = { vars: Object.create(null), parent: null };
     this.steps = 0;
     this.curLine = 0;   // 直近に実行した文の行 (実行位置ハイライト用)
+    this.depth = 0;     // BK1: ユーザー関数の呼び出しの入れ子の段数 (callUser・SIM.maxCallDepth)
+    this.timeRead = false;   // BK1 H1: この tick の中で millis()／micros() を呼んだか (StepLimit の文言のヒント)
   }
 
   load(ast) {
@@ -44,8 +60,8 @@ export class Interp {
     }
   }
 
-  resetSteps() { this.steps = 0; }
-  tick() { if (++this.steps > SIM.maxStepsPerTick) throw new StepLimit(this.curLine); }
+  resetSteps() { this.steps = 0; this.timeRead = false; }
+  tick() { if (++this.steps > SIM.maxStepsPerTick) throw new StepLimit(this.curLine, this.timeRead); }
 
   has(name) { return !!this.funcs[name]; }
 
@@ -56,21 +72,37 @@ export class Interp {
   // BJ3: 関数の本体から出た break／continue（関数の中のループに捕まらなかった＝loop()／setup() やユーザー関数の直下）は
   //   行番号付きの i18n 実行時エラー。是正前は素通りし、loop() の直下なら `[object Object]` で停止、ループの中から呼んだ
   //   関数の直下なら呼び出し側のループに黙って効いていた（Python・C ともに関数の境界を越える break／continue は無い）。
-  callUser(name, args) {
+  // BK1: 深い再帰。呼び出しの入れ子 (depth・loop()／setup() も 1 段) が SIM.maxCallDepth に達したら、呼び出した文の行 (curLine＝
+  //   evalCall の時点の呼び出し元の文の行) で interp.err.recursion にする。上限より先に実行環境の呼び出しスタックが尽きたら
+  //   (字下げの深い本体・スタックの小さい環境)、その RangeError 等を同じキーの実行時エラーへ変換する (行＝この関数を呼んだ文の行
+  //   callLine。runner が直接呼ぶ loop()／setup() は callLine が無く curLine)。是正前は JS の RangeError「Maximum call stack size
+  //   exceeded」が行番号なしで表示層へ漏れた (py・C)。depth は例外で抜けても finally で戻す。
+  callUser(name, args, callLine) {
     const fn = this.funcs[name];
+    if (this.depth >= SIM.maxCallDepth) throw this.rt('recursion', { n: this.depth });
     const scope = { vars: Object.create(null), parent: this.global };
     (fn.params || []).forEach((p, i) => { scope.vars[p] = args[i]; });
+    this.depth++;
     try { this.execBlock(fn.body, scope); }
-    catch (e) { if (e instanceof ReturnSignal) return e.v; throw this.outside(e); }
+    catch (e) {
+      if (e instanceof ReturnSignal) return e.v;
+      if (isStackOverflow(e)) throw new RuntimeError('recursion', { n: this.depth }, callLine || this.curLine);
+      throw this.outside(e, this.has('loop'));
+    }
+    finally { this.depth--; }
     return undefined;
   }
 
   // BJ3: ループの外まで届いた break／continue と関数の外まで届いた return を、その文の行の i18n 実行時エラーにする
   //   （それ以外の例外はそのまま返す）。是正前は信号オブジェクトがそのまま表示層へ届き、`e.message || e` で
   //   `[object Object]` と表示されていた（fleet.js tickSlot の sim.runtimeErr・main.js の log.err.setup）。
-  outside(e) {
-    if (e instanceof BreakSignal) return new RuntimeError('breakOutside', {}, e.line);
-    if (e instanceof ContinueSignal) return new RuntimeError('continueOutside', {}, e.line);
+  // BK1 (30): loopNote＝「loop() 関数そのものはループではありません」を含む従来の文言にするか。loop() を持つプログラム (Model A) の
+  //   関数の直下に届いたときだけ真 (callUser)。トップレベル (execTop・execLoopPass) と loop() を持たないプログラムの関数の直下は
+  //   Generic 版 (loop() に触れない)。種類 (i18nKey) はどちらも breakOutside／continueOutside。是正前は 1 回だけ走るプログラムの
+  //   トップレベルの continue にも「loop() 関数そのものは… (その回の loop() を終えるなら return)」が出た。
+  outside(e, loopNote) {
+    if (e instanceof BreakSignal) return loopNote ? new RuntimeError('breakOutside', {}, e.line) : new RuntimeError('breakOutsideGeneric', {}, e.line, 'breakOutside');
+    if (e instanceof ContinueSignal) return loopNote ? new RuntimeError('continueOutside', {}, e.line) : new RuntimeError('continueOutsideGeneric', {}, e.line, 'continueOutside');
     if (e instanceof ReturnSignal) return new RuntimeError('returnOutside', {}, e.line);
     return e;
   }
@@ -78,7 +110,7 @@ export class Interp {
   //   ここまで届いた break／continue／return は、外側にループも関数も無い＝エラー（Python も SyntaxError）。
   execTop(stmts) {
     try { this.execBlock(stmts, this.global); }
-    catch (e) { throw this.outside(e); }
+    catch (e) { throw this.outside(e, false); }
   }
   // BJ3: Model B（トップレベルの while True:）の本体を 1 回走らせる。continue＝この回を終える（false）・break＝ループを
   //   抜ける（true を返す。runner が以降の tick を無動作にする＝人間判断②）。return は関数の外＝エラー。
@@ -87,7 +119,7 @@ export class Interp {
     catch (e) {
       if (e instanceof ContinueSignal) return false;
       if (e instanceof BreakSignal) return true;
-      throw this.outside(e);
+      throw this.outside(e, false);
     }
     return false;
   }
@@ -344,11 +376,14 @@ export class Interp {
         //   例外で抜けたときは戻さない（エラーの出た行を指したまま）。runner が直接呼ぶ setup()／loop() はこの経路を通らない＝
         //   tick の後の line() は loop() の本体で最後に実行した文の行（その文が呼んだ関数の中の行ではない）。
         const ln = this.curLine;
-        const v = this.callUser(name, args);
+        const v = this.callUser(name, args, ln);
         this.curLine = ln;
         return v;
       }
-      if (name in this.host && typeof this.host[name] === 'function') return this.host[name](...args);
+      if (name in this.host && typeof this.host[name] === 'function') {
+        if (name === 'millis' || name === 'micros') this.timeRead = true;   // BK1 H1: StepLimit の文言のヒント (値は変えない)
+        return this.host[name](...args);
+      }
       throw this.rt('undefFunc', { name });
     }
     const fn = this.evalExpr(callee, scope);
