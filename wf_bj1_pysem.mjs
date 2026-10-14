@@ -224,9 +224,10 @@ for (const [label, src] of [['x //= 0', 'x = 7\nx //= 0\nprint(x)'], ['x %= 0', 
   ok(r.key === 'interp.err.divZero' && r.line === 2 && r.out.length === 0,
     `${label} → 行番号付きのゼロ除算エラー（実 key=${r.key} line=${r.line} out=${J(r.out)}・Python も ZeroDivisionError）`);
 }
-{ // BJ2（BJ1 層 4 F4）: C の `%=` は是正前後とも未対応＝構文エラーのまま（受理範囲を変えない。Stage 案 3 の候補）。
-  const r = run('void setup(){\n  int x = 7;\n  x %= 3;\n}\nvoid loop(){}', 'c');
-  ok(!!r.err && r.err.startsWith('構文エラー(C)') && /\(行 3\)/.test(r.err), `C の x %= 3 → 構文エラー（行 3）のまま（実 ${r.err ? r.err : '走った'}）`);
+{ // BJ2（BJ1 層 4 F4）: C の `%=` は Stage BJ では未対応＝構文エラーのままだった（Stage 案 3 の候補）。BK5（Stage BK）で受理した＝C の % は
+  //   切り捨て剰余のまま（7 %= 3 は 1・-7 %= 3 は -1＝gcc と同じ。py の床剰余とは別）。C の `%=` の詳細は wf_bk1_interp2 の J 章。
+  const r = run('void setup(){\n  int x = 7;\n  x %= 3;\n  int y = -7;\n  y %= 3;\n  print(x); print(y);\n}\nvoid loop(){}', 'c');
+  ok(!r.err && J(r.out) === J(['1', '-1']), `C の x %= 3・y = -7; y %= 3 → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ["1","-1"]＝BK5 で受理・切り捨て剰余。BK5 より前は構文エラー（行 3））`);
 }
 {
   let node;

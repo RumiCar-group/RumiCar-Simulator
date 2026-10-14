@@ -4,8 +4,20 @@ import { tokenize, SourceError } from './lexer.js';
 // 型語と宣言修飾子。skipType() がまとめて読み飛ばす (この処理系は型を追跡しない)。
 // AS4: 修飾子 const/static/volatile/signed と幅つき整数型を追加。配列サイズ定数の定石
 //   `const int N = 72;` / `static int buf[8];` が従来は構文エラーだった (実測 C16/C23)。
+//   BK5: `static` は保持する（skipType が型語の列に static があったかを返し、varDecl が各宣言子の var の節に static: true を付ける＝評価器が
+//   最初の 1 回だけ初期化する）。static の無い宣言の AST は是正前と同じ形（static の印を付けない）。
 const TYPES = ['int', 'float', 'double', 'void', 'bool', 'char', 'long', 'short', 'unsigned', 'auto', 'byte', 'uint8_t', 'uint16_t', 'int16_t',
   'const', 'static', 'volatile', 'signed', 'boolean', 'size_t', 'uint32_t', 'int32_t', 'int8_t'];
+// BK5: キャスト `(型名)式` の変換の種類（evaluator の 'cast'）。float／double を含めば 'float'（数にする）・bool／boolean は 'bool'（C の真偽）・
+//   void／auto・ポインタ（`*` を含む）は 'none'（値をそのまま）・それ以外の整数型（int・long・short・unsigned・signed・char・byte・size_t・
+//   uintN_t・intN_t・修飾子だけ）は 'int'（0 方向への切り捨て）。
+function castKind(words, ptr) {
+  if (ptr) return 'none';
+  if (words.includes('float') || words.includes('double')) return 'float';
+  if (words.includes('bool') || words.includes('boolean')) return 'bool';
+  if (words.includes('void') || words.includes('auto')) return 'none';
+  return 'int';
+}
 
 export function parseC(src) {
   const toks = tokenize(src, 'c');
@@ -50,9 +62,11 @@ export function parseC(src) {
   }
 
   function skipType() {
-    // 型(複数語) を読み飛ばす。ポインタ '*' も無視。
-    while (isType()) next();
+    // 型(複数語) を読み飛ばす。ポインタ '*' も無視。BK5: 型語の列に static があれば true（varDecl が使う）。
+    let st = false;
+    while (isType()) { if (next().value === 'static') st = true; }
     while (isOp('*')) next();
+    return st;
   }
 
   function funcDef() {
@@ -145,10 +159,11 @@ export function parseC(src) {
     return { t: 'list', items };
   }
 
+  // BK5: `static int n = 0;` は各宣言子の var の節に static: true（評価器が最初の 1 回だけ初期化して値を保持する）。
   function varDecl() {
-    skipType();
+    const st = skipType();
     const decls = [];
-    do { decls.push(declarator()); } while (isPunc(',') && next());
+    do { const d = declarator(); if (st) d.static = true; decls.push(d); } while (isPunc(',') && next());
     eat('PUNC', ';');
     return decls.length === 1 ? decls[0] : { t: 'block', body: decls };
   }
@@ -195,6 +210,8 @@ export function parseC(src) {
     return { t: 'switch', disc, cases };
   }
 
+  // BK5: 初期化部の宣言は複数の宣言子（`for (int i = 0, j = 0; …)`＝varDeclNoSemi）・初期化部と更新部の式はカンマ演算子（expr の 'seq'）。
+  //   是正前は宣言子 1 個だけで `int i = 0, j = 0` が「';' を期待しましたが ','」・更新部の `i++, j += 2` も同じ構文エラー。
   function forStmt() {
     eat('ID', 'for'); eat('PUNC', '(');
     let init = null;
@@ -209,17 +226,31 @@ export function parseC(src) {
     return { t: 'for', init, cond, update, body: bodyAsArray() };
   }
 
+  // BK5: 宣言子が 1 個なら是正前と同じ var の節・2 個以上なら block（文の位置の varDecl と同じ形。評価器の block はスコープを作らない＝
+  //   for のスコープ fs に全部置かれる）。for の初期化部の static は印を付けない（C でも for の宣言に static は書けない）。
   function varDeclNoSemi() {
     skipType();
-    return declarator();
+    const decls = [];
+    do { decls.push(declarator()); } while (isPunc(',') && next());
+    return decls.length === 1 ? decls[0] : { t: 'block', body: decls };
   }
 
   // ===== 式 =====
-  function expr() { return assign(); }
+  // BK5: カンマ演算子（C の式の最も低い優先順位）。`a, b` は左から評価して右の値（'seq'）。カンマ 1 個も無ければ是正前と同じ節（assign）。
+  //   関数の引数・初期化子（`int a = 1, b = 2;`・`{1, 2}`）・三項の枝は assign を直接読む＝そこでのカンマは従来どおり区切り。
+  //   是正前は式の位置のカンマが構文エラー（for の更新部 `i++, j += 2`・文 `a = 1, b = 2;`）。
+  function expr() {
+    const first = assign();
+    if (!isPunc(',')) return first;
+    const items = [first];
+    while (isPunc(',')) { next(); items.push(assign()); }
+    return { t: 'seq', items };
+  }
 
+  // BK5: `%=` を足した（C の % は切り捨て剰余＝applyBin の C の分岐。是正前は構文エラー「';' を期待しましたが '%='」）。
   function assign() {
     const left = ternary();
-    if (peek().type === 'OP' && ['=', '+=', '-=', '*=', '/=', '&=', '|=', '^=', '<<=', '>>='].includes(peek().value)) {
+    if (peek().type === 'OP' && ['=', '+=', '-=', '*=', '/=', '%=', '&=', '|=', '^=', '<<=', '>>='].includes(peek().value)) {
       const op = next().value;
       const value = assign();
       return { t: 'assignexpr', target: left, op, value };
@@ -267,6 +298,17 @@ export function parseC(src) {
         return { t: 'sizeof', a };
       }
       return { t: 'sizeof', a: unary() };
+    }
+    // BK5: キャスト `(型名)式`（`(int)x`・`(unsigned long)t`・`(float)7 / 2`＝キャストが先・`(int*)p`）。`(` の次が型語のときだけ＝型語でない
+    //   `(x)` の括弧式は不変。被演算子は単項（`(int)-3.7`）。変換は castKind（evaluator の 'cast'）。是正前は `(int)x` が「';' を期待しましたが 'x'」。
+    if (isPunc('(') && peek(1).type === 'ID' && TYPES.includes(peek(1).value)) {
+      next();
+      const words = [];
+      while (isType()) words.push(next().value);
+      let ptr = false;
+      while (isOp('*')) { next(); ptr = true; }
+      eat('PUNC', ')');
+      return { t: 'cast', to: castKind(words, ptr), a: unary() };
     }
     if (isOp('!') || isOp('-') || isOp('+') || isOp('~')) { const op = next().value; return { t: 'un', op, a: unary() }; }
     if (isOp('++') || isOp('--')) { const op = next().value; const a = unary(); return { t: 'preincr', op, a }; }

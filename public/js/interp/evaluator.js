@@ -49,6 +49,7 @@ export class Interp {
     this.curLine = 0;   // 直近に実行した文の行 (実行位置ハイライト用)
     this.depth = 0;     // BK1: ユーザー関数の呼び出しの入れ子の段数 (callUser・SIM.maxCallDepth)
     this.timeRead = false;   // BK1 H1: この tick の中で millis()／micros() を呼んだか (StepLimit の文言のヒント)
+    this.statics = new Map();   // BK5: C の static 変数の記憶域（宣言の節 → { v }）。Interp ごと＝車ごと・buildController ごとに新しい
   }
 
   load(ast) {
@@ -153,7 +154,18 @@ export class Interp {
     switch (node.t) {
       case 'pass': return;
       case 'block': return this.execBlock(node.body, scope);
-      case 'var': { const v = node.init ? this.evalExpr(node.init, scope) : 0; scope.vars[node.name] = v; return; }
+      case 'var': {
+        // BK5: C の `static int n = 0;`（parser_c が static: true）。最初に実行したときだけ初期化子を評価して記憶域（宣言の節ごと＝同じ名前でも
+        //   関数が違えば別・再帰でも 1 つ）に置き、スコープの名前はその記憶域を読み書きする（アクセサ）＝関数を抜けても値が残る。
+        //   static の無い宣言は従来どおり毎回初期化。是正前は static を読み飛ばして毎回初期化（`f(); f(); print(f());` が 1）。
+        if (node.static) {
+          let cell = this.statics.get(node);
+          if (!cell) { cell = { v: node.init ? this.evalExpr(node.init, scope) : 0 }; this.statics.set(node, cell); }
+          Object.defineProperty(scope.vars, node.name, { get: () => cell.v, set: (x) => { cell.v = x; }, enumerable: true, configurable: true });
+          return;
+        }
+        const v = node.init ? this.evalExpr(node.init, scope) : 0; scope.vars[node.name] = v; return;
+      }
       case 'exprstmt': this.evalExpr(node.expr, scope); return;
       case 'massign': return this.execMassign(node, scope);
       // BJ3: 値の式が関数を呼んでも、戻った時点で curLine は return の行に戻っている（evalCall）＝信号の行は return の行。
@@ -395,6 +407,17 @@ export class Interp {
       }
       case 'arraydecl': return this.shapeArray(node.dims, 0, node.init ? this.evalExpr(node.init, scope) : null, scope);
       case 'sizeof': return this.sizeOfVal(this.evalExpr(node.a, scope));
+      // BK5: C のカンマ演算子（parser_c の expr）。左から評価して最後の値。
+      case 'seq': { let v; for (const e of node.items) v = this.evalExpr(e, scope); return v; }
+      // BK5: C のキャスト（parser_c の castKind）。'int'＝0 方向への切り捨て（`(int)-3.7` は -3・-0 は 0）・'float'＝数・'bool'＝C の真偽・'none'＝そのまま。
+      //   型の幅は持たない（`(uint8_t)300` は 300・`(unsigned long)-1` は -1・`(char)65` は数の 65＝§9 の残る差）。
+      case 'cast': {
+        const a = this.evalExpr(node.a, scope);
+        if (node.to === 'int') { const r = Math.trunc(Number(a)); return r === 0 ? 0 : r; }
+        if (node.to === 'float') return Number(a);
+        if (node.to === 'bool') return truthy(a);
+        return a;
+      }
       case 'ternary': return this.tr(this.evalExpr(node.cond, scope)) ? this.evalExpr(node.a, scope) : this.evalExpr(node.b, scope);
       case 'assignexpr': {
         let v;

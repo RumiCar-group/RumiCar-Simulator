@@ -43,7 +43,7 @@ export class SourceError extends Error {
 const lexErr = (sub, params, line, head = 'lex') => new SourceError('lex', sub, params, line, head);
 
 // BJ1: py の複合代入 `%=`・`//=` を 1 トークンに（`**=` は従来から在る）。C の `//` は行コメントの判定が演算子より先なので
-//   `//=` は C に現れない。C の `%=` は 1 トークンになるが parser_c は従来どおり受理しない（是正前も構文エラー＝受理範囲は不変）。
+//   `//=` は C に現れない。C の `%=` も 1 トークンになり、BK5 から parser_c が複合代入として受理する（BK5 より前は構文エラー）。
 const OPS3 = ['**=', '<<=', '>>=', '//='];
 const OPS2 = ['==', '!=', '<=', '>=', '&&', '||', '+=', '-=', '*=', '/=', '%=', '**', '//', '++', '--', '<<', '>>', '&=', '|=', '^='];
 const OPS1 = ['+', '-', '*', '/', '%', '<', '>', '=', '!', '&', '|', '?', '^', '~'];
@@ -66,6 +66,12 @@ const FSTR_DROP = new Set(['EOF', 'NEWLINE', 'INDENT', 'DEDENT']);
 //   組（ur・ub・bf・uf 等）は接頭辞にせず従来どおり識別子＋文字列（＝構文エラー）。是正前は f／F だけで、`r"a\nb"`・`u"a"`・`b"a"` は
 //   識別子 r／u／b の後ろに文字列が来る形（括弧の中なら「')' を期待しましたが 'a⏎b'」・文なら「未定義の変数/名前: r」等）だった。
 const STR_PREFIX = /^(?:[fF][rR]|[rR][fF]|[bB][rR]|[rR][bB]|[rRuUbBfF])(?=["'])/;
+// BK5: C の数値リテラルの接尾辞（読み飛ばす＝値は接尾辞を落とした数。この処理系は型を追跡しない）。整数（10 進・16 進）は u／U と l／L／ll／LL の
+//   組（`10u`・`10L`・`10UL`・`10LU`・`10ULL`・`0x1Fu`）・浮動小数（小数点か指数がある）は f／F／l／L（`1.0f`・`1.5F`・`1e3f`）。接尾辞の直後に
+//   英数字か `_` が続くとき（`10ux`・`1.0fx`）は接尾辞にしない＝従来どおり数の後ろの識別子（構文エラー）。整数の f（`10f`）は C でも誤りなので
+//   受理しない。py は無改変（Python 3 に接尾辞は無い）。是正前は `1.0f` が「';' を期待しましたが 'f'」・`10UL` が「…が 'UL'」の構文エラー。
+const C_INT_SUFFIX = /^(?:[uU](?:ll|LL|[lL])?|(?:ll|LL|[lL])[uU]?)(?![A-Za-z0-9_])/;
+const C_FLOAT_SUFFIX = /^[fFlL](?![A-Za-z0-9_])/;
 
 // AP8: C プリプロセッサ `#define`（オブジェクト形式マクロのみ）。
 // macros[name] = 置換トークン列。使用箇所で単純にトークンを差し込む（テキスト置換相当）。
@@ -113,9 +119,13 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
     const body = after.trim();
     macros[name] = tokenize(body, 'c', macros, line).filter(t => t.type !== 'EOF');
   }
+  // BK5 (27): ファイルの末尾まで `*/` が無いブロックコメントは字句エラー interp.lex.blockComment（行＝`/*` の行。gcc も "unterminated comment"）。
+  //   是正前は末尾まで黙ってコメントにした（`/* oops` の後ろの setup()／loop() が消えてもエラー無し）。閉じた `/* … */` と `//` は不変。
   function skipBlockComment() {
+    const l0 = line;
     i += 2;
     while (i < n && !(src[i] === '*' && src[i + 1] === '/')) { if (src[i] === '\n') line++; i++; }
+    if (i >= n) throw lexErr('blockComment', {}, l0);
     i += 2;
   }
 
@@ -378,6 +388,7 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
       if (ch === '0' && (src[i + 1] === 'x' || src[i + 1] === 'X')) {
         let h = src[i] + src[i + 1]; i += 2;
         while (i < n && /[0-9a-fA-F]/.test(src[i])) h += src[i++];
+        if (mode === 'c') { const sm = C_INT_SUFFIX.exec(src.slice(i, i + 4)); if (sm) i += sm[0].length; }   // BK5: `0x1Fu`
         pushTok('NUM', parseInt(h, 16));
         continue;
       }
@@ -390,6 +401,10 @@ export function tokenize(src, mode, macros = Object.create(null), line0 = 1) {
         s += src[i++];                                  // e / E
         if (src[i] === '+' || src[i] === '-') s += src[i++];
         while (i < n && isDigit(src[i])) s += src[i++];
+      }
+      if (mode === 'c') {   // BK5: 接尾辞（浮動小数は小数点か指数があるときだけ f／F／l／L）
+        const sm = (/[.eE]/.test(s) ? C_FLOAT_SUFFIX : C_INT_SUFFIX).exec(src.slice(i, i + 4));
+        if (sm) i += sm[0].length;
       }
       pushTok('NUM', parseFloat(s));
       continue;

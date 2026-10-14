@@ -941,6 +941,7 @@ export const MESSAGES = {
   'interp.lex.fstrBrace':     { ja: 'f-string の { に対応する } がありません', en: 'f-string { has no matching }' },
   'interp.lex.unterminated':  { ja: '閉じていない文字列（{open} で始まる文字列の終わりの {close} がありません）', en: 'unterminated string (the string that starts with {open} has no closing {close})' },
   'interp.lex.badChar':       { ja: '不明な文字 \'{ch}\'', en: 'unknown character \'{ch}\'' },
+  'interp.lex.blockComment':  { ja: '閉じていないブロックコメント（/* で始まるコメントの終わりの */ がありません）', en: 'unterminated block comment (the comment that starts with /* has no closing */)' },
   'interp.syn.head.py':       { ja: '構文エラー(Py): ', en: 'Syntax error (Py): ' },
   'interp.syn.head.c':        { ja: '構文エラー(C): ', en: 'Syntax error (C): ' },
   'interp.syn.expected':      { ja: '\'{want}\' を期待しましたが \'{got}\'', en: 'expected \'{want}\' but got \'{got}\'' },

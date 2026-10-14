@@ -1,4 +1,4 @@
-// wf_bk1_interp2.mjs — Stage BK「インタプリタ是正 II」の常設ゲート。BK1 で新設し、BK2〜BK5 が章を足す（BK2＝G 章・BK3＝H 章・BK4＝I 章）。
+// wf_bk1_interp2.mjs — Stage BK「インタプリタ是正 II」の常設ゲート。BK1 で新設し、BK2〜BK5 が章を足す（BK2＝G 章・BK3＝H 章・BK4＝I 章・BK5＝J 章）。
 // ════════════════════════════════════════════════════════════════════════════
 // 学習者が自力で原因に辿り着けないエラー（英語モードでも日本語・行番号の無い JS の RangeError・状況に合わない文言）の是正を、
 //   本番経路 buildController(src, lang, buildApi(world)) → setup()/tick()（と fleet の tickSlot・race_engine の runRace）で
@@ -76,11 +76,22 @@
 //      出荷 23 本の出力と runRace（F 章）・出荷 py の AST 指紋（wf_bj1_pysem E 章）は不変。wf_bj1_pysem の G-9 `range(1,5,None)` は rangeStepZero から
 //      rangeArg（python3 と同じ TypeError の種類）に改めた。
 //
+// BK5（C 定石・C だけ・py は無改変）— 是正前の木（8ecdfd9）で `--root <木>` を付けて回すと J 章（是正前と同じ値の行を除く）と A 章の BK5 新設の
+//   1 本・本数・全種が赤になる（実測は決定ログ BK5 結果）。A 章: `int y = (int)x;`（キャストの受理で通るようになった）を是正前と同じ文言・行の
+//   別の本文に差し替え、lexer の blockComment を足した（lexer 5 → 6）。
+//   J) 本番経路の値を gcc の実測（定数・checkGcc で同じ本文を gcc でも走らせて突き合わせる。期待値は python3 ではなく実機 C の値）と照合する。
+//      J-1 関数の中の static（最初の 1 回だけ初期化・関数ごと・配列・再帰・controller ごと）。J-2 キャスト（整数型は 0 方向への切り捨て・float／
+//      double・bool・void・#define の型名・`(x)` の括弧式は不変）。J-3 数値接尾辞（u・l・ul・ll・f・F・L・16 進）。J-4 カンマ演算子と for の
+//      初期化部の複数の宣言子（s＝3・j＝6）。J-5 `%=`（切り捨て剰余・0 は divZero）。J-6 (27) 閉じていない `/*`（行＝`/*` の行）・閉じたコメント
+//      は不変。J-7 整数の f と英数字の続く接尾辞は是正前と同じ構文エラー。J-8 C の `!`・三項・for・do-while・while の真偽は不変（BK-15 F3）。
+//      C の整数除算は従来どおり非対応（`(int)7/2` は 3.5・§9）なので、gcc に渡す行に整数どうしの `/` を書かない。
+//
 // 使い方: node wf_bk1_interp2.mjs              … 検査
 //         node wf_bk1_interp2.mjs --root <dir>  … <dir>/public/js の product で回す（改修前の木で赤になることの確認用）
 // exit: 0=全緑 / 1=いずれか赤。
 // ════════════════════════════════════════════════════════════════════════════
-import { readFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -220,17 +231,22 @@ const SRC_ERR = [
     '構文エラー(Py): キーワード引数の後ろに位置引数は書けません (行 1)', 'Syntax error (Py): positional argument follows keyword argument (line 1)'],
   ['同じ名前のキーワード引数（py・BK3 新設）', 'py', 'print("{a}".format(a=1, a=2))', 'interp.syn.kwRepeat', 1,
     "構文エラー(Py): キーワード引数 'a' が 2 回あります (行 1)", "Syntax error (Py): keyword argument repeated: 'a' (line 1)"],
-  ['eat の期待（C のキャスト）', 'c', cLoop('  float x = 3.7; int y = (int)x;'), 'interp.syn.expected', 3,
+  // BK5: 下の 1 本は本文を差し替えた（`int y = (int)x;` はキャストの受理で通るようになった＝J 章）。差し替えた本文の ja の文言と行も
+  //   e65643e の木で採った値（是正前と同じ）。
+  ['eat の期待（C の数の後ろの名前）', 'c', cLoop('  float x = 3.7; int y = 3 x;'), 'interp.syn.expected', 3,
     "構文エラー(C): ';' を期待しましたが 'x' (行 3)", "Syntax error (C): expected ';' but got 'x' (line 3)"],
   ['switch の case/default（C）', 'c', cLoop('  switch (1) { x = 1; }'), 'interp.syn.caseDefault', 3,
     "構文エラー(C): case か default を期待しましたが 'x' (行 3)", "Syntax error (C): expected case or default but got 'x' (line 3)"],
   ['primary の予期しないトークン（C・probe の C syntax err text）', 'c', cLoop('  int x = ;'), 'interp.syn.unexpected', 3,
     "構文エラー(C): 予期しないトークン ';' (行 3)", "Syntax error (C): unexpected token ';' (line 3)"],
+  // BK5 新設（lexer）: 閉じていないブロックコメント（行＝`/*` の行）。是正前はエラー無し（末尾まで黙ってコメント）。
+  ['閉じていないブロックコメント（C・BK5 新設）', 'c', 'int a;\n/* oops\n' + cLoop(''), 'interp.lex.blockComment', 2,
+    '字句エラー: 閉じていないブロックコメント（/* で始まるコメントの終わりの */ がありません） (行 2)', 'Lexical error: unterminated block comment (the comment that starts with /* has no closing */) (line 2)'],
 ];
 for (const [label, lang, code, key, line, wantJa, wantEn] of SRC_ERR) {
   const { ja, en } = runBoth(code, lang);
   ok(ja.err === wantJa && ja.line === line && ja.key === key,
-    `A ${label}: ja ${J(ja.err)}・行 ${ja.line}・${ja.key}（期待 ${label.includes('BK2 新設') ? 'BK2 の文言' : label.includes('BK3 新設') ? 'BK3 の文言' : '是正前と同じ'} ${J(wantJa)}・行 ${line}・${key}）`);
+    `A ${label}: ja ${J(ja.err)}・行 ${ja.line}・${ja.key}（期待 ${label.includes('BK2 新設') ? 'BK2 の文言' : label.includes('BK3 新設') ? 'BK3 の文言' : label.includes('BK5 新設') ? 'BK5 の文言' : '是正前と同じ'} ${J(wantJa)}・行 ${line}・${key}）`);
   ok(en.err === wantEn && en.line === line && en.key === key && !JP_RE.test(en.err || ''),
     `A ${label}: en ${J(en.err)}（期待 ${J(wantEn)}・日本語なし）`);
 }
@@ -238,13 +254,13 @@ for (const [label, lang, code, key, line, wantJa, wantEn] of SRC_ERR) {
   const lex = [...src('interp/lexer.js').matchAll(/throw lexErr\('([A-Za-z]+)'/g)].map((m) => m[1]);
   const py = [...src('interp/parser_py.js').matchAll(/(?<!function )\berr\('([A-Za-z]+)'/g)].map((m) => m[1]);
   const c = [...src('interp/parser_c.js').matchAll(/(?<!function )\berr\('([A-Za-z]+)'/g)].map((m) => m[1]);
-  ok(lex.length === 5 && py.length === 13 && c.length === 3,
-    `A 発生箇所の本数: lexer ${lex.length}・parser_py ${py.length}・parser_c ${c.length}（期待 5・13・3＝21。BK1 は 4・4・3＝11、BK2 が parser_py に 5 箇所〔err の中と program の末尾の unclosed・inlineCompound の unexpected・augList・bytes〕、` +
-    `BK3 が lexer に 1 箇所〔書式指定の中で閉じ } の無い fstrBrace〕・parser_py に 4 箇所〔fstrRBrace・kwRepeat・posAfterKw・kwArg〕）`);
+  ok(lex.length === 6 && py.length === 13 && c.length === 3,
+    `A 発生箇所の本数: lexer ${lex.length}・parser_py ${py.length}・parser_c ${c.length}（期待 6・13・3＝22。BK1 は 4・4・3＝11、BK2 が parser_py に 5 箇所〔err の中と program の末尾の unclosed・inlineCompound の unexpected・augList・bytes〕、` +
+    `BK3 が lexer に 1 箇所〔書式指定の中で閉じ } の無い fstrBrace〕・parser_py に 4 箇所〔fstrRBrace・kwRepeat・posAfterKw・kwArg〕、BK5 が lexer に 1 箇所〔blockComment〕）`);
   const covered = new Set(SRC_ERR.map((r) => r[3]));
   const want = [...lex.map((s) => 'interp.lex.' + s), ...py.map((s) => 'interp.syn.' + s), ...c.map((s) => 'interp.syn.' + s)];
   const miss = [...new Set(want)].filter((k) => !covered.has(k));
-  ok(want.length === 21 && miss.length === 0, `A 発生箇所の全種（${[...new Set(want)].join('・')}）が表で起きている${miss.length ? '（未検査 ' + miss.join(', ') + '）' : ''}`);
+  ok(want.length === 22 && miss.length === 0, `A 発生箇所の全種（${[...new Set(want)].join('・')}）が表で起きている${miss.length ? '（未検査 ' + miss.join(', ') + '）' : ''}`);
   // 字句・構文エラーの line は構造値（setLang に依らない）・en の行の接尾は (line N)。
 }
 
@@ -997,6 +1013,151 @@ gVals('I-8', [
   const a = run('print(RC_read(None), RC_drive(None, 100), RC_steer(None), int(None), abs(None))', 'py');
   ok(!a.err && J(a.out) === J(['-2 0 0 0 0']), `I-8 実機 API と数の組込関数に None（層4 F8）→ ${a.err ? 'ERR ' + a.err : J(a.out)}（期待 ["-2 0 0 0 0"]・是正前は RC_read(None) が RC_read(LEFT) と同じ・RC_drive(None, 100) が 1）`);
 }
+
+// ── J) BK5 C 定石（static・キャスト・数値接尾辞・カンマ演算子と for の複数の宣言子・%=・閉じていない /*）──────────────────────────
+console.log('\nJ) BK5 C 定石（static・キャスト・数値接尾辞・for のカンマ・%=・閉じていない /*）— 是正前（8ecdfd9）の値は各表の最後の列');
+// 値の行: [ラベル, 関数・グローバルの宣言, setup() の本体, tick 数, 期待の出力（gcc で同じ本文を実測した値・checkGcc で突き合わせ）, 是正前（8ecdfd9）の結果]。
+//   本処理系の本文は `<宣言>⏎void setup(){<本体>}⏎void loop(){…}`。gcc には `#include <stdio.h>`・`<stdint.h>` と `#define print(x) printf("%g\n", (double)(x))` を前に、
+//   setup() と loop() を tick 数だけ呼ぶ main を後ろに足して同じ本文を渡す（期待値は実機 C の値で、python3 ではない）。表の値は数だけ
+//   （bool の表示 true／false は本処理系の C の print の従来の表示で gcc と違う＝真偽の行は gcc に渡さない）。
+const GCC = (() => {
+  const r = spawnSync('gcc', ['--version'], { encoding: 'utf8', timeout: 20000 });
+  return r.error || r.status !== 0 ? null : r.stdout.split('\n')[0];
+})();
+let gccChecked = 0;
+const cProg = (decl, body, loopBody = '') => `${decl}\nvoid setup(){${body}}\nvoid loop(){${loopBody}}`;
+// gcc（任意）: 同じ本文をコンパイルして走らせ、出力の行（またはコンパイルエラーの最初の error 行）を返す。一時ディレクトリは自分で作って消す。
+function gccRun(prog, ticks) {
+  const dir = mkdtempSync(join(tmpdir(), 'wf_bk5_'));
+  try {
+    const exe = join(dir, 'a.out');
+    const full = '#include <stdio.h>\n#include <stdint.h>\n#define print(x) printf("%g\\n", (double)(x))\n' + prog +
+      `\nint main(void){ setup(); for (int t_ = 0; t_ < ${ticks}; t_++) loop(); return 0; }\n`;
+    const c = spawnSync('gcc', ['-std=c11', '-w', '-x', 'c', '-', '-o', exe], { input: full, encoding: 'utf8', timeout: 60000 });
+    if (c.error || c.status !== 0) return { err: (c.error && c.error.message) || (c.stderr.split('\n').find((l) => /error/.test(l)) || c.stderr.trim()) };
+    const x = spawnSync(exe, [], { encoding: 'utf8', timeout: 20000 });
+    if (x.error || x.status !== 0) return { err: (x.error && x.error.message) || 'exit ' + x.status };
+    return { out: x.stdout.replace(/\n$/, '').split('\n').filter((l, k, a) => !(a.length === 1 && l === '')) };
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+}
+function checkGcc(label, prog, ticks, want) {
+  if (!GCC) return;
+  const r = gccRun(prog, ticks); gccChecked++;
+  ok(!r.err && J(r.out) === J(want), `${label}: gcc の出力 ${r.err ? 'ERR ' + r.err : J(r.out)} ＝ 定数 ${J(want)}`);
+}
+function checkGccErr(label, prog, re) {
+  if (!GCC) return;
+  const r = gccRun(prog, 0); gccChecked++;
+  ok(!!r.err && re.test(r.err), `${label}: gcc も ${re} で止まる（実 ${r.err ? r.err : 'エラーなし ' + J(r.out)}）`);
+}
+console.log(`  gcc: ${GCC ? GCC + '（定数と同じ本文の実行結果を突き合わせる）' : '不在（定数＝2026-10-14 の gcc の実測で判定）'}`);
+function jVals(tag, rows) {
+  for (const [label, decl, body, ticks, want, pre] of rows) {
+    const prog = cProg(decl, body, ticks ? 'tick1();' : '');
+    const r = run(prog, 'c', ticks);
+    ok(!r.err && J(r.out) === J(want), `${tag} ${label} → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ${J(want)}・是正前 ${pre}）`);
+    checkGcc(`${tag} ${label}`, prog, ticks, want);
+  }
+}
+// J-1 static: 関数の中の static は最初の 1 回だけ初期化して値を保つ（宣言の節ごと＝同じ名前でも関数が違えば別・再帰でも 1 つ）。static の無い
+//   ローカルは従来どおり毎回初期化。是正前は static を読み飛ばして毎回初期化（probe の `f(); f(); print(f());` が 1）。
+jVals('J-1', [
+  ['static int n = 0（probe）', 'int f(){ static int n = 0; n = n + 1; return n; }', 'f(); f(); print(f());', 0, ['3'], '["1"]'],
+  ['static の無いローカルは毎回初期化（従来どおり）', 'int f(){ int n = 0; n = n + 1; return n; }', 'f(); f(); print(f());', 0, ['1'], '同じ'],
+  ['2 つの関数の同名の static は独立', 'int f(){ static int n = 0; n++; return n; }\nint g(){ static int n = 10; n++; return n; }', 'f(); f(); g(); print(f()); print(g());', 0, ['3', '12'], '["1","11"]'],
+  ['配列の static も保持', 'int f(){ static int a[2]; a[0] = a[0] + 1; return a[0]; }', 'f(); f(); print(f());', 0, ['3'], '["1"]'],
+  ['初期化子の無い static は 0 から', 'int f(){ static int n; n += 2; return n; }', 'f(); print(f());', 0, ['4'], '["2"]'],
+  ['static int a = 1, b = 5（宣言子ごと）', 'int f(){ static int a = 1, b = 5; a++; b--; return a * 10 + b; }', 'f(); print(f());', 0, ['33'], '["24"]'],
+  ['再帰の中の static は 1 つ', 'int f(int k){ static int c = 0; c++; if (k > 0) f(k - 1); return c; }', 'print(f(3)); print(f(0));', 0, ['4', '5'], '["1","1"]'],
+  ['ファイルの static（グローバル・従来どおり）', 'static int g = 3;\nint f(){ g++; return g; }', 'f(); print(f());', 0, ['5'], '同じ'],
+  ['loop() から呼ぶ関数の static unsigned long（3 tick）', 'void tick1(){ static unsigned long cnt = 0; cnt++; print(cnt); }', '', 3, ['1', '2', '3'], '["1","1","1"]'],
+]);
+{ // static の値は Interp ごと（buildController ごと＝車ごと）。同じ本文の 2 つ目の controller は 1 から数え直す。
+  const prog = cProg('int f(){ static int n = 0; n++; return n; }', 'print(f()); print(f());');
+  const a = run(prog, 'c'), b = run(prog, 'c');
+  ok(!a.err && !b.err && J(a.out) === J(['1', '2']) && J(b.out) === J(['1', '2']), `J-1 static の記憶域は controller ごと → ${J(a.out)}・${J(b.out)}（期待 ["1","2"] が 2 回）`);
+}
+// J-2 キャスト `(型名)式`: 整数型は 0 方向への切り捨て・float／double は数・(bool) は C の真偽・型の幅は持たない（§9 の残る差）。`(x)` の括弧式は不変。
+//   是正前は `(int)x` が「';' を期待しましたが 'x'」・`(int)3.7` が「')' を期待しましたが '3.7'」。
+jVals('J-2', [
+  ['(int)x（probe）', '', 'float x = 3.7; int y = (int)x; print(y);', 0, ['3'], '構文エラー「\';\' を期待しましたが \'x\'」'],
+  ['(int)3.7・(int)-3.7・(float)7/2・(long)3.99・(double)7/2・(unsigned long)5.9・(char)65.2', '', 'print((int)3.7); print((int)-3.7); print((float)7/2); print((long)3.99); print((double)7/2); print((unsigned long)5.9); print((char)65.2);', 0,
+    ['3', '-3', '3.5', '3', '3.5', '5', '65'], '構文エラー'],
+  ['(x) の括弧式・(int)x * 2・(int)(x * 2)・(unsigned int)0.5・(short)-0.5', '', 'float x = 3.7; print((x)); print((int)x * 2); print((int)(x * 2)); print((unsigned int)0.5); print((short)-0.5);', 0, ['3.7', '6', '7', '0', '0'], '構文エラー'],
+  ['#define の型名のキャスト・(const int)・(uint8_t)', '#define T int', 'print((T)2.9); print((const int)-1.5); print((uint8_t)7.9);', 0, ['2', '-1', '7'], '構文エラー'],
+]);
+{ // (bool) は C の真偽（true／false）・(void) は値をそのまま（文として捨てる定石）。bool の表示は本処理系の C の print の従来の表示（gcc に渡さない）。
+  const r = run(cProg('', 'print((bool)2); print((bool)0); print((boolean)0.5); int v = 4; (void)v; print((void)v + 1);'), 'c');
+  ok(!r.err && J(r.out) === J(['true', 'false', 'true', '5']), `J-2 (bool)・(boolean)・(void) → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ["true","false","true","5"]）`);
+}
+// J-3 数値接尾辞（読み飛ばす）。是正前は「';' を期待しましたが 'f'」「…が 'UL'」の構文エラー。整数の f と英数字の続く接尾辞は従来どおり構文エラー（gcc も invalid suffix）。
+jVals('J-3', [
+  ['1.0f（probe）・10UL（probe）', '', 'float x = 1.0f; print(x); unsigned long y = 10UL; print(y);', 0, ['1', '10'], '構文エラー'],
+  ['1.5F・10L・10u・0x1Fu・1e3f・10ULL・10LU・.5f・2.5L・0XffUL', '', 'print(1.5F); print(10L); print(10u); print(0x1Fu); print(1e3f); print(10ULL); print(10LU); print(.5f); print(2.5L); print(0XffUL);', 0,
+    ['1.5', '10', '10', '31', '1000', '10', '10', '0.5', '2.5', '255'], '構文エラー'],
+]);
+// J-4 カンマ演算子（for の初期化部・更新部と式の文）と for の初期化部の複数の宣言子。値は実機 C（gcc）と同じ（s＝3・j＝6）。
+jVals('J-4', [
+  ['for (i = 0, j = 0; i < 3; i++, j += 2)', '', 'int s = 0; int i; int j; for (i = 0, j = 0; i < 3; i++, j += 2) s++; print(s); print(j);', 0, ['3', '6'], '構文エラー「\';\' を期待しましたが \',\'」'],
+  ['for (int i = 0, j = 0; i < 3; i++, j += 2)（probe）', '', 'int t = 0; for (int i = 0, j = 0; i < 3; i++, j += 2) t = t + j; print(t);', 0, ['6'], '構文エラー「\';\' を期待しましたが \',\'」'],
+  ['int a = 1, b = 2;（従来どおり）', '', 'int a = 1, b = 2; print(a + b);', 0, ['3'], '同じ'],
+  ['式の文 a = 1, b = a + 1;・x = (a, b);・関数の引数のカンマは区切り', 'int add(int p, int q){ return p * 10 + q; }', 'int a; int b; int x; a = 1, b = a + 1; x = (a, b); print(x); print(add(a, b));', 0, ['2', '12'], '構文エラー'],
+]);
+{ // for の宣言はブロックスコープ（従来どおり）: for の後ろで i・j は未定義。
+  const r = run(cProg('', 'for (int i = 0, j = 0; i < 1; i++) {}\n  print(j);'), 'c');
+  ok(r.key === 'interp.err.undefName' && r.line === 3, `J-4 for (int i = 0, j = 0; …) の後ろの j は未定義（実 ${r.key || J(r.out)}・行 ${r.line}）`);
+}
+// J-5 `%=`（C の % は切り捨て剰余のまま・除数 0 は divZero）。是正前は「';' を期待しましたが '%='」。
+jVals('J-5', [
+  ['a = 7; a %= 2（probe）・-7 %= 2・7 %= -3・a[1] %= 4', '', 'int a = 7; a %= 2; print(a); int b = -7; b %= 2; print(b); int c = 7; c %= -3; print(c); int d[2] = {1, 10}; d[1] %= 4; print(d[1]);', 0,
+    ['1', '-1', '1', '2'], '構文エラー「\';\' を期待しましたが \'%=\'」'],
+]);
+{
+  const r = run(cProg('', '\n  int a = 7;\n  a %= 0;'), 'c');
+  ok(r.key === 'interp.err.divZero' && r.line === 4, `J-5 a %= 0 → interp.err.divZero（行 4）（実 ${r.key || J(r.out)}・行 ${r.line}）`);
+}
+// J-6 (27) 閉じていない `/*` は字句エラー interp.lex.blockComment（行＝`/*` の行・文言は A 章）。是正前は末尾まで黙ってコメント（setup()／loop() が消える）。
+{
+  const ERR = [
+    ['/* oops（probe・1 行目）', '/* oops\n' + cProg('', 'print(1);'), 1],
+    ['3 行目の /*（途中の改行を数える）', 'int a;\n\n/* oops\n' + cProg('', 'print(1);'), 3],
+    ['/*/ は閉じない', cProg('', 'print(1); /*/ print(2);'), 2],
+    ['末尾の * だけ', cProg('', 'print(1);') + '\n/* x *', 4],
+  ];
+  for (const [label, code, line] of ERR) {
+    const { ja, en } = runBoth(code, 'c');
+    const wantJa = msgJa('interp.lex.head') + msgJa('interp.lex.blockComment') + ` (行 ${line})`;
+    const wantEn = msgEn('interp.lex.head') + msgEn('interp.lex.blockComment') + ` (line ${line})`;
+    ok(ja.key === 'interp.lex.blockComment' && ja.line === line && ja.err === wantJa && en.err === wantEn && !JP_RE.test(en.err || ''),
+      `J-6 ${label} → ${ja.key || J(ja.out)}・行 ${ja.line}（期待 interp.lex.blockComment・行 ${line}・ja/en の文言・是正前はエラー無し）`);
+  }
+  checkGccErr('J-6 /* oops', '/* oops\n' + cProg('', 'print(1);'), /unterminated comment/);
+}
+jVals('J-6', [
+  ['閉じた /* … */（複数行・行の途中）と // は不変', '/* a\n b */ int z = 2; // c', 'print(z); /* x */ print(3); /*/ */ print(4);', 0, ['2', '3', '4'], '同じ'],
+]);
+// J-7 構文エラーのまま（gcc もエラー）: 整数の f 接尾辞・英数字の続く接尾辞。文言と行は是正前と同じ。
+{
+  const BAD = [['10f（整数の f）', 'print(10f);', "')' を期待しましたが 'f'", /invalid suffix "f"|invalid suffix ‘f’/], ['10ux', 'print(10ux);', "')' を期待しましたが 'ux'", /invalid suffix "ux"|invalid suffix ‘ux’/]];
+  for (const [label, body, want, re] of BAD) {
+    const r = run(cProg('', body), 'c');
+    ok(r.key === 'interp.syn.expected' && r.line === 2 && r.err === `構文エラー(C): ${want} (行 2)`, `J-7 ${label} → ${J(r.err)}（期待 構文エラー(C): ${want} (行 2)・是正前と同じ）`);
+    checkGccErr(`J-7 ${label}`, cProg('', body), re);
+  }
+}
+// J-8 C の真偽は不変（BK-15 F3・BK-16）: `!`・三項・for・do-while・while の条件の真偽は truthy（0・false・""・null が偽）。期待値は是正前の
+//   2 つの木（850bbb2〔BK4 の前〕・8ecdfd9〔BK4 fix〕）で採った出力（両者で同一）。`!""` が true・`"" ? 1 : 2` が 2 なのは本処理系の従来の
+//   C の文字列の真偽（実機 C の文字列リテラルはヌルでないポインタ＝真）。
+{
+  const prog = 'void setup() {\n  int a[2] = {0, 0};\n  print(!0); print(!1); print(!-1); print(!0.5); print(!""); print(!"a"); print(!true); print(!false); print(!a);\n' +
+    '  print(0 ? 1 : 2); print(-1 ? 1 : 2); print(0.5 ? 1 : 2); print("" ? 1 : 2); print("a" ? 1 : 2); print(false ? 1 : 2); print(a ? 1 : 2);\n' +
+    '  int n = 0; for (int k = 3; k; k--) n++; print(n);\n  int q = 0; for (; q - 2; q++) {} print(q);\n  int m = 0; do { m++; } while (m - 3); print(m);\n' +
+    '  float f = 0.0; int d = 0; do { d++; f = f + 0.25; } while (f - 1.0); print(d);\n  int e = 0; do { e++; } while (0); print(e);\n  int w = 5; while (w) w--; print(w);\n}\nvoid loop() {}';
+  const want = ['true', 'false', 'false', 'false', 'true', 'false', 'false', 'true', 'false', '2', '1', '1', '2', '1', '2', '1', '3', '2', '3', '4', '1', '0'];
+  const r = run(prog, 'c');
+  ok(!r.err && J(r.out) === J(want), `J-8 C の ! ・三項・for・do-while・while の真偽 → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ${J(want)}＝850bbb2・8ecdfd9 と同じ）`);
+}
+console.log(`\n  gcc との突き合わせ: ${GCC ? gccChecked + ' 件' : '0 件（gcc 不在）'}`);
 
 console.log(`\n  python3 との突き合わせ: ${PY3 ? py3Checked + ' 件' : '0 件（python3 不在）'}`);
 console.log(`[結果] pass=${pass} fail=${fail}`);
