@@ -76,7 +76,7 @@
 //      出荷 23 本の出力と runRace（F 章）・出荷 py の AST 指紋（wf_bj1_pysem E 章）は不変。wf_bj1_pysem の G-9 `range(1,5,None)` は rangeStepZero から
 //      rangeArg（python3 と同じ TypeError の種類）に改めた。
 //
-// BK5（C 定石・C だけ・py は無改変）— 是正前の木（8ecdfd9）で `--root <木>` を付けて回すと J 章（是正前と同じ値の行を除く）と A 章の BK5 新設の
+// BK5（C 定石・C だけ。py は層4 F6 の複合代入の左辺を 1 回だけ評価する是正だけ＝J-9）— 是正前の木（8ecdfd9）で `--root <木>` を付けて回すと J 章（是正前と同じ値の行を除く）と A 章の BK5 新設の
 //   1 本・本数・全種が赤になる（実測は決定ログ BK5 結果）。A 章: `int y = (int)x;`（キャストの受理で通るようになった）を是正前と同じ文言・行の
 //   別の本文に差し替え、lexer の blockComment を足した（lexer 5 → 6）。
 //   J) 本番経路の値を gcc の実測（定数・checkGcc で同じ本文を gcc でも走らせて突き合わせる。期待値は python3 ではなく実機 C の値）と照合する。
