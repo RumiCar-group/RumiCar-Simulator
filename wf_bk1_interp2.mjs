@@ -87,6 +87,9 @@
 //      J-9 BK5 層4 是正（0fbea4d の後退と端）: F1 `(int(x) + 1)` は括弧式（g++ と同じ・8ecdfd9 と同じ）・F2 char のキャストは文字コード・F3 隣の
 //      ブロックの同名の宣言は static を書き換えない・F4 case の値と配列の次元のカンマは構文エラー・三項の中のカンマは受ける・F6 複合代入と ++ は
 //      左辺の場所を 1 回だけ評価（C・py）・§9 の残る差（ブロックのスコープ・char の算術・(void) の値）の現在値。gcc 不在なら g++ の行も省く。
+//      層4 往復 2: F2 関数形式の int('7')・float('7')・int(' ')・bool('\0') の値（v10.2.0 の 7・7・0・true から 55・55・32・false）・F4 sizeof の
+//      型語の直後が ( なら式（sizeof(int(x)) は式・sizeof(int[3]) は是正前と同じ構文エラー）。J-10 F1 式の途中でファイルが終わる本文は interp.syn.unexpected（12 種×末尾 5 種と関数の中・
+//      8e49d4b は JS の TypeError）。
 //      C の整数除算は従来どおり非対応（`(int)7/2` は 3.5・§9）なので、gcc に渡す行に整数どうしの `/` を書かない。
 //
 // 使い方: node wf_bk1_interp2.mjs              … 検査
@@ -1188,6 +1191,15 @@ jVals9([
   ['F2 char の (int)・(float)・(long)・(unsigned char)・(int)(char)・(char)66.7', '', "char c = 'A'; print((int)c); char d = '7'; print((int)d); print((float)'A'); print((long)'z'); print((unsigned char)'B'); print((int)(char)'A'); print((char)66.7); print(d - '0');",
     ['65', '55', '65', '122', '66', '65', '66', '7'], 'NaN・7・NaN・NaN・NaN・NaN・66・7'],
   ['F2 int(c)・float(c)（関数形式・C++）', '', "char c = 'A'; print(int(c)); print(float(c) + 1);", ['65', '66'], 'NaN・NaN', true],
+  // 往復 2 F2: 数字・空白の 1 文字の関数形式は v10.2.0（e65643e）と 0fbea4d で Number("7")＝7・Number(" ")＝0（エラー無しで黙って値が変わる書き方＝BK-17 ②）。
+  ['F2 int(\'7\')・float(\'7\')・int(\' \')・bool(\'\\0\') ? 1 : 2・int(c) - 48・float(\' \') + 0.5（関数形式・C++）', '',
+    "print(int('7')); print(float('7')); print(int(' ')); print(bool('\\0') ? 1 : 2); char c = '7'; print(int(c) - 48); print(float(' ') + 0.5);",
+    ['55', '55', '32', '2', '7', '32.5'], '7・7・0・1・-41・0.5（v10.2.0〔e65643e〕も同じ）', true],
+  // 往復 2 F4: sizeof( の後ろの型語の列の直後が ( なら式（関数形式の型変換）・それ以外は従来どおり型名。sizeof の値は葉要素の数（AS4・§9）なので g++ とは
+  //   sizeof(int) との等しさで照合する。8ecdfd9 まで（v10.2.0 も）は「')' を期待しましたが '('」。
+  ['F4 sizeof(int(x))・sizeof(int(x) + 1)・sizeof(float(2) / 2) は式（関数形式の型変換・C++）', '',
+    'float x = 3.7; print(sizeof(int(x)) == sizeof(int) ? 1 : 0); print(sizeof(int(x) + 1) == sizeof(int) ? 1 : 0); print(sizeof(float(2) / 2) == sizeof(float) ? 1 : 0);',
+    ['1', '1', '1'], '構文エラー「\')\' を期待しましたが \'(\'」（8ecdfd9・v10.2.0 も同じ）', true],
   ['F3 { static int n = 0; n++; print(n); } { int n = 100; } を 3 回', 'int f(){ { static int n = 0; n++; print(n); } { int n = 100; } return 0; }', 'f(); f(); f();', ['1', '2', '3'], '1・101・101'],
   ['F3 { int n = 100; } { static int n = 0; … } を 3 回（逆の順）', 'int f(){ { int n = 100; } { static int n = 0; n++; print(n); } return 0; }', 'f(); f(); f();', ['1', '2', '3'], '同じ'],
   ['F4 1 ? 2, 3 : 4（三項の ? と : の間のカンマ演算子）・0 ? 1, 2 : 4・1 ? 0, 7 : 4', '', 'int x = 1 ? 2, 3 : 4; print(x); int p = 0 ? 1, 2 : 4; print(p); int q = 1 ? 0, 7 : 4; print(q);', ['3', '4', '7'], '構文エラー「\':\' を期待しましたが \',\'」'],
@@ -1212,6 +1224,14 @@ jVals9([
   const r = run(cProg('', "print((char)'A'); char c = 'B'; print((char)c); print((bool)'\\0'); print((bool)'0'); print((int)\"\");"), 'c');
   ok(!r.err && J(r.out) === J(['A', 'B', 'false', 'true', '0']), `J-9 F2 (char)'A'・(char)c・(bool)'\\0'・(bool)'0'・(int)"" → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ["A","B","false","true","0"]・0fbea4d は NaN・NaN・true・true・0）`);
 }
+{ // 往復 2 F2: 関数形式の bool('\0') は偽（print は "false"）・bool('0') は真（v10.2.0 と 0fbea4d は bool('\0') が true＝空でない文字列は真）。
+  //   F4: 型名の sizeof は従来どおり（sizeof(int)・sizeof(int*)・sizeof(unsigned long)・sizeof x は 1＝葉要素の数）。
+  const r = run(cProg('', "print(bool('\\0')); print(bool('0')); print(sizeof(int)); print(sizeof(int*)); print(sizeof(unsigned long)); float x = 1.5; print(sizeof x); print(sizeof(int) * 2);"), 'c');
+  ok(!r.err && J(r.out) === J(['false', 'true', '1', '1', '1', '1', '2']), `J-9 F2 bool('\\0')・bool('0')／F4 sizeof(型名)・sizeof x・sizeof(int) * 2 → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ["false","true","1","1","1","1","2"]・v10.2.0 は bool('\\0') が true）`);
+  // F4 の兄弟: sizeof(int[3]) は是正前（8ecdfd9・v10.2.0）と同じ構文エラー（式として読むと名前 int の添字になり黙って 1 を返す＝その経路を作らない）。
+  const t = run(cProg('', 'print(sizeof(int[3]));'), 'c');
+  ok(t.key === 'interp.syn.expected' && t.line === 2 && t.err === "構文エラー(C): ')' を期待しましたが '[' (行 2)", `J-9 F4 sizeof(int[3]) → ${J(t.err || t.out)}（期待 構文エラー(C): ')' を期待しましたが '[' (行 2)＝8ecdfd9 と同じ）`);
+}
 { // §9 の残る差（現在値を固定・gcc の値は別に確かめる）: C のブロック `{ }`・if の本体はスコープを作らない＝内側の同じ名前の宣言が外側を上書きする。
   //   char は 1 文字の文字列（`c + 1` は "A1"）。`(void)v + 1` は値をそのまま（gcc は void value not ignored）。
   const DIFF = [
@@ -1234,6 +1254,25 @@ jVals9([
   const r = run(pySrc, 'py');
   ok(!r.err && J(r.out) === J(['2 11 2 6 4']), `J-9 F6 py a[k()] += 10・d[k()] -= 1・a[-1] *= 2 → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ["2 11 2 6 4"]・0fbea4d は ["4 11 2 6 4"]）`);
   checkPy3('J-9 F6 py（python3 側）', pySrc, ['2 11 2 6 4']);
+}
+// J-10 BK5 層4 往復 2 F1: 式の途中でファイルが終わる C の本文は SourceError interp.syn.unexpected「予期しないトークン 'EOF'」（行＝末尾の行・ja/en）。
+//   8e49d4b はキャストの先読みが現在のトークンを確かめる前に peek(1) を読み、末尾より先（undefined）の .type で JS の TypeError「Cannot read properties
+//   of undefined (reading 'type')」（行番号も i18n キーも無い・main.js はそのまま表示）。8ecdfd9 は下の全行で同じ値（緑）・0fbea4d は `(int*` の 6 行だけ
+//   interp.syn.expected「')' を期待しましたが 'EOF'」（`)` で閉じるかを見ずにキャストと決めていた）。末尾に空白・改行・コメントがあっても同じ（行は末尾の行）。`case` は switch の中に書く（トップレベルの `case` は名前＝「';' を期待しましたが 'EOF'」で是正前と同じ）。
+{
+  const EOFS = ['int y =', 'x = 1 +', 'return', 'if (', 'print(', 'a[', 'switch (1) { case', 'sizeof', 'f(1,', '1 ?', '(int)(', '(int*'];
+  const TAILS = [['', 0], ['   ', 0], ['\n', 1], [' // c\n', 1], [' /* c */\n\n', 2]];
+  const rows = [];
+  for (const body of EOFS) {
+    for (const [tail, nl] of TAILS) rows.push([body + tail, 1 + nl]);
+    rows.push([`void setup() {\n  ${body}`, 2]);   // 関数の本体の中（行 2）
+  }
+  for (const [code, line] of rows) {
+    const { ja, en } = runBoth(code, 'c');
+    ok(ja.ctor === 'SourceError' && ja.key === 'interp.syn.unexpected' && ja.line === line && ja.err === `構文エラー(C): 予期しないトークン 'EOF' (行 ${line})` &&
+      en.ctor === 'SourceError' && en.key === ja.key && en.line === line && en.err === `Syntax error (C): unexpected token 'EOF' (line ${line})`,
+      `J-10 EOF ${J(code)} → ${ja.ctor}・${ja.key}・行 ${ja.line}・${J(ja.err)}（期待 SourceError・interp.syn.unexpected・行 ${line}・ja/en の文言・TypeError でない）`);
+  }
 }
 console.log(`\n  gcc との突き合わせ: ${GCC ? gccChecked + ' 件' : '0 件（gcc 不在）'}`);
 

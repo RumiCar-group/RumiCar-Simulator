@@ -24,7 +24,10 @@ function castKind(words, ptr) {
 export function parseC(src) {
   const toks = tokenize(src, 'c');
   let pos = 0;
-  const peek = (k = 0) => toks[pos + k];
+  // BK5 層4 往復 2 F1: 先読みは EOF で止める（末尾より先を読んでも最後の EOF のトークンを返す）。7165160 のキャストの先読みが現在のトークンの
+  //   確認より前に peek(1) を読み、式の途中でファイルが終わる本文（`int y =`・`x = 1 +`・`if (` ほか）が行番号も i18n キーも無い JS の TypeError
+  //   「Cannot read properties of undefined (reading 'type')」になっていた（8ecdfd9 は interp.syn.unexpected「予期しないトークン 'EOF'」＝wf_bk1_interp2 J-10）。
+  const peek = (k = 0) => toks[Math.min(pos + k, toks.length - 1)];
   const next = () => toks[pos++];
   const isEOF = () => peek().type === 'EOF';
 
@@ -290,6 +293,16 @@ export function parseC(src) {
   const additive = () => binL(multiplicative, ['+', '-']);
   const multiplicative = () => binL(unary, ['*', '/', '%']);
 
+  // BK5: 現在のトークンが `(` で、その後ろが型語の列（1 語以上）と `*` の列で、その直後が `)` か（キャスト `(int)x`）。読み進めない（先読みだけ）。
+  function typeParenAhead() {
+    if (!isPunc('(')) return false;
+    let ck = 1;
+    while (peek(ck).type === 'ID' && TYPES.includes(peek(ck).value)) ck++;
+    if (ck === 1) return false;
+    while (peek(ck).type === 'OP' && peek(ck).value === '*') ck++;
+    return peek(ck).type === 'PUNC' && peek(ck).value === ')';
+  }
+
   function unary() {
     // AS4: sizeof。`sizeof(式)` / `sizeof(型名)` / `sizeof 式` の3形を受ける。
     //   型名は要素1個ぶんとして畳む (この処理系は型を追跡しないため。意味論は evaluator の
@@ -297,9 +310,16 @@ export function parseC(src) {
     if (isKw('sizeof')) {
       next();
       if (isPunc('(')) {
+        // BK5 層4 往復 2 F4: 型語の列の直後が `(` なら関数形式の型変換で始まる式（`sizeof(int(x))`・`sizeof(int(x) + 1)`＝g++ と同じ）。
+        //   是正前（8ecdfd9 まで）は `(` の次が型語というだけで型名と決めて「')' を期待しましたが '('」だった。それ以外の型語で始まる中身は従来どおり
+        //   型名（`sizeof(int[3])` は是正前と同じ「')' を期待しましたが '['」＝式として読むと名前 int の添字になり黙って 1 を返すので、キャストの
+        //   typeParenAhead〔`)` で閉じるときだけ〕と同じ規則にはしない）。
+        let ck = 1;
+        while (peek(ck).type === 'ID' && TYPES.includes(peek(ck).value)) ck++;
+        const tn = ck > 1 && !(peek(ck).type === 'PUNC' && peek(ck).value === '(');
         next();
         let a;
-        if (isType()) { skipType(); a = { t: 'num', v: 1 }; }
+        if (tn) { skipType(); a = { t: 'num', v: 1 }; }
         else a = expr();
         eat('PUNC', ')');
         return { t: 'sizeof', a };
@@ -310,10 +330,8 @@ export function parseC(src) {
     //   その直後が `)` のときだけ＝型語でない `(x)` の括弧式は不変。被演算子は単項（`(int)-3.7`）。変換は castKind（evaluator の 'cast'）。
     //   是正前は `(int)x` が「';' を期待しましたが 'x'」。BK5 層4 F1: `)` で閉じるかを先読みする（`(int(x) + 1)`・`(float(7) / 2)`・`(bool(0))` は
     //   括弧の中が関数形式の型変換＝括弧式。0fbea4d は `(` の次が型語というだけでキャストと決めて「')' を期待しましたが '('」にしていた）。
-    let ck = 1;
-    while (peek(ck).type === 'ID' && TYPES.includes(peek(ck).value)) ck++;
-    while (peek(ck).type === 'OP' && peek(ck).value === '*') ck++;
-    if (isPunc('(') && ck > 1 && peek(ck).type === 'PUNC' && peek(ck).value === ')') {
+    //   BK5 層4 往復 2 F1: 先読みは現在のトークンが `(` のときだけ（typeParenAhead）・peek は EOF で止まる。
+    if (typeParenAhead()) {
       next();
       const words = [];
       while (isType()) words.push(next().value);

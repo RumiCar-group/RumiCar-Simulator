@@ -520,7 +520,8 @@ export class Interp {
           if (name === 'range') return this.host.range(...this.rangeArgs(args));
         }
         // BK5 層4 F2 の兄弟: C の関数形式の型変換 int(c)・float(c)・bool(c) も 1 文字の文字列（char）は文字コード（g++ と同じ 65。キャストの 'cast' と
-        //   同じ規則）。0fbea4d までは Number("A") の NaN。py は従来どおり（int("7") は 7）。
+        //   同じ規則）。0fbea4d まで（v10.2.0 も）は int・float が Number(文字)＝'A' は NaN・'7' は 7・' ' は 0、bool は空でない文字列を真＝'\0' も真
+        //   （HEAD は 65・55・32・bool('\0') は偽＝エラー無しで値が変わる書き方がある・BK-17 ②）。py は従来どおり（int("7") は 7）。
         if (this.lang !== 'py' && (name === 'int' || name === 'float' || name === 'bool') && typeof args[0] === 'string' && args[0].length === 1) {
           return this.host[name](args[0].charCodeAt(0), ...args.slice(1));
         }
