@@ -84,6 +84,9 @@
 //      double・bool・void・#define の型名・`(x)` の括弧式は不変）。J-3 数値接尾辞（u・l・ul・ll・f・F・L・16 進）。J-4 カンマ演算子と for の
 //      初期化部の複数の宣言子（s＝3・j＝6）。J-5 `%=`（切り捨て剰余・0 は divZero）。J-6 (27) 閉じていない `/*`（行＝`/*` の行）・閉じたコメント
 //      は不変。J-7 整数の f と英数字の続く接尾辞は是正前と同じ構文エラー。J-8 C の `!`・三項・for・do-while・while の真偽は不変（BK-15 F3）。
+//      J-9 BK5 層4 是正（0fbea4d の後退と端）: F1 `(int(x) + 1)` は括弧式（g++ と同じ・8ecdfd9 と同じ）・F2 char のキャストは文字コード・F3 隣の
+//      ブロックの同名の宣言は static を書き換えない・F4 case の値と配列の次元のカンマは構文エラー・三項の中のカンマは受ける・F6 複合代入と ++ は
+//      左辺の場所を 1 回だけ評価（C・py）・§9 の残る差（ブロックのスコープ・char の算術・(void) の値）の現在値。gcc 不在なら g++ の行も省く。
 //      C の整数除算は従来どおり非対応（`(int)7/2` は 3.5・§9）なので、gcc に渡す行に整数どうしの `/` を書かない。
 //
 // 使い方: node wf_bk1_interp2.mjs              … 検査
@@ -1027,23 +1030,25 @@ const GCC = (() => {
 let gccChecked = 0;
 const cProg = (decl, body, loopBody = '') => `${decl}\nvoid setup(){${body}}\nvoid loop(){${loopBody}}`;
 // gcc（任意）: 同じ本文をコンパイルして走らせ、出力の行（またはコンパイルエラーの最初の error 行）を返す。一時ディレクトリは自分で作って消す。
-function gccRun(prog, ticks) {
+// BK5 層4 F1: cxx＝真なら g++（-std=gnu++17・C++ の関数形式の型変換 `int(x)` を確かめる行だけ）。
+function gccRun(prog, ticks, cxx = false) {
   const dir = mkdtempSync(join(tmpdir(), 'wf_bk5_'));
   try {
     const exe = join(dir, 'a.out');
     const full = '#include <stdio.h>\n#include <stdint.h>\n#define print(x) printf("%g\\n", (double)(x))\n' + prog +
       `\nint main(void){ setup(); for (int t_ = 0; t_ < ${ticks}; t_++) loop(); return 0; }\n`;
-    const c = spawnSync('gcc', ['-std=c11', '-w', '-x', 'c', '-', '-o', exe], { input: full, encoding: 'utf8', timeout: 60000 });
+    const c = cxx ? spawnSync('g++', ['-std=gnu++17', '-w', '-x', 'c++', '-', '-o', exe], { input: full, encoding: 'utf8', timeout: 60000 })
+      : spawnSync('gcc', ['-std=c11', '-w', '-x', 'c', '-', '-o', exe], { input: full, encoding: 'utf8', timeout: 60000 });
     if (c.error || c.status !== 0) return { err: (c.error && c.error.message) || (c.stderr.split('\n').find((l) => /error/.test(l)) || c.stderr.trim()) };
     const x = spawnSync(exe, [], { encoding: 'utf8', timeout: 20000 });
     if (x.error || x.status !== 0) return { err: (x.error && x.error.message) || 'exit ' + x.status };
     return { out: x.stdout.replace(/\n$/, '').split('\n').filter((l, k, a) => !(a.length === 1 && l === '')) };
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
-function checkGcc(label, prog, ticks, want) {
+function checkGcc(label, prog, ticks, want, cxx = false) {
   if (!GCC) return;
-  const r = gccRun(prog, ticks); gccChecked++;
-  ok(!r.err && J(r.out) === J(want), `${label}: gcc の出力 ${r.err ? 'ERR ' + r.err : J(r.out)} ＝ 定数 ${J(want)}`);
+  const r = gccRun(prog, ticks, cxx); gccChecked++;
+  ok(!r.err && J(r.out) === J(want), `${label}: ${cxx ? 'g++' : 'gcc'} の出力 ${r.err ? 'ERR ' + r.err : J(r.out)} ＝ 定数 ${J(want)}`);
 }
 function checkGccErr(label, prog, re) {
   if (!GCC) return;
@@ -1086,10 +1091,14 @@ jVals('J-2', [
   ['(x) の括弧式・(int)x * 2・(int)(x * 2)・(unsigned int)0.5・(short)-0.5', '', 'float x = 3.7; print((x)); print((int)x * 2); print((int)(x * 2)); print((unsigned int)0.5); print((short)-0.5);', 0, ['3.7', '6', '7', '0', '0'], '構文エラー'],
   ['#define の型名のキャスト・(const int)・(uint8_t)', '#define T int', 'print((T)2.9); print((const int)-1.5); print((uint8_t)7.9);', 0, ['2', '-1', '7'], '構文エラー'],
 ]);
-{ // (bool) は C の真偽（true／false）・(void) は値をそのまま（文として捨てる定石）。bool の表示は本処理系の C の print の従来の表示（gcc に渡さない）。
-  const r = run(cProg('', 'print((bool)2); print((bool)0); print((boolean)0.5); int v = 4; (void)v; print((void)v + 1);'), 'c');
-  ok(!r.err && J(r.out) === J(['true', 'false', 'true', '5']), `J-2 (bool)・(boolean)・(void) → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ["true","false","true","5"]）`);
+{ // (bool) は C の真偽（true／false）。bool の表示は本処理系の C の print の従来の表示（gcc に渡さない）。
+  const r = run(cProg('', 'print((bool)2); print((bool)0); print((boolean)0.5);'), 'c');
+  ok(!r.err && J(r.out) === J(['true', 'false', 'true']), `J-2 (bool)・(boolean) → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ["true","false","true"]）`);
 }
+// (void) は文として値を捨てる定石（BK5 層4 F5: 0fbea4d は gcc がエラーにする `print((void)v + 1)` の 5 を期待値にしていた＝gcc で裏の取れる書き方に差し替え）。
+jVals('J-2', [
+  ['(void)v;・(void)(v = v + 1);（文として捨てる）', '', 'int v = 4; (void)v; (void)(v = v + 1); print(v);', 0, ['5'], '構文エラー'],
+]);
 // J-3 数値接尾辞（読み飛ばす）。是正前は「';' を期待しましたが 'f'」「…が 'UL'」の構文エラー。整数の f と英数字の続く接尾辞は従来どおり構文エラー（gcc も invalid suffix）。
 jVals('J-3', [
   ['1.0f（probe）・10UL（probe）', '', 'float x = 1.0f; print(x); unsigned long y = 10UL; print(y);', 0, ['1', '10'], '構文エラー'],
@@ -1156,6 +1165,75 @@ jVals('J-6', [
   const want = ['true', 'false', 'false', 'false', 'true', 'false', 'false', 'true', 'false', '2', '1', '1', '2', '1', '2', '1', '3', '2', '3', '4', '1', '0'];
   const r = run(prog, 'c');
   ok(!r.err && J(r.out) === J(want), `J-8 C の ! ・三項・for・do-while・while の真偽 → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ${J(want)}＝850bbb2・8ecdfd9 と同じ）`);
+}
+// J-9 BK5 層4 是正（0fbea4d の後退と端）。期待値は gcc／g++ の実測（checkGcc）と python3（checkPy3）。最後の列は 0fbea4d（BK5 の初回）の結果。
+//   F1 括弧の中が関数形式の型変換（C++ の `int(x)`）で始まる式は括弧式（`)` で閉じるかを先読みしてからキャストと決める）＝8ecdfd9 と同じ値。
+//   F2 char（この処理系では 1 文字の文字列）のキャストは文字コード（gcc と同じ）。`(char)'A'` は文字のまま（print は "A"）。
+//   F3 隣のブロックの同じ名前の static でない宣言は static の記憶域を書き換えない（ブロックがスコープを作らないこと自体は §9 の残る差）。
+//   F4 case の値・配列の次元はカンマ演算子を受けない（gcc と同じく構文エラー＝8ecdfd9 と同じ）・三項の `?` と `:` の間は受ける（gcc と同じ 3）。
+//   F6 複合代入と ++／-- は左辺の場所を 1 回だけ評価する（C は gcc・py は python3 と同じ）。
+function jVals9(rows) {
+  for (const [label, decl, body, want, pre, cxx] of rows) {
+    const prog = cProg(decl, body);
+    const r = run(prog, 'c');
+    ok(!r.err && J(r.out) === J(want), `J-9 ${label} → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ${J(want)}・0fbea4d ${pre}）`);
+    checkGcc(`J-9 ${label}`, prog, 0, want, !!cxx);
+  }
+}
+jVals9([
+  ['F1 (int(x) + 1)・(float(7) / 2)・(bool(0))（関数形式の型変換・C++）', '', 'float x = 3.7; int y = (int(x) + 1); print(y); print((float(7) / 2)); int b = (bool(0)); print(b ? 1 : 2);', ['4', '3.5', '2'],
+    '構文エラー「\')\' を期待しましたが \'(\'」（8ecdfd9 は 4・3.5・2）', true],
+  ['F1 (int)(x)・((int)x)・(int*)a の添字・(unsigned)(5.5)・(x) + 1・(g)(3)', 'int g(int v){ return v * 2; }', 'float x = -3.7; print((int)(x)); print(((int)x)); int a[2] = {3, 4}; print(((int*)a)[1]); print((unsigned)(5.5)); int w = 4; print((w) + 1); print((g)(3));',
+    ['-3', '-3', '4', '5', '5', '6'], '同じ'],
+  ['F2 char の (int)・(float)・(long)・(unsigned char)・(int)(char)・(char)66.7', '', "char c = 'A'; print((int)c); char d = '7'; print((int)d); print((float)'A'); print((long)'z'); print((unsigned char)'B'); print((int)(char)'A'); print((char)66.7); print(d - '0');",
+    ['65', '55', '65', '122', '66', '65', '66', '7'], 'NaN・7・NaN・NaN・NaN・NaN・66・7'],
+  ['F2 int(c)・float(c)（関数形式・C++）', '', "char c = 'A'; print(int(c)); print(float(c) + 1);", ['65', '66'], 'NaN・NaN', true],
+  ['F3 { static int n = 0; n++; print(n); } { int n = 100; } を 3 回', 'int f(){ { static int n = 0; n++; print(n); } { int n = 100; } return 0; }', 'f(); f(); f();', ['1', '2', '3'], '1・101・101'],
+  ['F3 { int n = 100; } { static int n = 0; … } を 3 回（逆の順）', 'int f(){ { int n = 100; } { static int n = 0; n++; print(n); } return 0; }', 'f(); f(); f();', ['1', '2', '3'], '同じ'],
+  ['F4 1 ? 2, 3 : 4（三項の ? と : の間のカンマ演算子）・0 ? 1, 2 : 4・1 ? 0, 7 : 4', '', 'int x = 1 ? 2, 3 : 4; print(x); int p = 0 ? 1, 2 : 4; print(p); int q = 1 ? 0, 7 : 4; print(q);', ['3', '4', '7'], '構文エラー「\':\' を期待しましたが \',\'」'],
+  ['F4 0 ? 1 : a = 5（: の後ろは代入式＝C++・従来どおり）', '', 'int a = 0; int y = 0 ? 1 : a = 5; print(y); print(a);', ['5', '5'], '同じ', true],
+  ['F6 a[i++] %= 4・a[i++] += 4・a[i++]++・++a[i++]', '', 'int a[3] = {7, 7, 7}; int i = 0; a[i++] %= 4; print(i); print(a[0]); print(a[1]); int b[3] = {7, 7, 7}; int j = 0; b[j++] += 4; print(j); print(b[0]); print(b[1]); int c[3] = {7, 7, 7}; int k = 0; c[k++]++; ++c[k++]; print(k); print(c[0]); print(c[1]);',
+    ['1', '3', '7', '1', '11', '7', '2', '8', '8'], '2・7・3・2・7・11・4・7・8'],
+]);
+{ // F4: case の値と配列の次元のカンマは構文エラー（gcc も）。0fbea4d は `case 1, 2:` が 2 だけに一致・`int a[2, 3];` が大きさ 3。8ecdfd9 と同じ文言・行。
+  const BAD = [
+    ['case 1, 2:', 'switch (2) { case 1, 2: print(9); break; default: print(0); }', "':' を期待しましたが ','", /expected ‘:’ or ‘\.\.\.’ before ‘,’ token|expected ':' or '\.\.\.' before ',' token/, '9'],
+    ['int a[2, 3];', 'int a[2, 3]; print(sizeof(a));', "']' を期待しましたが ','", /expected ‘\]’ before ‘,’ token|expected '\]' before ',' token/, '3'],
+  ];
+  for (const [label, body, want, re, pre] of BAD) {
+    const r = run(cProg('', body), 'c');
+    ok(r.key === 'interp.syn.expected' && r.line === 2 && r.err === `構文エラー(C): ${want} (行 2)`, `J-9 F4 ${label} → ${J(r.err || r.out)}（期待 構文エラー(C): ${want} (行 2)・0fbea4d は ${pre}）`);
+    checkGccErr(`J-9 F4 ${label}`, cProg('', body), re);
+  }
+  const p = run('int f(int a[2, 3]){ return 0; }\nvoid setup(){}\nvoid loop(){}', 'c');
+  ok(p.key === 'interp.syn.expected' && p.line === 1, `J-9 F4 配列の仮引数 int a[2, 3] → ${p.key || J(p.out)}・行 ${p.line}（期待 interp.syn.expected・行 1）`);
+}
+{ // F2: (char) は文字のまま（print は "A"＝Arduino の Serial.print((char)'A')）・(bool)'\0' は偽・(int)"" は 0（gcc に渡さない＝表示の違い・ポインタ）。
+  const r = run(cProg('', "print((char)'A'); char c = 'B'; print((char)c); print((bool)'\\0'); print((bool)'0'); print((int)\"\");"), 'c');
+  ok(!r.err && J(r.out) === J(['A', 'B', 'false', 'true', '0']), `J-9 F2 (char)'A'・(char)c・(bool)'\\0'・(bool)'0'・(int)"" → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ["A","B","false","true","0"]・0fbea4d は NaN・NaN・true・true・0）`);
+}
+{ // §9 の残る差（現在値を固定・gcc の値は別に確かめる）: C のブロック `{ }`・if の本体はスコープを作らない＝内側の同じ名前の宣言が外側を上書きする。
+  //   char は 1 文字の文字列（`c + 1` は "A1"）。`(void)v + 1` は値をそのまま（gcc は void value not ignored）。
+  const DIFF = [
+    ['ブロックの内側の int n = 100 が外側の n を上書き', '', 'int n = 1; { int n = 100; } print(n);', ['100'], ['1']],
+    ['if の本体の int n が関数の static n を隠したまま残る', 'int f(){ static int n = 0; n++; if (1) { int n = 100; } return n; }', 'f(); print(f());', ['100'], ['2']],
+    ['char c = \'A\'; c + 1', '', "char c = 'A'; print(c + 1);", ['A1'], ['66']],
+  ];
+  for (const [label, decl, body, want, gccWant] of DIFF) {
+    const prog = cProg(decl, body);
+    const r = run(prog, 'c');
+    ok(!r.err && J(r.out) === J(want), `J-9 残る差 ${label} → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ${J(want)}＝§9 の残る差・gcc は ${J(gccWant)}）`);
+    checkGcc(`J-9 残る差 ${label}（gcc 側）`, prog, 0, gccWant);
+  }
+  const v = run(cProg('', 'int v = 4; print((void)v + 1);'), 'c');
+  ok(!v.err && J(v.out) === J(['5']), `J-9 残る差 (void)v + 1 → ${v.err ? 'ERR ' + v.err : J(v.out)}（期待 ["5"]＝§9 の残る差・gcc はエラー）`);
+  checkGccErr('J-9 残る差 (void)v + 1（gcc 側）', cProg('', 'int v = 4; print((void)v + 1);'), /void value not ignored/);
+}
+{ // F6 の py: 左辺の添字の式は 1 回（python3 と同じ）。0fbea4d までは k() を 2 回呼んだ（n＝2）。
+  const pySrc = 'a = [1, 2, 3]\nd = {0: 5}\nn = 0\ndef k():\n    global n\n    n += 1\n    return 0\na[k()] += 10\nd[k()] -= 1\na[-1] *= 2\nprint(n, a[0], a[1], a[2], d[0])';
+  const r = run(pySrc, 'py');
+  ok(!r.err && J(r.out) === J(['2 11 2 6 4']), `J-9 F6 py a[k()] += 10・d[k()] -= 1・a[-1] *= 2 → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ["2 11 2 6 4"]・0fbea4d は ["4 11 2 6 4"]）`);
+  checkPy3('J-9 F6 py（python3 側）', pySrc, ['2 11 2 6 4']);
 }
 console.log(`\n  gcc との突き合わせ: ${GCC ? gccChecked + ' 件' : '0 件（gcc 不在）'}`);
 

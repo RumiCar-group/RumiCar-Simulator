@@ -164,7 +164,12 @@ export class Interp {
           Object.defineProperty(scope.vars, node.name, { get: () => cell.v, set: (x) => { cell.v = x; }, enumerable: true, configurable: true });
           return;
         }
-        const v = node.init ? this.evalExpr(node.init, scope) : 0; scope.vars[node.name] = v; return;
+        const v = node.init ? this.evalExpr(node.init, scope) : 0;
+        // BK5 層4 F3: C のブロック `{ }` はスコープを作らない（従来からの制限・§9）ので、隣のブロックの static と同じ名前の static でない宣言が
+        //   同じスコープの名前に来る。その名前が static の記憶域に結んだアクセサなら外してから置く＝static の値を書き換えない（`{ static int n = 0;
+        //   n++; } { int n = 100; }` を 3 回呼んで 1,2,3＝gcc と同じ。0fbea4d は setter を通って 1,101,101）。static を 1 つも宣言していなければ素通り。
+        if (this.statics.size) { const pd = Object.getOwnPropertyDescriptor(scope.vars, node.name); if (pd && pd.get) delete scope.vars[node.name]; }
+        scope.vars[node.name] = v; return;
       }
       case 'exprstmt': this.evalExpr(node.expr, scope); return;
       case 'massign': return this.execMassign(node, scope);
@@ -264,11 +269,12 @@ export class Interp {
     const { targets, values, op } = node;
     if (op !== '=') {
       // 複合代入 (単一ターゲット)
-      const tgt = targets[0];
-      const cur = this.evalExpr(tgt, scope);
+      // BK5 層4 F6: 左辺の場所は 1 回だけ評価する（lref・python3 と同じく `a[k()] += 1` の k は 1 回。0fbea4d までは 2 回）。
+      const ref = this.lref(targets[0], scope);
+      const cur = ref.get();
       const rhs = this.evalExpr(values[0], scope);
       const v = applyBin(op.slice(0, -1), cur, rhs, this.curLine, this.lang);
-      this.assignTo(tgt, v, scope); return;
+      ref.set(v); return;
     }
     let vals;
     if (targets.length === values.length) vals = values.map(v => this.evalExpr(v, scope));
@@ -289,6 +295,23 @@ export class Interp {
     else if (val && typeof val === 'object') seq = Object.keys(val);
     if (!seq || seq.length !== n) throw this.rt('unpack', { n });
     return seq;
+  }
+
+  // BK5 層4 F6: 読み書きする左辺の場所（複合代入・`++`／`--`）。配列と添字・メンバの持ち主をここで 1 回だけ評価し、get／set はその場所を
+  //   読み書きする。読む値と書き方は evalExpr／assignTo の各分岐と同じ（index の None・pyIndex の負の添字・member の null は undefined）。
+  //   名前（var）とそれ以外（列の代入先など）は従来どおり evalExpr／assignTo（評価する部分式が無い・badAssign）。
+  lref(tgt, scope) {
+    if (tgt.t === 'index') {
+      const o = this.evalExpr(tgt.obj, scope);
+      if (o === null) throw this.rt('noneIndex');
+      const k = this.pyIndex(o, this.evalExpr(tgt.idx, scope));
+      return { get: () => o[k], set: (v) => { o[k] = v; } };
+    }
+    if (tgt.t === 'member') {
+      const o = this.evalExpr(tgt.obj, scope);
+      return { get: () => (o == null ? undefined : o[tgt.name]), set: (v) => { o[tgt.name] = v; } };
+    }
+    return { get: () => this.evalExpr(tgt, scope), set: (v) => this.assignTo(tgt, v, scope) };
   }
 
   assignTo(tgt, val, scope) {
@@ -411,22 +434,31 @@ export class Interp {
       case 'seq': { let v; for (const e of node.items) v = this.evalExpr(e, scope); return v; }
       // BK5: C のキャスト（parser_c の castKind）。'int'＝0 方向への切り捨て（`(int)-3.7` は -3・-0 は 0）・'float'＝数・'bool'＝C の真偽・'none'＝そのまま。
       //   型の幅は持たない（`(uint8_t)300` は 300・`(unsigned long)-1` は -1・`(char)65` は数の 65＝§9 の残る差）。
+      // BK5 層4 F2: この処理系の C の char は 1 文字の文字列（`char c = 'A';` の c は "A"）。'int'・'float'・'bool' は 1 文字の文字列を文字コードに
+      //   してから変換する（`(int)c` は 65・`(int)'7'` は 55・`(bool)'\0'` は false＝gcc と同じ。0fbea4d は Number("A") の NaN・Number("7") の 7）。
+      //   'char' は文字（1 文字の文字列）をそのまま・数は 'int' と同じ（`(char)'A'` は "A"＝print は Arduino の Serial.print((char)…) と同じ "A"・
+      //   `(char)65` は数の 65＝§9 の残る差）。2 文字以上の文字列（C ではポインタ）は従来どおり Number。
       case 'cast': {
-        const a = this.evalExpr(node.a, scope);
-        if (node.to === 'int') { const r = Math.trunc(Number(a)); return r === 0 ? 0 : r; }
+        let a = this.evalExpr(node.a, scope);
+        if (node.to === 'char' && typeof a === 'string' && a.length === 1) return a;
+        if (node.to === 'none') return a;
+        if (typeof a === 'string' && a.length === 1) a = a.charCodeAt(0);
+        if (node.to === 'int' || node.to === 'char') { const r = Math.trunc(Number(a)); return r === 0 ? 0 : r; }
         if (node.to === 'float') return Number(a);
         if (node.to === 'bool') return truthy(a);
         return a;
       }
       case 'ternary': return this.tr(this.evalExpr(node.cond, scope)) ? this.evalExpr(node.a, scope) : this.evalExpr(node.b, scope);
+      // BK5 層4 F6: 複合代入（`+=`・`%=` ほか）と `++`／`--` は左辺の場所（配列と添字・メンバの持ち主）を 1 回だけ評価する（lref）。0fbea4d までは
+      //   読むときと書くときで 2 回評価し、`a[i++] %= 4` が a[0] を読んで a[1] に書き i が 2 進んだ（gcc は i=1・a[0]=3）。`=` は従来どおり。
       case 'assignexpr': {
-        let v;
-        if (node.op === '=') v = this.evalExpr(node.value, scope);
-        else { const cur = this.evalExpr(node.target, scope); v = applyBin(node.op.slice(0, -1), cur, this.evalExpr(node.value, scope), this.curLine, this.lang); }
-        this.assignTo(node.target, v, scope); return v;
+        if (node.op === '=') { const v = this.evalExpr(node.value, scope); this.assignTo(node.target, v, scope); return v; }
+        const ref = this.lref(node.target, scope);
+        const v = applyBin(node.op.slice(0, -1), ref.get(), this.evalExpr(node.value, scope), this.curLine, this.lang);
+        ref.set(v); return v;
       }
-      case 'preincr': { const cur = this.evalExpr(node.a, scope); const v = node.op === '++' ? cur + 1 : cur - 1; this.assignTo(node.a, v, scope); return v; }
-      case 'postincr': { const cur = this.evalExpr(node.a, scope); const v = node.op === '++' ? cur + 1 : cur - 1; this.assignTo(node.a, v, scope); return cur; }
+      case 'preincr': { const ref = this.lref(node.a, scope); const cur = ref.get(); const v = node.op === '++' ? cur + 1 : cur - 1; ref.set(v); return v; }
+      case 'postincr': { const ref = this.lref(node.a, scope); const cur = ref.get(); const v = node.op === '++' ? cur + 1 : cur - 1; ref.set(v); return cur; }
       case 'member': { const o = this.evalExpr(node.obj, scope); return o == null ? undefined : o[node.name]; }
       case 'index': {
         const o = this.evalExpr(node.obj, scope);
@@ -486,6 +518,11 @@ export class Interp {
           if (name === 'str') return args.length ? pyStr(args[0]) : '';
           if (name === 'bool') return args.length ? pyTruthy(args[0]) : false;   // BK4 (4): bool([]) は False（是正前は True）
           if (name === 'range') return this.host.range(...this.rangeArgs(args));
+        }
+        // BK5 層4 F2 の兄弟: C の関数形式の型変換 int(c)・float(c)・bool(c) も 1 文字の文字列（char）は文字コード（g++ と同じ 65。キャストの 'cast' と
+        //   同じ規則）。0fbea4d までは Number("A") の NaN。py は従来どおり（int("7") は 7）。
+        if (this.lang !== 'py' && (name === 'int' || name === 'float' || name === 'bool') && typeof args[0] === 'string' && args[0].length === 1) {
+          return this.host[name](args[0].charCodeAt(0), ...args.slice(1));
         }
         return this.host[name](...args);
       }

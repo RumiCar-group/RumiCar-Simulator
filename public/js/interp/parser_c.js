@@ -9,13 +9,15 @@ import { tokenize, SourceError } from './lexer.js';
 const TYPES = ['int', 'float', 'double', 'void', 'bool', 'char', 'long', 'short', 'unsigned', 'auto', 'byte', 'uint8_t', 'uint16_t', 'int16_t',
   'const', 'static', 'volatile', 'signed', 'boolean', 'size_t', 'uint32_t', 'int32_t', 'int8_t'];
 // BK5: キャスト `(型名)式` の変換の種類（evaluator の 'cast'）。float／double を含めば 'float'（数にする）・bool／boolean は 'bool'（C の真偽）・
-//   void／auto・ポインタ（`*` を含む）は 'none'（値をそのまま）・それ以外の整数型（int・long・short・unsigned・signed・char・byte・size_t・
-//   uintN_t・intN_t・修飾子だけ）は 'int'（0 方向への切り捨て）。
+//   void／auto・ポインタ（`*` を含む）は 'none'（値をそのまま）・unsigned の付かない char は 'char'（この処理系の char は 1 文字の文字列＝文字は
+//   そのまま・数は 'int' と同じ）・それ以外の整数型（int・long・short・unsigned・signed・unsigned char・byte・size_t・uintN_t・intN_t・修飾子だけ）は
+//   'int'（0 方向への切り捨て）。BK5 層4 F2: 'int'／'float'／'bool' は 1 文字の文字列（char の値）を文字コードにしてから変換する（evaluator）。
 function castKind(words, ptr) {
   if (ptr) return 'none';
   if (words.includes('float') || words.includes('double')) return 'float';
   if (words.includes('bool') || words.includes('boolean')) return 'bool';
   if (words.includes('void') || words.includes('auto')) return 'none';
+  if (words.includes('char') && !words.includes('unsigned')) return 'char';
   return 'int';
 }
 
@@ -80,7 +82,8 @@ export function parseC(src) {
         if (peek().type === 'ID') params.push(next().value);
         // AS4: 配列仮引数 `int a[]` / `int a[N]`。次元は評価せず読み飛ばす＝実引数は JS 配列が
         //   そのまま参照で渡る (C のポインタ減衰 `int *a` と同値。既存の `int *a` 経路と結果一致)。
-        while (isPunc('[')) { next(); if (!isPunc(']')) expr(); eat('PUNC', ']'); }
+        //   BK5 層4 F4: 次元は assign（カンマ演算子を受けない＝`int a[2, 3]` は gcc と同じく構文エラー・是正前と同じ）。
+        while (isPunc('[')) { next(); if (!isPunc(']')) assign(); eat('PUNC', ']'); }
       } while (isPunc(',') && next());
     }
     eat('PUNC', ')');
@@ -127,13 +130,14 @@ export function parseC(src) {
 
   // 1 個の宣言子: 名前 + 任意の配列次元 [..] + 任意の初期化子。
   // 例 int a;  int a[3];  int a[] = {1,2,3};  int a[2][2] = {{1,2},{3,4}};
+  // BK5 層4 F4: 次元は assign（カンマ演算子を受けない＝`int a[2, 3];` は gcc と同じく構文エラー・是正前と同じ）。
   function declarator() {
     const name = eat('ID').value;
     const dims = [];
     while (isPunc('[')) {
       next();
       let size = null;
-      if (!isPunc(']')) size = expr();
+      if (!isPunc(']')) size = assign();
       eat('PUNC', ']');
       dims.push(size);
     }
@@ -193,13 +197,14 @@ export function parseC(src) {
   }
 
   // switch(x){ case k: ...; break; ... default: ... }。case のフォールスルーは評価器が担う。
+  // BK5 層4 F4: case の値は assign（カンマ演算子を受けない＝`case 1, 2:` は gcc と同じく構文エラー・是正前と同じ）。
   function switchStmt() {
     eat('ID', 'switch'); eat('PUNC', '('); const disc = expr(); eat('PUNC', ')');
     eat('PUNC', '{');
     const cases = [];
     while (!isPunc('}') && !isEOF()) {
       let test = null;
-      if (isKw('case')) { next(); test = expr(); eat('PUNC', ':'); }
+      if (isKw('case')) { next(); test = assign(); eat('PUNC', ':'); }
       else if (isKw('default')) { next(); eat('PUNC', ':'); }
       else err('caseDefault', { got: peek().value ?? peek().type });
       const body = [];
@@ -237,7 +242,9 @@ export function parseC(src) {
 
   // ===== 式 =====
   // BK5: カンマ演算子（C の式の最も低い優先順位）。`a, b` は左から評価して右の値（'seq'）。カンマ 1 個も無ければ是正前と同じ節（assign）。
-  //   関数の引数・初期化子（`int a = 1, b = 2;`・`{1, 2}`）・三項の枝は assign を直接読む＝そこでのカンマは従来どおり区切り。
+  //   関数の引数・初期化子（`int a = 1, b = 2;`・`{1, 2}`）は assign を直接読む＝そこでのカンマは従来どおり区切り。BK5 層4 F4: case の値・
+  //   配列の次元・三項の `:` の後ろも assign（`case 1, 2:`・`int a[2, 3];` は gcc と同じく構文エラー＝是正前と同じ）。三項の `?` と `:` の間は
+  //   expr（C の文法どおりカンマ演算子を受ける＝`1 ? 2, 3 : 4` は 3・gcc と同じ。是正前は構文エラー「':' を期待しましたが ','」）。
   //   是正前は式の位置のカンマが構文エラー（for の更新部 `i++, j += 2`・文 `a = 1, b = 2;`）。
   function expr() {
     const first = assign();
@@ -260,7 +267,7 @@ export function parseC(src) {
 
   function ternary() {
     let c = logicOr();
-    if (isOp('?')) { next(); const a = assign(); eat('PUNC', ':'); const b = assign(); return { t: 'ternary', cond: c, a, b }; }
+    if (isOp('?')) { next(); const a = expr(); eat('PUNC', ':'); const b = assign(); return { t: 'ternary', cond: c, a, b }; }
     return c;
   }
 
@@ -299,9 +306,14 @@ export function parseC(src) {
       }
       return { t: 'sizeof', a: unary() };
     }
-    // BK5: キャスト `(型名)式`（`(int)x`・`(unsigned long)t`・`(float)7 / 2`＝キャストが先・`(int*)p`）。`(` の次が型語のときだけ＝型語でない
-    //   `(x)` の括弧式は不変。被演算子は単項（`(int)-3.7`）。変換は castKind（evaluator の 'cast'）。是正前は `(int)x` が「';' を期待しましたが 'x'」。
-    if (isPunc('(') && peek(1).type === 'ID' && TYPES.includes(peek(1).value)) {
+    // BK5: キャスト `(型名)式`（`(int)x`・`(unsigned long)t`・`(float)7 / 2`＝キャストが先・`(int*)p`）。`(` の後ろが型語の列（と `*`）で、
+    //   その直後が `)` のときだけ＝型語でない `(x)` の括弧式は不変。被演算子は単項（`(int)-3.7`）。変換は castKind（evaluator の 'cast'）。
+    //   是正前は `(int)x` が「';' を期待しましたが 'x'」。BK5 層4 F1: `)` で閉じるかを先読みする（`(int(x) + 1)`・`(float(7) / 2)`・`(bool(0))` は
+    //   括弧の中が関数形式の型変換＝括弧式。0fbea4d は `(` の次が型語というだけでキャストと決めて「')' を期待しましたが '('」にしていた）。
+    let ck = 1;
+    while (peek(ck).type === 'ID' && TYPES.includes(peek(ck).value)) ck++;
+    while (peek(ck).type === 'OP' && peek(ck).value === '*') ck++;
+    if (isPunc('(') && ck > 1 && peek(ck).type === 'PUNC' && peek(ck).value === ')') {
       next();
       const words = [];
       while (isType()) words.push(next().value);
