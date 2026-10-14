@@ -61,18 +61,12 @@ export class Interp {
   }
 
   resetSteps() { this.steps = 0; this.timeRead = false; }
-  // BK4 (4)・層4 F1: 条件の真偽（if・while・do-while・C の for・三項の条件・not の被演算子）。基準 (4)「if／while の真偽判定は不変」を文字どおり
-  //   守る＝真偽は 850bbb2 と同じ truthy（空の list／tuple／dict は真のまま・python3 は偽＝残る差・BK-11 ①）。py の and／or は値（`[] or 0` は 0）を
-  //   pyTruthy で決めるが、条件の中に直接書いた and／or（`if q and q[0] == 1:`・`while q and q[0] > 0:`）は値を作らず被演算子ごとに cond で
-  //   判定する＝850bbb2 の truthy(a && b)／truthy(a || b) と同じ結果・同じ評価順（`[] and …` の値 [] を truthy で真と読み違えて、空の q で
-  //   本体を走らせない）。C は従来どおり truthy(evalExpr)。
-  cond(node, scope) {
-    if (this.lang === 'py' && node.t === 'bin') {
-      if (node.op === '&&') return this.cond(node.a, scope) && this.cond(node.b, scope);
-      if (node.op === '||') return this.cond(node.a, scope) || this.cond(node.b, scope);
-    }
-    return truthy(this.evalExpr(node, scope));
-  }
+  // BK4 (4)（H1＝A・BK-14）: 真偽の判定を 1 つの関数にする（if・elif・while・do-while・C の for・not・三項・and・or・py の bool()）。py は
+  //   python3 と同じく空の list／tuple／dict も偽（pyTruthy）。条件の真偽と値の真偽が同じ規則なので、and／or が返した値を変数や関数の戻り値を
+  //   経由して if に渡しても、条件に直接書いたときと同じ分岐になる（`def f(q): return q and q[0]` の空の q で `if f(q):` は本体を飛ばす）。
+  //   是正前（850bbb2）は全部 truthy＝空の list／dict が真（`if []:` が本体を走らせ・`while q:` が空になっても回り続けた）。空の容器以外の真偽は
+  //   是正前と同じ。C は従来どおり truthy。
+  tr(v) { return this.lang === 'py' ? pyTruthy(v) : truthy(v); }
   tick() { if (++this.steps > SIM.maxStepsPerTick) throw new StepLimit(this.curLine, this.timeRead); }
 
   has(name) { return !!this.funcs[name]; }
@@ -168,12 +162,12 @@ export class Interp {
       case 'break': throw new BreakSignal(this.curLine);
       case 'continue': throw new ContinueSignal(this.curLine);
       case 'if': {
-        if (this.cond(node.cond, scope)) this.execBlock(node.then, scope);
+        if (this.tr(this.evalExpr(node.cond, scope))) this.execBlock(node.then, scope);
         else if (node.els) this.execBlock(node.els, scope);
         return;
       }
       case 'while': {
-        while (this.cond(node.cond, scope)) {
+        while (this.tr(this.evalExpr(node.cond, scope))) {
           this.tick();
           try { this.execBlock(node.body, scope); }
           catch (e) { if (e instanceof BreakSignal) break; if (e instanceof ContinueSignal) continue; throw e; }
@@ -185,7 +179,7 @@ export class Interp {
           this.tick();
           try { this.execBlock(node.body, scope); }
           catch (e) { if (e instanceof BreakSignal) break; if (e instanceof ContinueSignal) continue; throw e; }
-        } while (this.cond(node.cond, scope));
+        } while (this.tr(this.evalExpr(node.cond, scope)));
         return;
       }
       case 'switch': {
@@ -206,7 +200,7 @@ export class Interp {
       case 'for': {
         const fs = { vars: Object.create(null), parent: scope };
         if (node.init) this.execStmt(node.init, fs);
-        while (node.cond ? this.cond(node.cond, fs) : true) {
+        while (node.cond ? this.tr(this.evalExpr(node.cond, fs)) : true) {
           this.tick();
           try { this.execBlock(node.body, fs); }
           catch (e) { if (e instanceof BreakSignal) break; if (e instanceof ContinueSignal) {} else throw e; }
@@ -374,16 +368,11 @@ export class Interp {
       }
       case 'bin': {
         const op = node.op;
-        // BK4 (4): py の and／or は被演算子の値を返し、被演算子の真偽は pyTruthy（python3 と同じく空の list／tuple／dict も偽）＝`0 and 1` は 0・
-        //   `5 and None` は None・`[] or 0` は 0・`"" or "x"` は x。是正前は and が偽のとき false・真偽は truthy（`[] or 0` は []）。
-        //   ここは値の文脈（代入・引数・print など）。条件の中に直接書いた and／or は cond が 850bbb2 と同じ truthy で判定する（層4 F1）。
+        // BK4 (4): py の and／or は被演算子の値を返す（`0 and 1` は 0・`5 and None` は None・`[] or 0` は 0・`"" or "x"` は x）。被演算子の真偽は
+        //   if・while と同じ tr（py は python3 と同じく空の list／tuple／dict も偽）。是正前は and が偽のとき false・真偽は truthy（`[] or 0` は []）。
         //   C は従来どおり（&& は偽のとき false・|| は被演算子の値・真偽は truthy）。
-        if (op === '&&') {
-          const a = this.evalExpr(node.a, scope);
-          if (this.lang === 'py') return pyTruthy(a) ? this.evalExpr(node.b, scope) : a;
-          return truthy(a) ? this.evalExpr(node.b, scope) : false;
-        }
-        if (op === '||') { const a = this.evalExpr(node.a, scope); return (this.lang === 'py' ? pyTruthy(a) : truthy(a)) ? a : this.evalExpr(node.b, scope); }
+        if (op === '&&') { const a = this.evalExpr(node.a, scope); return this.tr(a) ? this.evalExpr(node.b, scope) : (this.lang === 'py' ? a : false); }
+        if (op === '||') { const a = this.evalExpr(node.a, scope); return this.tr(a) ? a : this.evalExpr(node.b, scope); }
         return applyBin(op, this.evalExpr(node.a, scope), this.evalExpr(node.b, scope), this.curLine, this.lang);
       }
       case 'compare': {
@@ -397,18 +386,16 @@ export class Interp {
         return true;
       }
       case 'un': {
-        // BK4 層4 F1: py の not の被演算子は条件と同じ cond（`not (q and q[0])` が 850bbb2 と同じ真偽）。
-        if (node.op === '!' && this.lang === 'py') return !this.cond(node.a, scope);
         const a = this.evalExpr(node.a, scope);
         // BK4: py の None（null）に - + ~ は実行時エラー（python3 は TypeError。是正前は数の 0 として 0）。
         if (a === null && this.lang === 'py' && node.op !== '!') throw this.rt('noneOp', { op: node.op });
-        if (node.op === '-') return -a; if (node.op === '+') return +a; if (node.op === '!') return !truthy(a);
+        if (node.op === '-') return -a; if (node.op === '+') return +a; if (node.op === '!') return !this.tr(a);
         if (node.op === '~') return ~a;
         return a;
       }
       case 'arraydecl': return this.shapeArray(node.dims, 0, node.init ? this.evalExpr(node.init, scope) : null, scope);
       case 'sizeof': return this.sizeOfVal(this.evalExpr(node.a, scope));
-      case 'ternary': return this.cond(node.cond, scope) ? this.evalExpr(node.a, scope) : this.evalExpr(node.b, scope);
+      case 'ternary': return this.tr(this.evalExpr(node.cond, scope)) ? this.evalExpr(node.a, scope) : this.evalExpr(node.b, scope);
       case 'assignexpr': {
         let v;
         if (node.op === '=') v = this.evalExpr(node.value, scope);
@@ -470,10 +457,11 @@ export class Interp {
         if (name === 'millis' || name === 'micros') this.timeRead = true;   // BK1 H1: StepLimit の文言のヒント (値は変えない)
         // BK4: py だけ。print／str の値の文字列化は pyStr（True／False／None。f-string・str.format と同じ）。是正前は JS の表示（true・
         //   None は数の 0）。undefined（範囲外の添字など）は従来どおり（print は空・str は "undefined"）。C の print(true) は従来どおり "true"。
-        //   bool(…) はホストの bool（if と同じ truthy＝850bbb2 と同じ・層4 F1）。range(…) の引数は rangeArgs（整数・0 でないステップ）。
+        //   bool(…) は pyTruthy（if と同じ tr＝空の list／tuple／dict は False・H1＝A）。range(…) の引数は rangeArgs（整数・0 でないステップ）。
         if (this.lang === 'py') {
           if (name === 'print') return this.host.print(...args.map((v) => (v === undefined ? v : pyStr(v))));
           if (name === 'str') return args.length ? pyStr(args[0]) : '';
+          if (name === 'bool') return args.length ? pyTruthy(args[0]) : false;   // BK4 (4): bool([]) は False（是正前は True）
           if (name === 'range') return this.host.range(...this.rangeArgs(args));
         }
         return this.host[name](...args);
@@ -487,8 +475,8 @@ export class Interp {
 }
 
 function truthy(v) { return !(v === 0 || v === false || v === '' || v == null); }
-// BK4 (4): py の and／or の被演算子の真偽（値の文脈だけ・Interp.cond の説明）。truthy に加えて空の list／tuple（長さ 0 の配列）と空の dict
-//   （プロトタイプ無しの素の辞書＝evalExpr の dict）が偽。ホストのオブジェクト（math・Serial・sensor0 など）は真のまま。
+// BK4 (4): py の真偽（Interp.tr）。truthy に加えて空の list／tuple（長さ 0 の配列）と空の dict（プロトタイプ無しの素の辞書＝evalExpr の dict）が
+//   偽（python3 と同じ）。ホストのオブジェクト（math・Serial・sensor0 など）は真のまま。
 function pyTruthy(v) {
   if (!truthy(v)) return false;
   if (Array.isArray(v)) return v.length > 0;
