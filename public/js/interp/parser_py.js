@@ -56,10 +56,10 @@ export function parsePy(src) {
     //   `def f(): return 1 / 0` が関数の中の行になる）。是正前は simpleStmt() だけで読み、break／continue／pass／return／global が
     //   変数名になって「未定義の変数/名前: break」等（`def f(): return 1` は本体が変数 return で 1 が別の文）、文に line が無く
     //   外側の文の行（呼び出し元の行）で報告していた。複合文（if／while／for／def）は従来どおり simpleStmt() へ回って構文エラー
-    //   （Python も SyntaxError）。キーワードの単純文の後ろに同じ行の続き（`break 5`・`return 1 2`・`;`）があれば構文エラー
+    //   （Python も SyntaxError）。キーワードの単純文の後ろに同じ行の続き（`break 5`・`return 1 2`・BJ6 の時点の `;`）があれば構文エラー
     //   （Python も SyntaxError。続きを次の文として黙って読む形を新しく作らない。是正前は `if x: break 5` が「未定義の変数/名前: break」、
-    //   `def f(): return 1 2` は f を呼ばなければエラー無しで走った。`;` は従来どおり未対応＝是正前と同じ文言の構文エラー。
-    //   字下げしたブロックの `break 5` は従来どおり 5 を次の文として読む＝是正前からの差・BJ6 の範囲外）。
+    //   `def f(): return 1 2` は f を呼ばなければエラー無しで走った）。BJ6 の時点では `;` は未対応の構文エラーのままで、
+    //   字下げしたブロックの `break 5` は 5 を次の文として読んでいた — どちらも BK2 で下のとおり是正した（BK-6 F5）。
     // BK2: 1 行の suite も字下げしたブロック・トップレベルと同じ simpleStmts（`;` で区切った単純文の並び・行末の続きは構文エラー）で読む
     //   ＝`if x: a = 1; b = 2` は 2 つの文とも if の本体・`def f(): global x; x = 1` の x = 1 は関数の本体（python3 と同じ。BJ6 では
     //   「予期しないトークン ';'」）。キーワード以外の単純文の続き（`if x: y = 2 3`）も構文エラー（是正前は 3 を次の文として読んだ）。

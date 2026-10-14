@@ -564,7 +564,8 @@ function trimChars(s, chars, left, right) {
 //   丸めは 2 進の値の正確な 10 進展開に対する偶数丸め（python3 と同じ＝`f"{2.5:.0f}"` は "2"・`f"{0.125:.2f}"` は "0.12"・`f"{2.675:.2f}"` は
 //   "2.67"）。JS の toFixed は同点を切り上げ（0.5→"1"）、1e21 以上は指数表記になるので使わない。
 //   未対応（`n`・`z` 以外の 3.14 の小数部の区切り）と書き方の誤りは interp.err.fmtSpec、型に使えない指定（文字列に `d`・符号、整数値でない数に
-//   `d`・`x`、整数に精度・`z` など）は interp.err.fmtType（行＝その文の行）。幅と精度は 10000 まで（超えたら fmtSpec。python3 は上限なし）。
+//   `d`・`x`、整数に型 `d` 等と精度・`z` を書いた `.2d`・`zd` など）は interp.err.fmtType（行＝その文の行）。型を省略した整数の
+//   `f"{5:.2}"`・`f"{5:z}"` は float として書式化して "5.0"（python3 は ValueError＝§9 (7) の残る差・BK-9 F1）。幅と精度は 10000 まで（超えたら fmtSpec。python3 は上限なし）。
 const SPEC_RE = /^(?:([\s\S])?([<>=^]))?([+\- ])?(z)?(#)?(0)?(\d+)?([,_])?(?:\.(\d+))?([bcdeEfFgGnosxX%])?$/u;
 const FMT_MAX = 10000;
 // 値の文字列化（f-string の書式指定の無いフィールド・`!s`・str.format の `{}`・BK4 から py の print／str と `%s`）。bool は True／False・
