@@ -14,7 +14,7 @@
 public/                   配信物 = アプリ本体
 ├── index.html
 ├── css/style.css
-├── js/                   48 モジュール (物理・描画・レース・言語処理系・i18n)
+├── js/                   49 モジュール (物理・描画・レース・言語処理系・i18n)
 └── data/courses.json     66 コースのカタログ
 
 docs/

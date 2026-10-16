@@ -207,7 +207,9 @@ const GATES = [
   //   発火元）。改修前の木で赤＝ad5ddd1／b649a95 の B-1・B-3・B-4。
   //   C〜F) BL3 順位表の同周回内の並び（hud.js）・記録 → エントリーの名前引き（race_ladder.js・race_ui.js）・再実行検証の
   //   frozenField を try の中へ・👻 の runRace に physics/recon/wear。改修前の木（f61d970）で赤＝C-1・C-5・D-1・D-2b・D-3・D-4・E・F。
-  //   実ブラウザは browser/check_bl1_moderate.mjs・check_bl2_runview.mjs・check_bl3_rankorder.mjs。所要は本ホスト実測 約 1.2 秒（単独・2026-10-16）。
+  //   G) BL4 未エスケープの innerHTML（car_crud の車種表と編集フォーム・race_ui の順位・ペナルティ・予算）と esc（escape.js）の
+  //   非文字列耐性・テンプレート文字列の ${…} の配線（一覧に無い式は赤）。改修前の木（8248a58）で赤＝G-1〜G-5。
+  //   実ブラウザは browser/check_bl1_moderate.mjs・check_bl2_runview.mjs・check_bl3_rankorder.mjs・check_bl4_escape.mjs。所要は本ホスト実測 約 1.5 秒（単独・2026-10-16）。
   'wf_bl1_ui.mjs',
 ].map((name) => ({ name, args: [] }));
 

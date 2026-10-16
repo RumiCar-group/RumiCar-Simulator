@@ -8,8 +8,9 @@
 //   G1 [sink ゲート・常設]  main.js の全 `${carTypeName(...)}` 補間が escapeHtml で包まれている
 //                           (生 `${carTypeName(` 出現数 = 0)。version drift しても機械検出する。
 //   G2 [XSS 封鎖・runtime]  registerCarType 相当の悪性名を sink 式へ通すと生 `<` 残存数 = 0。
-//                           escapeHtml / carTypeName の写しは source PIN で本物と一致を機械確認
-//                           (CI-9 バイパス防止=コピーが陳腐化したら PIN 不一致で exit 1)。
+//                           escapeHtml は本物 (BL4 で main.js から public/js/escape.js へ分離) を import し、
+//                           main.js がそれを import して自前の定義を持たないことを確認する。carTypeName の写しは
+//                           source PIN で本物と一致を機械確認 (CI-9 バイパス防止=コピーが陳腐化したら PIN 不一致で exit 1)。
 //   G3 [safeSetItem]        本物の storage.js を import し、QuotaExceededError スタブで
 //                           false + 通知 1 回・正常時 true + 通知 0 回。
 //   G4 [生 setItem 残存 0]  data 系 3 経路の関数本文に raw localStorage.setItem が残っていない
@@ -54,20 +55,20 @@ console.log('G1 sink ゲート: ${carTypeName(...)} は必ず escapeHtml で包�
 }
 
 // ---- G2: XSS 封鎖 (runtime) + source PIN ----
-console.log('G2 XSS 封鎖: 悪性車種名を sink へ通すと生 < 残存 0 / 写しは source PIN 一致');
+console.log('G2 XSS 封鎖: 悪性車種名を sink へ通すと生 < 残存 0 / escapeHtml は本物・carTypeName の写しは source PIN 一致');
 {
-  // 本物の escapeHtml 定義を source PIN (コピーが陳腐化=バイパスを機械検出)。
-  const ESC_PIN = `function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }`;
-  if (mainSrc.includes(ESC_PIN)) ok('escapeHtml 定義 PIN 一致 (写しは本物と byte 一致)');
-  else bad('escapeHtml 定義が source と不一致=写しが陳腐化 (PIN を更新し再検証せよ)');
+  // BL4: escapeHtml は public/js/escape.js の本物を import する (写しを持たない)。main.js はそれを import し、
+  //   自前の定義を持たない (二重定義で片方だけ直る事故を防ぐ)。
+  const { escapeHtml } = await import('./public/js/escape.js');
+  if (/^import \{ escapeHtml \} from '\.\/escape\.js';/m.test(mainSrc) && !/^function escapeHtml\(/m.test(mainSrc)) ok('main.js は escape.js の escapeHtml を import (自前の定義なし)');
+  else bad('main.js が escape.js の escapeHtml を import していない・または自前の定義が残っている');
 
   // 本物の carTypeName の要点 PIN: i18n キー無しなら base = ct.name (community は '🌐 ' 前置)。
   const CTN_PIN = "return ct.community ? '🌐 ' + base : base;";
   if (mainSrc.includes(CTN_PIN)) ok('carTypeName 要点 PIN 一致 (base=ct.name 経路が生存)');
   else bad('carTypeName の要点が source と不一致 (PIN を更新し再検証せよ)');
 
-  // 写し (PIN 済) で sink 式を再現し、悪性名の生 < が 0 になることを実証。
-  const escapeHtml = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  // 本物の escapeHtml と carTypeName の写し (PIN 済) で sink 式を再現し、悪性名の生 < が 0 になることを実証。
   const carTypeName = (ct) => { const base = ct.name; return ct.community ? '🌐 ' + base : base; };
   const PAYLOAD = '<img src=x onerror=alert(1)>';
   for (const ct of [{ key: 'evil', name: PAYLOAD, community: true }, { key: 'evil2', name: PAYLOAD, custom: true }]) {

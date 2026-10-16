@@ -14,7 +14,7 @@ Live instance: <https://www.rumicar.com/simulator/>
 public/                   what is served = the app itself
 ├── index.html
 ├── css/style.css
-├── js/                   48 modules (physics, rendering, racing, language runtimes, i18n)
+├── js/                   49 modules (physics, rendering, racing, language runtimes, i18n)
 └── data/courses.json     catalogue of 66 courses
 
 docs/

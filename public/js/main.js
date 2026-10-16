@@ -102,6 +102,7 @@ import { course, setCourse } from './state.js';
 import { initRaceUI } from './race_ui.js';
 import { initCarCrud } from './car_crud.js';
 import { moderate } from './moderate.js';   // BL1: 質問・提案の投稿前チェック (純関数)
+import { escapeHtml } from './escape.js';   // BL4: innerHTML のエスケープ (文字列にできない値でも投げない・race_ui/car_crud へ注入)
 
 const $ = (id) => document.getElementById(id);
 
@@ -770,7 +771,11 @@ function carTypeLabel(key) { const ct = CAR_TYPE_BY_KEY[key]; return ct ? carTyp
 // 表示し、未登録の持ち込み車種は同梱 carDef.name をそのまま表示する (custom 車のポータビリティ)。
 function entryCarLabel(carType, carDef) {
   const key = carType || (carDef && carDef.key) || '';
-  if (key && Object.prototype.hasOwnProperty.call(CAR_TYPE_BY_KEY, key)) return carTypeLabel(key);   // BF1: 'constructor' 等を素通りさせない
+  // BL4: key は他人が書いた entries・result.json の値。文字列にできない値 ({"toString":1} 等) は hasOwnProperty.call の
+  //   キー変換で TypeError を投げ、🏆 の詳細の描画が止まった (決定ログ BL-3)。登録済みの key ではないとして扱う (表示は呼び出し側が esc)。
+  let known = false;
+  try { known = !!key && Object.prototype.hasOwnProperty.call(CAR_TYPE_BY_KEY, key); } catch (e) { known = false; }
+  if (known) return carTypeLabel(key);   // BF1: 'constructor' 等を素通りさせない
   return (carDef && carDef.name) || key || '';
 }
 
@@ -1310,7 +1315,6 @@ function programSelectOptions() {
   html += `<option value="custom" hidden>${t('prog.opt.custom')}</option>`;
   return html;
 }
-function escapeHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
 
 // src が既定/投稿/汎用プログラムのどれかなら、その選択を走行セレクタに反映 (一致しなければ「カスタム」)。
 function syncProgramSelect(i) {

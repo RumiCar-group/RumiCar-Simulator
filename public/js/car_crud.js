@@ -106,9 +106,11 @@ function renderCarParamTable() {
       ops = `<button class="car-ovr-edit" data-key="${escapeHtml(ct.key)}">${t('cars.list.edit')}</button>`;
       if (overridden) ops += ` <button class="car-ovr-reset" data-key="${escapeHtml(ct.key)}">${t('cars.ovr.reset')}</button>`;
     }
+    // BL4: パラメータ値・drift.grip は投稿車種 (数値を検査しない registerCarType)・localStorage の自作車・組込の上書き
+    //   (applyCarOverride は !Number.isNaN だけ) から文字列のまま届く。表示側で必ずエスケープする (入口の検査に頼らない)。
     h += `<tr><td class="pname">${escapeHtml(carTypeName(ct))}${badge}</td>` +
-      cols.map(c => `<td>${ct[c] != null ? ct[c] : '-'}</td>`).join('') +
-      `<td>${ct.drift ? `grip ${ct.drift.grip}` : '—'}</td>` +
+      cols.map(c => `<td>${escapeHtml(ct[c] != null ? ct[c] : '-')}</td>`).join('') +
+      `<td>${ct.drift ? `grip ${escapeHtml(ct.drift.grip)}` : '—'}</td>` +
       `<td class="carlist-ops">${ops}</td></tr>`;
   }
   h += '</table>';
@@ -233,9 +235,11 @@ function carNumRow(p, min, max, step, val) {
   const v = has ? val : '';
   const rv = has ? val : min;
   const tip = hasKey('cars.pdoc.' + p) ? escapeHtml(t('cars.pdoc.' + p)) : '';
+  // BL4: val は fillCarDef が文字列のまま残す (自作車の編集・組込の上書き編集・JSON → フォーム)。value="…" から
+  //   抜け出さないよう属性値をエスケープする (p・min・max・step・numId は CAR_NUM_PARAMS/DRIFT_NUM_PARAMS の定数)。
   return `<div class="cf-row"><label class="cf-lbl" title="${tip}">${p}</label>` +
-    `<input type="range" class="cf-range" data-num="${numId}" min="${min}" max="${max}" step="${step}" value="${rv}">` +
-    `<input type="number" class="cf-num" id="${numId}" min="${min}" max="${max}" step="${step}" value="${v}"></div>`;
+    `<input type="range" class="cf-range" data-num="${numId}" min="${min}" max="${max}" step="${step}" value="${escapeHtml(rv)}">` +
+    `<input type="number" class="cf-num" id="${numId}" min="${min}" max="${max}" step="${step}" value="${escapeHtml(v)}"></div>`;
 }
 // フォームを def 値で描画 (部分 def は既定で補完)。values は保持・ラベルは現在言語。
 // 組込上書き編集中 (builtinEditKey) は key/name を当該組込に固定 (readonly)＝上書きは数値/drift のみ。

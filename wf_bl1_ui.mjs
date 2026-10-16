@@ -1,4 +1,4 @@
-// wf_bl1_ui.mjs — Stage BL（UI 不具合）の常設ゲート。BL1 が新設し、BL2〜BL7 が章を足す（A＝BL1・B＝BL2・C〜F＝BL3）。
+// wf_bl1_ui.mjs — Stage BL（UI 不具合）の常設ゲート。BL1 が新設し、BL2〜BL7 が章を足す（A＝BL1・B＝BL2・C〜F＝BL3・G＝BL4）。
 // ════════════════════════════════════════════════════════════════════════════
 // 本番モジュールを import して答えさせる（再実装しない・CI-9）。実ブラウザでしか測れない部分は
 // browser/check_bl<n>_*.mjs（run_all.sh が glob で拾う）。
@@ -44,6 +44,20 @@
 //    赤になる章（2026-10-16 の実測・--root）: f61d970（BL2 後・BL3 前）＝C-1・C-5・D-1・D-2b・D-3・E（例外と文言 ja/en）・
 //    F（physics・recon・wear）・D-4 の 15 件。実ブラウザは browser/check_bl3_rankorder.mjs（順位表を実走で測る）。
 //
+// G) BL4 未エスケープの innerHTML と esc の非文字列耐性 — 表示側のエスケープ（入口の検査に頼らない）。
+//    G-1 esc（public/js/escape.js の escapeHtml。BL4 で main.js から分離・main.js が import して race_ui/car_crud へ注入）が
+//    {toString:1}・Object.create(null)・Proxy・Symbol・null・undefined・数値でも投げず文字列を返す（String(s) が投げる値は '?'）。
+//    G-2 race_ui.js 🏆 の詳細の順位・ペナルティ（result.json）と再実行検証の結果の予算（event.budget.total）が文字列のまま見える。
+//    G-3 🏆 の詳細は名前・intro・carDef.key が文字列にできないエントリーでも最後まで描ける（esc と main.js entryCarLabel の
+//    hasOwnProperty.call を本文のまま評価して注入・決定ログ BL-3 の申し送り）。G-4 配線: car_crud.js・race_ui.js の
+//    テンプレート文字列の ${…} を字句解析で全部取り出し、esc／fmtTime／t('…') で包まれていない式は一覧（理由つき）に
+//    あるものだけ（一覧に無い式・ソースから消えた一覧の式は赤）。G-4b metaRows の値は全部 esc。G-5 car_crud.js の車種表と
+//    編集フォーム（自作車〔localStorage〕・投稿車種〔registerCarType〕・組込の上書き〔applyCarOverride〕・JSON → フォーム）で
+//    `<img`・onerror を持つタグが 0・`&lt;img` があり、value 属性が元の文字列のまま。出荷 6 車種の行は是正前の書き方と同一。
+//    「onerror= を含まない」は**タグの中に**含まないことで測る（エスケープした本文は onerror= の綴りを文字として残す）。
+//    赤になる章（2026-10-16 の実測・--root 8248a58＝BL3 後・BL4 前）: 件数は決定ログ BL4 結果。実ブラウザは
+//    browser/check_bl4_escape.mjs（自作車の車種表と編集フォームを実画面で開き、img 要素 0・alert 0）。
+//
 // 使い方: node wf_bl1_ui.mjs              … 検査
 //         node wf_bl1_ui.mjs --root <dir>  … <dir>/public/js の product で回す（是正前の木で赤になることの確認用）
 // exit: 0=全緑 / 1=いずれか赤。
@@ -82,6 +96,19 @@ async function loadModerate() {
   return { ...f(), from: 'main.js（是正前の木の本文を評価）' };
 }
 const { moderate, NG_WORDS, from } = await loadModerate();
+
+// BL4: innerHTML のエスケープ（escapeHtml）の読み口。是正後: escape.js を import。是正前の木（escape.js が無い）:
+// main.js の `function escapeHtml(` の 1 行を取り出して評価する（loadModerate と同じ・product の経路は変えない）。
+async function loadEscape() {
+  const mod = join(JS, 'escape.js');
+  if (existsSync(mod)) return { escapeHtml: (await import(pathToFileURL(mod).href)).escapeHtml, from: 'escape.js' };
+  const src = readFileSync(join(JS, 'main.js'), 'utf8');
+  const m = /^function escapeHtml\(s\) \{.*\}$/m.exec(src);
+  if (!m) throw new Error('main.js に function escapeHtml が見つからない');
+  return { escapeHtml: new Function(`${m[0]}\nreturn escapeHtml;`)(), from: 'main.js（是正前の木の本文を評価）' };
+}
+const { escapeHtml: ESC, from: escFrom } = await loadEscape();
+console.log(`  エスケープ: ${escFrom}`);
 console.log(`  判定関数: ${from}・NG 語 ${NG_WORDS.length} 語`);
 
 // ── A) NG ワード判定 ───────────────────────────────────────────────────────────
@@ -553,8 +580,8 @@ function el(id) {
   }
   return ELS.get(id);
 }
-// escapeHtml は main.js:escapeHtml と同じ式（DOM を前提にする main.js は import できない＝依存注入の相手を同じ形で置く）。
-const escH = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// escapeHtml は product（BL4 以降は escape.js を import・それより前の木は main.js の本文を評価＝loadEscape）を依存注入する。
+const escH = ESC;
 const unescH = (s) => String(s).replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
 const { buildFromSpec } = await import(pathToFileURL(join(JS, 'course.js')).href);
 const { PROGRAM_BY_KEY } = await import(pathToFileURL(join(JS, 'programs.js')).href);
@@ -564,11 +591,13 @@ const i18n = await import(pathToFileURL(join(JS, 'i18n.js')).href);
 const COURSE_SPECS = JSON.parse(readFileSync(join(ROOT, 'public/data/courses.json'), 'utf8'));
 const OVAL = buildFromSpec(COURSE_SPECS.find((x) => x.name === 'オーバル'));
 const logs = [];
+// 車種の表示名の依存注入。C〜F 章は従来どおり key の文字列、G 章は main.js の entryCarLabel（product の本文）に差し替える。
+let ECL = (k) => String(k || '');
 const ui = (await import(UI_URL)).initRaceUI({
   $: el, escapeHtml: escH, logLine: (x) => logs.push(String(x)),
   activeSlot: () => ({ name: 'ME', lang: 'c', src: PROGRAM_BY_KEY.normal_fr.code, carType: 'normal_fr' }),
   exitEdit() {}, courseDisplayName: (c) => (c && typeof c === 'object' ? c.name : String(c || '')),
-  carTypeLabel: (k) => String(k), entryCarLabel: (k) => String(k || ''), setActiveProgram() {}, playCountdown() {},
+  carTypeLabel: (k) => String(k), entryCarLabel: (k, d) => ECL(k, d), setActiveProgram() {}, playCountdown() {},
   resolveRaceCourse: (ref) => (ref === 'オーバル' ? OVAL : null), submitToGithub() {}, raceCourseUnit: undefined,
 });
 const SRC_C = PROGRAM_BY_KEY.normal_fr.code, SRC_PY = PROGRAM_BY_KEY.py_normal_fr.code;
@@ -625,8 +654,8 @@ for (const lang of ['ja', 'en']) {
   }
 }
 i18n.setLang('ja');
-{  // 参考（合否に数えない）: name が object のエントリーは、再実行検証より前に 🏆 の詳細の描画（renderOfficialDetail の
-   // escapeHtml(e.name)＝main.js の String(s)）で止まり、ボタンまで届かない（BL3 の範囲外＝決定ログ BL-3 で BL4 へ申し送り）。
+{  // 参考（合否に数えない）: name が object のエントリーは、BL4 より前は再実行検証より前に 🏆 の詳細の描画（renderOfficialDetail の
+   // escapeHtml(e.name)＝main.js の String(s)）で止まり、ボタンまで届かなかった（決定ログ BL-3 → BL4 で是正・合否は G-3 が測る）。
   let th = null;
   try { await openRace('bl3-badname', () => ({ event: { id: 'bl3-badname', course: 'オーバル', laps: 1, class: 'open' },
     entries: [ent({ toString: 1 }, '', 'c', { k: 0 }), ent('y', 'b', 'c', { k: 1 })], result: null })); } catch (e) { th = e; }
@@ -681,6 +710,363 @@ console.log('\nF) 👻 ゴースト対戦の再走条件（race_ui.js ghostVsWor
   // D-4: 世界ベスト carPy（alice の 2 件目）のプログラムで走る（是正前は alice の 1 件目＝C）
   const w = c && Array.isArray(sp.field) ? sp.field[1] : null;
   ok(!!w && w.lang === 'py' && w.src === SRC_PY, `D-4 👻 の相手は世界ベスト carPy のエントリー（lang ${w ? w.lang : '-'}・src が py の本文 ${!!w && w.src === SRC_PY}）`);
+}
+
+// ── G) BL4 未エスケープの innerHTML（car_crud の車種表と編集フォーム・race_ui の順位・ペナルティ・予算）と esc の非文字列耐性 ──
+// 判定の述語（PLAN BL4 の「<img・onerror= を含まず &lt;img を含む」）: エスケープした文字列は本文に "onerror=" の綴りを
+// 文字として残す（&lt;img src=x onerror=…&gt; は表示される文字列）。∴ onerror= は**タグの中（属性）に無いこと**で測る:
+// ① `<img` の出現 0 ② `<…>` のタグのうち onerror を含むもの 0 ③ `&lt;img` を含む。属性からの抜け出しは、該当の
+// <input> タグを属性の並びとして読み、value 属性を実体参照を戻して元の文字列と比べる（抜け出すと value="" で切れる）。
+const XT = '<img src=x onerror=alert(1)>';      // 本文に入る形
+const XA = '"><img src=x onerror=alert(1)>';    // 属性 value="…" から抜け出す形
+const tagsOf = (h) => String(h).match(/<[a-zA-Z][^>]*>/g) || [];
+// タグの中の onerror 属性＝引用符で囲んだ属性値を除いた残りに onerror= がある（value="…onerror=…" の値の中の綴りは数えない）。
+const onAttr = (tag) => /\bonerror\s*=/i.test(tag.replace(/"[^"]*"/g, '""'));
+const inert = (h) => ({ img: (String(h).match(/<img/gi) || []).length, onTag: tagsOf(h).filter(onAttr).length,
+  lt: String(h).includes('&lt;img') });
+const inertOk = (r) => r.img === 0 && r.onTag === 0 && r.lt;
+const attrsOf = (tag) => { const o = {}; for (const m of String(tag).matchAll(/([\w-]+)="([^"]*)"/g)) o[m[1]] = unescH(m[2]); return o; };
+
+console.log('\nG-1) esc（escapeHtml）は文字列にできない値でも投げず文字列を返す — 是正前: String(s) が TypeError');
+{
+  const nullProto = Object.create(null);
+  const trap = new Proxy({}, { get() { throw new Error('trap'); } });
+  const CASES = [
+    ['{toString:1}', { toString: 1 }, null], ['JSON の {"toString":1}', JSON.parse('{"toString":1}'), null],
+    ['Object.create(null)', nullProto, null], ['Proxy（どの読み出しも投げる）', trap, null],
+    ['Symbol()', Symbol(), 'Symbol()'], ["Symbol('<b>')", Symbol('<b>'), 'Symbol(&lt;b&gt;)'],
+    ['null', null, 'null'], ['undefined', undefined, 'undefined'], ['数値 5', 5, '5'], ['数値 1.5', 1.5, '1.5'], ['NaN', NaN, 'NaN'],
+    ['真偽 true', true, 'true'], ["{toString(){return '<b>'}}", { toString() { return '<b>'; } }, '&lt;b&gt;'],
+    ['配列 [1,"<"]', [1, '<'], '1,&lt;'], ['文字列 `a&<>"\'`', 'a&<>"\'', 'a&amp;&lt;&gt;&quot;\''],
+  ];
+  for (const [label, v, want] of CASES) {
+    let r, th = null;
+    try { r = ESC(v); } catch (e) { th = e; }
+    ok(th === null && typeof r === 'string' && (want === null || r === want) && !/[<>"]/.test(r),
+       `esc(${label}) → ${th ? `${th.constructor.name}: ${th.message}` : J(r)}${want === null ? '（文字列を返す）' : `（期待 ${J(want)}）`}`);
+  }
+  // 配線: main.js は escape.js の escapeHtml を import して両モジュールへ注入し、自前の定義を持たない
+  const MAINS = readFileSync(join(JS, 'main.js'), 'utf8');
+  ok(/^import \{ escapeHtml \} from '\.\/escape\.js';/m.test(MAINS) && !/^function escapeHtml\(/m.test(MAINS),
+     `main.js は escape.js の escapeHtml を import し、自前の定義が無い（import ${/from '\.\/escape\.js'/.test(MAINS)}・自前 ${/^function escapeHtml\(/m.test(MAINS)}）`);
+  ok(/initRaceUI\(\{ \$, escapeHtml,/.test(MAINS) && /initCarCrud\(\{ \$, escapeHtml,/.test(MAINS),
+     'main.js は同じ escapeHtml を initRaceUI・initCarCrud に注入する');
+}
+
+console.log('\nG-2) race_ui.js 🏆 の詳細（順位・ペナルティ）と再実行検証の結果（予算）— 是正前: f.rank・f.penaltiesSec・budget が生のまま');
+{
+  const RX = () => ({
+    event: { id: 'bl4-x', title: 'T', course: 'オーバル', laps: 1, class: 'budget', budget: { total: XT } },
+    entries: [ent('e1', 'a1', 'c', { k: 0 }), ent('e2', 'b2', 'c', { k: 1 })],
+    result: { eventId: 'bl4-x', verifyHash: 'h', finishers: [
+      { rank: XT, name: 'e1', author: 'a1', carType: 'normal_fr', totalTimeMs: 1000, bestLapMs: 1000, penaltiesSec: XT },
+      { rank: XA, name: 'e2', author: 'b2', carType: 'normal_fr', totalTimeMs: 2000, bestLapMs: 1000, penaltiesSec: XA }] },
+  });
+  let th = null, d = '';
+  try { d = await openRace('bl4-x', RX); } catch (e) { th = e; }
+  const r1 = inert(d);
+  ok(th === null && inertOk(r1), `ofDetail（順位・ペナルティ）: <img ${r1.img}・onerror を持つタグ ${r1.onTag}・&lt;img ${r1.lt}${th ? '・例外 ' + th.message : ''}`);
+  const rows = [...d.matchAll(/<tr><td>([^<]*)<\/td><td>e[12]<\/td>[^]*?<td>([^<]*)<\/td><\/tr>/g)].map((m) => [unescH(m[1]), unescH(m[2])]);
+  ok(J(rows) === J([[XT, '+' + XT + 's'], [XA, '+' + XA + 's']]), `順位・ペナルティのセルは文字列のまま見える（実 ${J(rows)}）`);
+  const v = await clickVerify('bl4-x', RX);
+  const m = el('raceMeta').innerHTML;
+  const r2 = inert(m);
+  ok(v.thrown === null && v.calls.length === 1 && inertOk(r2), `raceMeta（予算）: <img ${r2.img}・onerror を持つタグ ${r2.onTag}・&lt;img ${r2.lt}（runRace ${v.calls.length} 回${v.thrown ? '・例外 ' + v.thrown.message : ''}）`);
+  const bud = /<tr><th>([^<]*)<\/th><td>([^<]*&lt;img[^<]*)<\/td><\/tr>/.exec(m);
+  ok(!!bud && unescH(bud[2]) === XT && bud[1] === escH(i18n.t('event.meta.budget')), `予算の行は文字列のまま見える（${bud ? `${bud[1]} = ${J(unescH(bud[2]))}` : '無し'}）`);
+}
+
+console.log('\nG-3) 🏆 の詳細は名前・車種 key が文字列にできないエントリーでも描ける（BL-3 の申し送り）— 是正前: esc(e.name)・entryCarLabel が TypeError');
+{
+  // entryCarLabel は main.js の本文（DOM を前提にする main.js は import できない）を取り出し、本物の CAR_TYPE_BY_KEY で評価する。
+  const MAINS = readFileSync(join(JS, 'main.js'), 'utf8');
+  const a = MAINS.indexOf('function entryCarLabel('), b = MAINS.indexOf('\n}\n', a);
+  ok(a >= 0 && b > a, 'main.js に entryCarLabel の本文がある');
+  const cfg = await import(pathToFileURL(join(JS, 'config.js')).href);
+  const prodECL = new Function('CAR_TYPE_BY_KEY', 'carTypeLabel', `${MAINS.slice(a, b + 2)}\nreturn entryCarLabel;`)(cfg.CAR_TYPE_BY_KEY, (k) => 'LABEL:' + String(k));
+  const BAD = { toString: 1 };
+  {
+    let th = null, r;
+    try { r = prodECL(undefined, { key: BAD, name: 'NM' }); } catch (e) { th = e; }
+    ok(th === null && r === 'NM', `entryCarLabel(carType 無し, carDef.key={toString:1}) は投げず carDef.name（実 ${th ? th.constructor.name + ': ' + th.message : J(r)}）`);
+    let r2, th2 = null;
+    try { r2 = [prodECL('normal_fr'), prodECL(undefined, { key: 'normal_ff' }), prodECL('nokey', { name: 'Mine' }), prodECL('constructor'), prodECL(undefined, undefined)]; } catch (e) { th2 = e; }
+    ok(th2 === null && J(r2) === J(['LABEL:normal_fr', 'LABEL:normal_ff', 'Mine', 'constructor', '']),
+       `entryCarLabel の正常値は従来どおり（実 ${th2 ? th2.message : J(r2)}）`);
+  }
+  ECL = prodECL;
+  const BADR = () => ({
+    event: { id: 'bl4-bad', course: 'オーバル', laps: 1, class: 'open' },
+    entries: [ent(BAD, 'a1', 'c', { k: 0, intro: BAD }), { ...ent('y', 'b2', 'c', { k: 1 }), carType: undefined, carDef: { key: BAD, name: 'NM' } }],
+    result: { eventId: 'bl4-bad', verifyHash: 'h', finishers: [
+      { rank: 1, name: BAD, author: 'a1', carType: 'normal_fr', totalTimeMs: 1000, bestLapMs: 1000 },
+      { rank: 2, name: 'y', author: 'b2', carDef: { key: BAD, name: 'NM' }, totalTimeMs: 2000, penaltiesSec: BAD }] },
+  });
+  // JSON 経由で配ると toString:1 は「文字列にできない object」のまま届く（openRace は JSON で複製する＝上流の取得と同じ形）。
+  let th = null, d = '';
+  try { d = await openRace('bl4-bad', BADR); } catch (e) { th = e; }
+  ok(th === null && d.includes('id="ofVerify"'), `🏆 の詳細を最後（再実行検証のボタン）まで描く（${th ? `${th.constructor.name}: ${th.message}` : `${d.length} 字`}）`);
+  const v = th === null ? await clickVerify('bl4-bad', BADR) : { thrown: new Error('詳細を描けない') };
+  ok(v.thrown === null, `「再実行検証」も例外を漏らさない（${v.thrown ? v.thrown.message : v.note.replace(/<[^>]+>/g, '').slice(0, 60)}）`);
+  // 持ち込み車種（carDef）の name が文字列にできない値: runRace は走り、結果ダイアログの車種名（race_ui.js fieldCarLabeler）で止まった
+  const cfgM = await import(pathToFileURL(join(JS, 'config.js')).href);
+  const CARR = () => ({
+    event: { id: 'bl4-car', course: 'オーバル', laps: 1, class: 'open' },
+    entries: [ent('own', 'a1', 'c', { k: 0, carType: 'bl4_car', carDef: { ...JSON.parse(JSON.stringify(cfgM.CAR_TYPE_BY_KEY.normal_fr)), key: 'bl4_car', name: BAD } }),
+      ent('y', 'b2', 'c', { k: 1 })],
+    result: null,
+  });
+  el('raceMeta').innerHTML = ''; el('raceResults').innerHTML = '';
+  let vc;
+  try { vc = await clickVerify('bl4-car', CARR); } catch (e) { vc = { thrown: e, calls: [] }; }   // 是正前は 🏆 の詳細（esc(carLabel)）で先に止まる
+  const rr = el('raceResults').innerHTML;
+  ok(vc.thrown === null && vc.calls.length === 1 && rr.includes('race-tab'),
+     `持ち込み車種の name が {toString:1} でも再実行検証の結果ダイアログを描く（runRace ${vc.calls.length} 回・結果表 ${rr.includes('race-tab')}${vc.thrown ? '・例外 ' + vc.thrown.constructor.name + ': ' + vc.thrown.message : ''}）`);
+  ECL = (k) => String(k || '');
+}
+
+console.log('\nG-4) 配線: car_crud.js・race_ui.js のテンプレート文字列の ${…} は esc／数値／固定の一覧のどれか（一覧に無い式は赤）');
+// テンプレート文字列の ${…} を全部取り出す（文字列・コメント・正規表現・入れ子のテンプレートを読み飛ばす最小の字句解析）。
+function templateSubs(src) {
+  const out = [];
+  let i = 0;
+  const KW = /(?:^|[^\w$])(return|typeof|case|do|else|in|of|new|delete|void|throw|yield|await)$/;
+  const regexAllowed = (j) => {
+    let k = j - 1; while (k >= 0 && /\s/.test(src[k])) k--;
+    if (k < 0) return true;
+    const c = src[k];
+    if ('(,=:[!&|?{};+-*%<>~^'.includes(c)) return true;
+    return /[\w$]/.test(c) ? KW.test(src.slice(Math.max(0, k - 10), k + 1)) : false;
+  };
+  const skipString = (q) => { i++; while (i < src.length && src[i] !== q) { if (src[i] === '\\') i++; i++; } i++; };
+  const skipRegex = () => {
+    i++; let cls = false;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === '\\') { i += 2; continue; }
+      if (c === '[') cls = true; else if (c === ']') cls = false; else if (c === '/' && !cls) break;
+      else if (c === '\n') throw new Error('正規表現の途中で改行 @' + i);
+      i++;
+    }
+    i++; while (/[a-z]/.test(src[i] || '')) i++;
+  };
+  function code(inSub) {
+    let depth = 0;
+    while (i < src.length) {
+      const c = src[i], d = src[i + 1];
+      if (c === '/' && d === '/') { while (i < src.length && src[i] !== '\n') i++; continue; }
+      if (c === '/' && d === '*') { const e = src.indexOf('*/', i + 2); if (e < 0) throw new Error('コメント未終端'); i = e + 2; continue; }
+      if (c === "'" || c === '"') { skipString(c); continue; }
+      if (c === '`') { template(); continue; }
+      if (c === '/' && regexAllowed(i)) { skipRegex(); continue; }
+      if (c === '{') depth++;
+      if (c === '}') { if (depth === 0 && inSub) return; depth--; }
+      i++;
+    }
+    if (inSub) throw new Error('${ が未終端');
+  }
+  function template() {
+    i++;
+    while (i < src.length) {
+      const c = src[i];
+      if (c === '\\') { i += 2; continue; }
+      if (c === '`') { i++; return; }
+      if (c === '$' && src[i + 1] === '{') {
+        const rec = { start: i + 2 }; out.push(rec); i += 2;
+        code(true);
+        rec.expr = src.slice(rec.start, i).trim(); i++;
+        continue;
+      }
+      i++;
+    }
+    throw new Error('テンプレート未終端');
+  }
+  code(false);
+  const fns = [...src.matchAll(/^(?:export\s+)?(?:async\s+)?function\s+([\w$]+)\s*\(/gm)].map((m) => ({ name: m[1], at: m.index }));
+  for (const r of out) {
+    r.fn = '(top)';
+    for (const f of fns) if (f.at < r.start) r.fn = f.name;
+    r.line = src.slice(0, r.start).split('\n').length;
+  }
+  return out;
+}
+// 式全体が 1 つの呼び出し name(…) か（括弧の対応を見る・文字列の中の括弧は数えない）。
+function wholeCall(expr, names) {
+  const m = new RegExp(`^(?:${names})\\(`).exec(expr); if (!m) return false;
+  let depth = 0, q = null;
+  for (let k = m[0].length - 1; k < expr.length; k++) {
+    const c = expr[k];
+    if (q) { if (c === '\\') k++; else if (c === q) q = null; continue; }
+    if (c === "'" || c === '"' || c === '`') { q = c; continue; }
+    if (c === '(') depth++;
+    else if (c === ')') { depth--; if (depth === 0) return k === expr.length - 1; }
+  }
+  return false;
+}
+const autoSafe = (e) => wholeCall(e, 'esc|escapeHtml') || wholeCall(e, 'fmtTime') || /^t\('[^']*'\)$/.test(e);
+// 一覧（関数 → 式 → 安全な理由）。利用者由来の値（carDef・entry・event・meta・result の欄）はここに置かない（esc で包む）。
+// §5（docs/stage_bl/recheck_v10.3.0.md）の「問題なし」の箇所＝runRace・集計の数値と、エスケープ済みの断片・固定文字列。
+const NUM_RACE = 'runRace の出力（race_engine が数値で作る）';
+const NUM_AGG = '集計の数え上げ（race_season／race_ladder が数値で作る）';
+const PIECE = 'esc 済みの断片か固定文字列だけで組んだ HTML';
+const CONST = '固定文字列・定数・インデックス';
+const ALLOW = {
+  'car_crud.js': {
+    renderCarParamTable: { c: 'cols の定数（mass 等）', badge: PIECE, ops: PIECE + '（data-key は escapeHtml）',
+      "ct.drift ? `grip ${escapeHtml(ct.drift.grip)}` : '—'": '内側の ${} は escapeHtml（別の行で検査）・ほかは固定文字列',
+      k: 'CAR_PARAM_DOC のキー（config.js の定数）', "t('cars.pdoc.' + k)": '自前のカタログ（i18n）の文言' },
+    renderCustomCarList: { k: 'const k = escapeHtml(def.key || \'\')（エスケープ済み）' },
+    uniqueCarKey: { base: 'HTML ではない（key の文字列を作る）', n: 'HTML ではない（数）' },
+    carNumRow: { tip: 'escapeHtml 済み', p: 'CAR_NUM_PARAMS／DRIFT_NUM_PARAMS の定数', numId: "'cf_num_' + 定数",
+      min: CONST, max: CONST, step: CONST },
+    renderCarForm: { ro: CONST, "on ? ' checked' : ''": CONST, "d.drift.trigger === 'power' ? ' selected' : ''": CONST,
+      "d.drift.trigger === 'liftoff' ? ' selected' : ''": CONST, "d.drift.brakeDrift ? ' checked' : ''": CONST },
+  },
+  'race_ui.js': {
+    renderRaceResult: { v: 'metaRows の値（G-4b で全部 esc を確認）', rec: PIECE, recordHtml: PIECE, 'rowCls.trim()': CONST,
+      'f.rank': NUM_RACE, 'colorOf(f.idx)': 'FLEET.colors（config.js の定数）', 'colorOf(d.idx)': 'FLEET.colors', 'colorOf(r.idx)': 'FLEET.colors',
+      "f.bestLapMs != null ? fmtTime(f.bestLapMs / 1000) : '—'": 'fmtTime（数でなければ --:--.--）',
+      "f.penaltiesSec ? '+' + f.penaltiesSec + 's' : '—'": NUM_RACE + '（crashCount×penaltySec）', 'd.lapsCompleted': NUM_RACE,
+      "r.muPeakPct != null ? r.muPeakPct + '%' : '—'": NUM_RACE, "r.betaPeakDeg != null ? r.betaPeakDeg + '°' : '—'": NUM_RACE,
+      crashCell: NUM_RACE + '＋esc 済みの内訳' },
+    renderOfficialDetail: { v: 'metaRows の値（G-4b で全部 esc を確認）',
+      "f.totalTimeMs != null ? fmtTime(f.totalTimeMs / 1000) : '—'": 'fmtTime（数でなければ --:--.--）',
+      "f.bestLapMs != null ? fmtTime(f.bestLapMs / 1000) : '—'": 'fmtTime（数でなければ --:--.--）',
+      "f.penaltiesSec ? '+' + esc(f.penaltiesSec) + 's' : '—'": 'esc 済み（result.json の値）' },
+    officialProgPanels: { i: 'forEach のインデックス' },
+    toggleProgSrc: { i: 'HTML ではない（querySelector の数）' },
+    renderRankings: { "i === 0 && r.points > 0 ? ' class=\"rank-record\"' : ''": CONST, 'i + 1': CONST, meMark: PIECE,
+      'r.points': NUM_AGG + '（pointsFor の +t[i]）', 'r.wins': NUM_AGG, 'r.podiums': NUM_AGG, 'r.finishes': NUM_AGG, 'r.dnfs': NUM_AGG,
+      'r.starts': NUM_AGG, 'x.n': NUM_AGG, "i === 0 ? ' class=\"rank-record\"' : ''": CONST, medal: CONST, crown: PIECE,
+      "r.bestLapMs != null ? fmtTime(r.bestLapMs / 1000) : '—'": 'fmtTime', 'p.entries': NUM_AGG, 'p.authors': NUM_AGG, 'p.wins': NUM_AGG,
+      "p.bestMs != null ? fmtTime(p.bestMs / 1000) : '—'": 'fmtTime', "d.author === me ? ' class=\"rank-record\"' : ''": CONST,
+      'd.recordsHeld': NUM_AGG, 'd.wins': NUM_AGG, 'd.podiums': NUM_AGG, 'd.events': NUM_AGG, titles: PIECE },
+    renderGhostStandings: { "passing ? ' passing' : ''": CONST, 'r.rank': 'ghost_gap の順位（数値）', 'a.colorOf(r.ci)': 'FLEET.colors',
+      "passing ? ' <span class=\"ghost-st-up\">▲</span>' : ''": CONST, rowsHtml: PIECE },
+    openGhostReplay: { 'colorOf(i)': 'FLEET.colors' },
+    renderGhostSectors: { 'FLEET.colors[c.ci % FLEET.colors.length]': 'FLEET.colors', "isBest ? 'sect-best' : ''": CONST,
+      "isBest ? ' ●' : ''": CONST, 'c.laps.length': '件数' },
+  },
+};
+for (const file of ['car_crud.js', 'race_ui.js']) {
+  const src = readFileSync(join(JS, file), 'utf8');
+  let subs;
+  try { subs = templateSubs(src); } catch (e) { ok(false, `${file}: 字句解析が通らない（${e.message}）`); continue; }
+  const allow = ALLOW[file];
+  const used = new Set();
+  const bad = [];
+  let auto = 0;
+  for (const r of subs) {
+    if (autoSafe(r.expr)) { auto++; continue; }
+    const why = allow[r.fn] && Object.prototype.hasOwnProperty.call(allow[r.fn], r.expr) ? allow[r.fn][r.expr] : null;
+    if (why) used.add(r.fn + '\u0000' + r.expr); else bad.push(`${file}:${r.line} ${r.fn} \${${r.expr}}`);
+  }
+  const stale = Object.entries(allow).flatMap(([fn, o]) => Object.keys(o).filter((e) => !used.has(fn + '\u0000' + e)).map((e) => `${fn} \${${e}}`));
+  console.log(`  ${file}: \${…} ${subs.length} 個（esc／fmtTime／t('…') ${auto}・一覧 ${subs.length - auto - bad.length}・一覧に無い ${bad.length}）`);
+  ok(bad.length === 0, `${file}: 一覧に無い \${…} が 0 個（実 ${bad.length}${bad.length ? ': ' + bad.join(' / ') : ''}）`);
+  ok(stale.length === 0, `${file}: 一覧の式がすべてソースにある（古い行 ${stale.length}${stale.length ? ': ' + stale.join(' / ') : ''}）`);
+}
+console.log('\nG-4b) 配線: race_ui.js の metaRows（renderRaceResult・renderOfficialDetail の表の値）は全部 esc');
+{
+  const src = readFileSync(join(JS, 'race_ui.js'), 'utf8');
+  const vals = [];
+  for (const m of src.matchAll(/metaRows(?: = \[|\.push\()/g)) {
+    // 対応する ] / ) までを取り、その中の [k, v] の v を読む
+    let k = m.index + m[0].length, depth = 1, q = null;
+    const start = k;
+    for (; k < src.length && depth > 0; k++) {
+      const c = src[k];
+      if (q) { if (c === '\\') k++; else if (c === q) q = null; continue; }
+      if (c === "'" || c === '"' || c === '`') { q = c; continue; }
+      if ('([{'.includes(c)) depth++; else if (')]}'.includes(c)) depth--;
+    }
+    const body = src.slice(start, k - 1);
+    // 各 [t('…'), 値] の値＝`, ` の後から、対応の取れた ] までを読む（値の中の括弧・文字列は数えない）
+    for (const p of body.matchAll(/\[t\('[^']+'\),\s*/g)) {
+      let j = p.index + p[0].length, dep = 0, qq = null;
+      for (; j < body.length; j++) {
+        const c = body[j];
+        if (qq) { if (c === '\\') j++; else if (c === qq) qq = null; continue; }
+        if (c === "'" || c === '"' || c === '`') { qq = c; continue; }
+        if ('([{'.includes(c)) dep++;
+        else if (')]}'.includes(c)) { if (dep === 0) break; dep--; }
+      }
+      vals.push({ line: src.slice(0, start).split('\n').length, v: body.slice(p.index + p[0].length, j).trim() });
+    }
+  }
+  const okv = (v) => wholeCall(v, 'esc') || v === "'<code>' + esc(res.verifyHash) + '</code>'";
+  const badv = vals.filter((x) => !okv(x.v));
+  ok(vals.length >= 17, `metaRows の値を読めた（${vals.length} 個・renderRaceResult 10＋renderOfficialDetail 7）`);
+  ok(badv.length === 0, `metaRows の値は全部 esc（esc でない値 ${badv.length}${badv.length ? ': ' + badv.map((x) => x.v).join(' / ') : ''}）`);
+}
+
+console.log('\nG-5) car_crud.js 車種表と編集フォーム（自作車・投稿車種・組込の上書き）— 是正前: パラメータ値・drift.grip・value="…" が生のまま');
+{
+  const store = new Map();
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, writable: true, value: {
+    getItem: (k) => (store.has(k) ? store.get(k) : null), setItem: (k, v) => { store.set(k, String(v)); }, removeItem: (k) => { store.delete(k); } } });
+  globalThis.confirm = () => true;
+  // 経路 ①: localStorage の自作車（initCarCrud が起動時に registerCarType）② 組込の上書き（applyCarOverride）③ 投稿車種（registerCarType）
+  store.set('rumicar.customCars', JSON.stringify([{ key: 'bl4_evil', name: 'BL4 evil', mass: XA, accel: XT, drift: { grip: XT, trigger: 'power' } }]));
+  store.set('rumicar.carOverrides', JSON.stringify({ normal_fr: { mass: XA } }));
+  const cfg = await import(pathToFileURL(join(JS, 'config.js')).href);
+  const shippedMass = cfg.CAR_TYPE_BY_KEY.normal_fr.mass;
+  const { initCarCrud } = await import(pathToFileURL(join(JS, 'car_crud.js')).href);
+  const CC = initCarCrud({ $: el, escapeHtml: ESC, carTypeName: (ct) => String(ct.name), logLine() {}, buildFleetColumns() {}, pruneSlotCarTypes() {}, submitToGithub() {} });
+  const comm = cfg.registerCarType({ key: 'bl4_comm', name: 'BL4 comm', brake: XT, drift: { grip: XA } });
+  comm.community = true;
+  CC.renderCarParamTable();
+  const h = el('carParamTable').innerHTML;
+  const rowOf = (name) => (h.split('<tr>').find((r) => r.includes(name)) || '');
+  const cells = (row) => [...row.matchAll(/<td[^>]*>([^]*?)<\/td>/g)].map((m) => unescH(m[1].replace(/<[^>]+>/g, '')));
+  for (const [label, name, want] of [
+    ['自作車（localStorage）', 'BL4 evil', { 1: XA, 2: XT, 10: 'grip ' + XT }],
+    ['投稿車種（registerCarType）', 'BL4 comm', { 3: XT, 10: 'grip ' + XA }],
+    ['組込の上書き（applyCarOverride）', '<td class="pname">ノーマル', { 1: XA }],
+  ]) {
+    const row = name.startsWith('<') ? (h.split('<tr>').find((r) => r.includes(name) && r.includes('car-ovr-reset')) || '') : rowOf(name);
+    const r = inert(row), c = cells(row);
+    const seen = Object.entries(want).every(([i, v]) => c[i] === v);
+    ok(row.length > 0 && inertOk(r) && seen, `車種表 ${label}: <img ${r.img}・onerror を持つタグ ${r.onTag}・&lt;img ${r.lt}・値は文字列のまま ${seen}（${J(Object.keys(want).map((i) => c[i]))}）`);
+  }
+  // 編集フォーム: 自作車の一覧の「編集」（customCarList の click 委譲）・組込の「編集」（carParamTable の click 委譲）・JSON → フォーム
+  const clickOn = (id, cls, key) => el(id).fire('click', { target: { closest: () => ({ dataset: { key }, classList: { contains: (c) => c === cls } }) } });
+  const formCases = [
+    ['自作車の「編集」', () => clickOn('customCarList', 'carlist-edit', 'bl4_evil'), { mass: XA, accel: XT, grip: XT }],
+    ['組込の上書きの「編集」', () => clickOn('carParamTable', 'car-ovr-edit', 'normal_fr'), { mass: XA }],
+    ['JSON → フォーム', () => { el('carOvrCancelBtn').fire('click'); el('carJsonInput').value = JSON.stringify({ key: 'k', name: 'n', mass: XA, slide: XT }); el('carFormFromJson').fire('click'); }, { mass: XA, slide: XT }],
+  ];
+  for (const [label, act, want] of formCases) {
+    let th = null;
+    try { act(); } catch (e) { th = e; }
+    const f = el('carForm').innerHTML;
+    const r = inert(f);
+    const got = {};
+    for (const p of Object.keys(want)) {
+      const num = tagsOf(f).find((x) => x.includes(`id="cf_num_${p}"`));
+      const rng = tagsOf(f).find((x) => x.includes(`data-num="cf_num_${p}"`));
+      got[p] = [num ? attrsOf(num).value : null, rng ? attrsOf(rng).value : null];
+    }
+    const same = Object.entries(want).every(([p, v]) => got[p][0] === v && got[p][1] === v);
+    ok(th === null && inertOk(r) && same, `編集フォーム ${label}: <img ${r.img}・onerror を持つタグ ${r.onTag}・&lt;img ${r.lt}・value 属性は元の文字列のまま ${same}${th ? '・例外 ' + th.message : ''}`);
+  }
+  // 正常値: 出荷車種の行の textContent は是正前の書き方（`${ct[c] != null ? ct[c] : '-'}`・`grip ${ct.drift.grip}`）と同じ
+  el('carOvrCancelBtn').fire('click');
+  el('carOvrBar').fire('click', { target: { closest: () => ({ dataset: {}, classList: { contains: (c) => c === 'car-ovr-clearall' } }) } });
+  ok(cfg.CAR_TYPE_BY_KEY.normal_fr.mass === shippedMass, `組込の上書きを全解除して出荷値へ戻った（normal_fr.mass ${cfg.CAR_TYPE_BY_KEY.normal_fr.mass}）`);
+  CC.renderCarParamTable();
+  const h2 = el('carParamTable').innerHTML;
+  const cols = ['mass', 'accel', 'brake', 'maxSpeed', 'spin', 'us', 'os', 'powerUs', 'powerOs'];
+  const builtin = cfg.CAR_TYPES.filter((ct) => !ct.custom && !ct.community);
+  let same = 0; const diff = [];
+  for (const ct of builtin) {
+    const row = h2.split('<tr>').find((r) => r.includes(`data-key="${escH(ct.key)}"`)) || '';
+    const got = cells(row).slice(1, 11);
+    const want = cols.map((c) => String(ct[c] != null ? ct[c] : '-')).concat([ct.drift ? `grip ${ct.drift.grip}` : '—']);
+    if (J(got) === J(want)) same++; else diff.push(`${ct.key}: ${J(got)} / ${J(want)}`);
+  }
+  ok(builtin.length === 6 && same === 6, `出荷車種 6 種の行の表示は是正前の書き方と同一（${same}/${builtin.length}${diff.length ? '・' + diff.join(' ; ') : ''}）`);
+  cfg.unregisterCarType('bl4_evil'); cfg.unregisterCarType('bl4_comm');
 }
 
 const line = '─'.repeat(64);

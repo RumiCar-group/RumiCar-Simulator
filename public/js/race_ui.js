@@ -49,7 +49,9 @@ function fieldCarLabeler(field) {
   return (ct) => {
     const d = defs.get(String(ct));
     const cur = CAR_TYPE_BY_KEY[String(ct)];
-    if (d && d.name && (!cur || cur.custom)) return String(d.name);
+    // BL4: 名前は持ち込みの carDef (他人が書いた entries) の値。String() は {"toString":1} のような値で投げ、結果ダイアログが
+    //   開かなかった。呼び出し側 (結果表・勝者バナー・ゴーストの凡例) は esc で包むので、文字列化は esc に任せる。
+    if (d && d.name && (!cur || cur.custom)) return d.name;
     return entryCarLabel(ct, d);
   };
 }
@@ -66,12 +68,13 @@ function renderRaceResult(res, meta) {
   const metaRows = [
     [t('race.meta.course'), esc(courseDisplayName(rc))],
     [t('race.meta.regime'), esc(t('fleet.regime.' + (meta.regime || 'tabletop')))],
-    [t('race.meta.laps'), String(meta.laps)],
+    [t('race.meta.laps'), esc(meta.laps)],
   ];
+  // BL4: 表の値 (下の `<td>${v}</td>`) は全部 esc で包む。予算は event.json の budget.total がそのまま届く (W5 の再実行検証)。
   if (meta.eventInfo) {   // W4 ローカル開催の注記 (クラス/予算/補充車)
     metaRows.push([t('event.meta.class'), esc(meta.eventInfo.classLabel)]);
-    if (meta.eventInfo.budget != null) metaRows.push([t('event.meta.budget'), String(meta.eventInfo.budget)]);
-    if (meta.eventInfo.fillerCount) metaRows.push([t('event.meta.filler'), String(meta.eventInfo.fillerCount)]);
+    if (meta.eventInfo.budget != null) metaRows.push([t('event.meta.budget'), esc(meta.eventInfo.budget)]);
+    if (meta.eventInfo.fillerCount) metaRows.push([t('event.meta.filler'), esc(meta.eventInfo.fillerCount)]);
   }
   metaRows.push(
     [t('race.meta.crash'), esc(meta.crashTxt)],
@@ -421,7 +424,7 @@ function renderOfficialDetail(race) {
     [t('official.meta.title'), esc(event.title || event.id || '')],
     [t('official.meta.course'), esc(courseDisplayName(event.course) || courseName || '')],
     [t('official.meta.class'), esc(t('event.class.' + cls))],
-    [t('official.meta.laps'), String((eventSpecOf(event, null) || { laps: '?' }).laps)],
+    [t('official.meta.laps'), esc((eventSpecOf(event, null) || { laps: '?' }).laps)],
     [t('official.meta.window'), esc(winTxt)],
     [t('official.meta.engine'), esc(event.engineVer || '?')],
     [t('official.meta.status'), esc(t('official.status.' + status))],
@@ -458,12 +461,13 @@ function renderOfficialDetail(race) {
     html += '<table class="race-tab"><thead><tr>' +
       [t('race.col.rank'), t('race.col.name'), t('official.col.author'), t('race.col.car'), t('race.col.time'), t('race.col.best'), t('race.col.pen')]
         .map((h) => `<th>${esc(h)}</th>`).join('') + '</tr></thead><tbody>';
+    // BL4: 順位・ペナルティは result.json の値がそのまま届く (renderRaceResult の runRace の数値とは違う)。esc で包む。
     for (const f of result.finishers) {
       const carLabel = entryCarLabel(f.carType, f.carDef);
-      html += `<tr><td>${f.rank}</td><td>${esc(f.name || '')}</td><td>${esc(f.author || '')}</td><td>${esc(carLabel)}</td>` +
+      html += `<tr><td>${esc(f.rank)}</td><td>${esc(f.name || '')}</td><td>${esc(f.author || '')}</td><td>${esc(carLabel)}</td>` +
         `<td>${f.totalTimeMs != null ? fmtTime(f.totalTimeMs / 1000) : '—'}</td>` +
         `<td>${f.bestLapMs != null ? fmtTime(f.bestLapMs / 1000) : '—'}</td>` +
-        `<td>${f.penaltiesSec ? '+' + f.penaltiesSec + 's' : '—'}</td></tr>`;
+        `<td>${f.penaltiesSec ? '+' + esc(f.penaltiesSec) + 's' : '—'}</td></tr>`;
     }
     html += '</tbody></table>';
   } else {
