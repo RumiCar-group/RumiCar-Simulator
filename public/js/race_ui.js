@@ -62,6 +62,10 @@ function fieldCarLabeler(field) {
 //   数にできなければ NaN (fmtTime は --:--.--) にする。投げない値は従来の式と同じ結果 (String(v)・+v)。wf_bl1_ui.mjs G-6 が測る。
 function asText(v) { try { return String(v); } catch (e) { return '?'; } }
 function asNum(v) { try { return +v; } catch (e) { return NaN; } }
+// BL4 (層 4 往復 2): 欄ごとの asText／asNum は補助で、利用者の操作の入口 (🏆 の詳細・再実行検証・🍴 fork・🏅・打破通知・👻) は
+//   外側で 1 回 try で包み、投げたら既存の 1 行 (log.err.setup＝「【エラー】…」) を出す (欄を 1 つ見落としても操作が無言で
+//   止まらない)。errText は例外の文言 (例外そのものが文字列にできなくても投げない)。
+function errText(e) { try { return String((e && e.message) || e); } catch (x) { return '?'; } }
 
 function renderRaceResult(res, meta) {
   const carLabel = meta.carLabel || carTypeLabel;   // BE3: 持ち込み車種のあるレースは field 由来のラベル
@@ -74,7 +78,8 @@ function renderRaceResult(res, meta) {
   // --- メタ ---
   const metaRows = [
     [t('race.meta.course'), esc(courseDisplayName(rc))],
-    [t('race.meta.regime'), esc(t('fleet.regime.' + (meta.regime || 'tabletop')))],
+    // BL4 (層 4 往復 2・F1): regime は再実行検証では event.json の値 (resolveEventSpec が素通しする)。連結の前に文字列へ。
+    [t('race.meta.regime'), esc(t('fleet.regime.' + asText(meta.regime || 'tabletop')))],
     [t('race.meta.laps'), esc(meta.laps)],
   ];
   // BL4: 表の値 (下の `<td>${v}</td>`) は全部 esc で包む。予算は event.json の budget.total がそのまま届く (W5 の再実行検証)。
@@ -418,7 +423,9 @@ async function selectOfficialRace(id) {
   if (!race) { $('ofDetail').innerHTML = `<p class="race-empty">${escapeHtml(t('official.fetchFail'))}</p>`; return; }
   officialCurrent = race;
   officialCurrentDir = id;          // 投稿先はこの実在ディレクトリ名で組む (AZ4)
-  renderOfficialDetail(race);
+  // BL4 (層 4 往復 2): 詳細の描画が大会の値で投げても、選択欄の change の外へ漏らさず 1 行で知らせる (入口の try)。
+  try { renderOfficialDetail(race); }
+  catch (e) { $('ofDetail').innerHTML = `<p class="race-empty">${escapeHtml(t('log.err.setup', { e: errText(e) }))}</p>`; }
 }
 
 // 1 大会の詳細 (メタ・エントリー・公式結果・再実行検証ボタン) を描画。
@@ -478,9 +485,10 @@ function renderOfficialDetail(race) {
       [t('race.col.rank'), t('race.col.name'), t('official.col.author'), t('race.col.car'), t('race.col.time'), t('race.col.best'), t('race.col.pen')]
         .map((h) => `<th>${esc(h)}</th>`).join('') + '</tr></thead><tbody>';
     // BL4: 順位・ペナルティは result.json の値がそのまま届く (renderRaceResult の runRace の数値とは違う)。esc で包む。
-    //   時間は割り算の前に数へ (asNum)。null の 1 件は空の行にする (順位表の並びと 📖 の優勝者＝先頭を変えない)。
-    for (const f0 of result.finishers) {
-      const f = f0 == null ? {} : f0;
+    //   時間は割り算の前に数へ (asNum)。object でない 1 件 (null・数・文字列) は 7 つの空のセルの行にする (順位表の並びと
+    //   📖 の優勝者＝先頭を変えない。層 4 往復 2 の F4: 旧実装は {} として描き、順位のセルに「undefined」と出た)。
+    for (const f of result.finishers) {
+      if (f === null || typeof f !== 'object') { html += '<tr>' + '<td></td>'.repeat(7) + '</tr>'; continue; }
       const carLabel = entryCarLabel(f.carType, f.carDef);
       html += `<tr><td>${esc(f.rank)}</td><td>${esc(f.name || '')}</td><td>${esc(f.author || '')}</td><td>${esc(carLabel)}</td>` +
         `<td>${f.totalTimeMs != null ? fmtTime(asNum(f.totalTimeMs) / 1000) : '—'}</td>` +
@@ -511,7 +519,7 @@ function renderOfficialDetail(race) {
   html += '<div id="ofVerifyNote"></div>';
 
   $('ofDetail').innerHTML = html;
-  $('ofVerify').addEventListener('click', () => verifyOfficialLocally(race));
+  $('ofVerify').addEventListener('click', () => verifyOfficialClick(race));
 
   // エントリー欄: 受付中のみ表示し、既定の車両名を現在のアクティブ車に。
   const entryOpen = status === 'open';
@@ -522,6 +530,16 @@ function renderOfficialDetail(race) {
 // BI2: event → runRace の spec の材料 (既定込み)。古い race_event.js (resolveEventSpec が無い) なら null。
 function eventSpecOf(event, course) {
   return typeof eventNS.resolveEventSpec === 'function' ? eventNS.resolveEventSpec(event, course) : null;
+}
+
+// BL4 (層 4 往復 2): 「再実行検証」の click の入口。verifyOfficialLocally の各段 (コースの解決・spec・確定エントリー列・
+//   runRace) はそれぞれの 1 行で知らせるが、それ以外 (結果ダイアログの描画 renderRaceResult 等) で投げても click の外へ
+//   漏らさず、注記の欄に 1 行 (log.err.setup) を足す。注記は押すたびに作り直す (どの経路も最後に注記を書く＝見た目は従来と同じ)。
+function verifyOfficialClick(race) {
+  const note = $('ofVerifyNote');
+  if (note) note.innerHTML = '';
+  try { verifyOfficialLocally(race); }
+  catch (e) { if (note) note.innerHTML += `<p class="official-verify-note warn">${escapeHtml(t('log.err.setup', { e: errText(e) }))}</p>`; }
 }
 
 // 締切時の確定エントリー列をローカル決定論エンジンで再実行し、公式 verifyHash と照合 (参考)。
@@ -728,17 +746,48 @@ const progLangOf = (key) => (PROGRAM_BY_KEY[key] || {}).lang || null;
 // BL4 (層 4 往復 1): 1 つの大会の値 (他人が書いた entries の program.lang・result.json の author／rank／時間・event の
 //   class／points 等) が文字列・数にできない値 ({"toString":1}) だと、集計 (race_ladder.js) や 🏅 の選手権・言語別の表
 //   (race_season.js) が投げ、🏅 の全大会・打破通知・👻 が出なかった (BH1 は object でない行を飛ばしたが、値の型は見ていない)。
-//   集計と、renderRankings が同じ集計から作る表 (seasonProbe) が投げたら、単独で通らない大会だけを外して集計し直す
-//   (外した大会は 🏆 の詳細では見える)。投げない限り集計の結果は従来と同じ (race_ladder.js・race_season.js は不変)。
-const seasonProbe = (a) => { championships(a.records, a.dnfs || []); langBoards(a.records); langProfiles(a.records); return a; };
+//   集計と 🏅 の本文の組み立てが投げたら、通る大会の組だけで集計し直す (外した大会は 🏆 の詳細では見える)。
+//   投げない限り集計の結果は従来と同じ (race_ladder.js・race_season.js は不変)。
+// BL4 (層 4 往復 2・F2): 往復 1 の「単独で通らない大会を外す」は、どちらも単独なら通る 2 大会が組み合わさったときだけ投げる
+//   場合 (同じクラス×コースで classifiedMs と bestLapMs が並び、片方の name か bestLapMs が文字列・数にできない値＝
+//   race_ladder.js の並べ替えの名前比較はタイのときだけ走る) に、外した後の集計が try の外で投げ、🏅 に「一覧を取得できて
+//   いません」と誤った文言が出た (打破通知・👻 も消えた)。∴ 試すのは 🏅 の本文の組み立て (rankingsHtml＝描画が使う同じ
+//   関数。集計・選手権・言語別・抜かれた記録の行・ドライバー) まで含めた全部にし、通らなければ大会を 1 つずつ足して通る組だけを
+//   残す: 文字列にできない値を含まない大会 (hasOpaque が偽) を一覧の順に先に、含む大会を後に足す (組み合わせで投げるときは
+//   読めない値を持つ側が外れる)。集計の入力は一覧の順のまま (aggregate の決定性)。最後に通った組がそのまま ladder なので、
+//   描画で同じ組を組み立て直しても投げない。外した大会は 🏅・打破通知・👻 から消える。**告知はしない** (意味の合う既存の
+//   文言キーが無い＝rank.partial は「取得できなかった」。決定ログ BL4 fix2 に利用者への影響を書いた)。
+//   1 つも残らないのに外した大会がある (＝検証済の大会がどれも描けない。大会の値でなく描画の側が投げている可能性) ときは、
+//   空の表 (「まだ記録がありません」) と言い切らず、その例外を 🏅 に 1 行で出す (ladder.error)。
+function hasOpaque(v, depth = 0) {
+  if (typeof v === 'symbol') return true;
+  if (v === null || typeof v !== 'object' || depth > 32) return false;
+  try {
+    String(v);
+    for (const k of Object.keys(v)) if (hasOpaque(v[k], depth + 1)) return true;
+    return false;
+  } catch (e) { return true; }
+}
 function aggregateNow() {
   const opts = { progLang: progLangOf, courseUnit: raceCourseUnit };
-  try {
-    ladder = seasonProbe(aggregate(officialData, opts));
-  } catch (e) {
-    const usable = (officialData || []).filter((r) => { try { seasonProbe(aggregate([r], opts)); return true; } catch (e2) { return false; } });
-    ladder = aggregate(usable, opts);
+  const all = officialData || [];
+  const me = loadMe();
+  const tryAgg = (races) => { const a = aggregate(races, opts); rankingsHtml(a, me); return a; };
+  let firstErr = null;
+  try { ladder = tryAgg(all); return ladder; } catch (e) { firstErr = e; }
+  const opaque = all.map((r) => (hasOpaque(r) ? 1 : 0));
+  const order = all.map((_, i) => i).sort((i, j) => (opaque[i] - opaque[j]) || (i - j));
+  const kept = new Set();
+  let best = null;
+  for (const i of order) {
+    kept.add(i);
+    try { best = tryAgg(all.filter((_, k) => kept.has(k))); } catch (e) { kept.delete(i); }
   }
+  if (!best) {
+    try { best = aggregate([], opts); } catch (e) { best = { records: [], dnfs: [], boards: [], drivers: [], verifiedCount: 0 }; }
+  }
+  if (!best.verifiedCount && kept.size < all.length) best.error = firstErr;
+  ladder = best;
   return ladder;
 }
 // 枠の鍵・見出し。古い race_ladder.js がキャッシュに残るブラウザ (BA1) では枠が courseKey/courseLabel を持たないので、
@@ -797,16 +846,19 @@ function officialListChanged() {
 
 // 起動時の打破通知 (W_spec §8): 自分の公式記録 vs 世界ベスト。抜かれていれば通知1行＋差 (gap)。
 // BF4: main.js は投稿コースの一覧を読み終えてから呼ぶ (枠の解決が一覧に依る)。ここでも今の状態で集計し直す。
+// BL4 (層 4 往復 2): 入口の try (投げたら 1 行・起動処理の catch で黙って消さない)。
 function checkBeaten() {
-  const me = loadMe();
-  if (!me || !officialDataLoaded) return;
-  const beaten = beatenChecks(aggregateNow().records, me);
-  if (!beaten.length) return;
-  const top = beaten.slice(0, 3);
-  for (const b of top) {
-    logLine(t('log.w6.beaten', { course: boardLabel(b), cls: t('event.class.' + asText(b.cls)), who: b.world.author, gap: (b.gapMs / 1000).toFixed(2) }));
-  }
-  if (beaten.length > top.length) logLine(t('log.w6.beatenMore', { n: beaten.length - top.length }));
+  try {
+    const me = loadMe();
+    if (!me || !officialDataLoaded) return;
+    const beaten = beatenChecks(aggregateNow().records, me);
+    if (!beaten.length) return;
+    const top = beaten.slice(0, 3);
+    for (const b of top) {
+      logLine(t('log.w6.beaten', { course: boardLabel(b), cls: t('event.class.' + asText(b.cls)), who: b.world.author, gap: (b.gapMs / 1000).toFixed(2) }));
+    }
+    if (beaten.length > top.length) logLine(t('log.w6.beatenMore', { n: beaten.length - top.length }));
+  } catch (e) { logLine(t('log.err.setup', { e: errText(e) })); }
 }
 
 // ---- ③ 記録プログラム閲覧＋fork (締切後・renderOfficialDetail から呼ぶ) ----
@@ -836,17 +888,22 @@ function toggleProgSrc(i, btn) {
 
 // 記録のプログラムを fork: 原作者クレジットをソース先頭に刻み、アクティブな車のエディタへ取り込む。
 // クレジットはテキストに残るので共有 (shareProgram) しても帰属が永続する (W_spec §8)。
+// BL4 (層 4 往復 2): 入口の try (投げたら 1 行)。言語 (program.lang) が文字列でないエントリーは取り込まない: 旧実装は
+//   その値のまま車の言語 (slot.lang) と言語の選択欄に入れた (main.js setActiveProgram)＝以後の実行・保存が壊れた値を持つ。
 function forkOfficialEntry(i) {
-  if (!officialCurrent) return;
-  const e = officialCurrent.entries[i]; if (!e) return;
-  const src = (e.program && e.program.src) || e.src || '';
-  const lang = (e.program && e.program.lang) || e.lang || 'c';
-  const who = e.author || e.name || '?';
-  const evTitle = (officialCurrent.event && (officialCurrent.event.title || officialCurrent.event.id)) || '';
-  const credit = '// ' + t('official.creditHead', { who, event: evTitle }) + '\n';
-  setActiveProgram(credit + asText(src), lang);   // BL4: src は他人が書いた entries の値 (文字列にできなければ '?')
-  logLine(t('official.forked', { who }));
-  $('dlgOfficial').close();   // エディタ (車カード) が見えるよう公式ダイアログを閉じる
+  try {
+    if (!officialCurrent) return;
+    const e = officialCurrent.entries[i]; if (!e) return;
+    const src = (e.program && e.program.src) || e.src || '';
+    const lang = (e.program && e.program.lang) || e.lang || 'c';
+    if (typeof lang !== 'string') { logLine(t('log.err.setup', { e: 'program.lang' })); return; }
+    const who = e.author || e.name || '?';
+    const evTitle = (officialCurrent.event && (officialCurrent.event.title || officialCurrent.event.id)) || '';
+    const credit = '// ' + t('official.creditHead', { who, event: evTitle }) + '\n';
+    setActiveProgram(credit + asText(src), lang);   // BL4: src は他人が書いた entries の値 (文字列にできなければ '?')
+    logLine(t('official.forked', { who }));
+    $('dlgOfficial').close();   // エディタ (車カード) が見えるよう公式ダイアログを閉じる
+  } catch (e) { logLine(t('log.err.setup', { e: errText(e) })); }
 }
 
 // ---- ⑤ 🏅 ランキング (クラス別ラダー＋ドライバープロフィール／称号・検証済記録のみ) ----
@@ -899,23 +956,37 @@ function titleLabel(x) {
   return t('rank.title.podium', { n: x.n });
 }
 
+// BL4 (層 4 往復 2): 入口の try (投げたら 🏅 に 1 行)。本文の組み立ては rankingsHtml に分け、aggregateNow が同じ関数で
+//   大会の組を試す (通った組だけを描く＝ここで投げるのは描画の側の不具合だけ)。
 function renderRankings() {
   const esc = escapeHtml;
-  const me = loadMe();
-  // BH1: 公式記録を読み終えていないのに空の集計を描くと「まだ記録がありません」と言い切ってしまう。読み込み中
-  //   (一覧が届いていない・詳細を取得中) は「読み込み中」、一覧を取得できていないときはそう出す (「再読込」で取り直せる)。
-  if (!officialDataLoaded) {
-    const loading = !!officialDataLoad || racesListState === 'pending';
-    $('rankBody').innerHTML = loading ? `<p class="hint">${esc(t('rank.loading'))}</p>` : `<p class="race-empty">${esc(listFailText())}</p>`;
-    return;
+  try {
+    // BH1: 公式記録を読み終えていないのに空の集計を描くと「まだ記録がありません」と言い切ってしまう。読み込み中
+    //   (一覧が届いていない・詳細を取得中) は「読み込み中」、一覧を取得できていないときはそう出す (「再読込」で取り直せる)。
+    if (!officialDataLoaded) {
+      const loading = !!officialDataLoad || racesListState === 'pending';
+      $('rankBody').innerHTML = loading ? `<p class="hint">${esc(t('rank.loading'))}</p>` : `<p class="race-empty">${esc(listFailText())}</p>`;
+      return;
+    }
+    const data = aggregateNow();   // BF4: 今の状態 (投稿一覧・言語) で枠を決める
+    // BH1: 一覧にあるのに詳細を取得できなかった大会があるときは、集計から欠けていると言う。旧実装は黙って飛ばしたので、
+    //   オフラインで全部を取得できなかったときも「まだ検証済の公式記録がありません」と言い切っていた。
+    const missedNote = officialDataMissed > 0 ? `<p class="race-empty rank-partialnote">${esc(partialText(officialDataMissed))}</p>` : '';
+    if (data.error) { $('rankBody').innerHTML = missedNote + `<p class="race-empty">${esc(t('log.err.setup', { e: errText(data.error) }))}</p>`; return; }
+    const body = rankingsHtml(data, loadMe());
+    $('rankBody').innerHTML = body == null ? (missedNote || `<p class="race-empty">${esc(t('rank.empty'))}</p>`) : missedNote + body;
+  } catch (e) {
+    $('rankBody').innerHTML = `<p class="race-empty">${esc(t('log.err.setup', { e: errText(e) }))}</p>`;
   }
-  const data = aggregateNow();   // BF4: 今の状態 (投稿一覧・言語) で枠を決める
+}
+
+// 🏅 の本文 (集計 data・自分 me)。検証済の記録が無ければ null (呼び出し側が「まだ記録がありません」・取得の欠けを出す)。
+// 純粋な組み立て (DOM に触れない)。aggregateNow が大会の組を試すのにも使う (BL4 層 4 往復 2)。
+function rankingsHtml(data, me) {
+  const esc = escapeHtml;
   const { boards, drivers, verifiedCount } = data;
-  // BH1: 一覧にあるのに詳細を取得できなかった大会があるときは、集計から欠けていると言う。旧実装は黙って飛ばしたので、
-  //   オフラインで全部を取得できなかったときも「まだ検証済の公式記録がありません」と言い切っていた。
-  const missedNote = officialDataMissed > 0 ? `<p class="race-empty rank-partialnote">${esc(partialText(officialDataMissed))}</p>` : '';
-  if (!verifiedCount || !boards.length) { $('rankBody').innerHTML = missedNote || `<p class="race-empty">${esc(t('rank.empty'))}</p>`; return; }
-  let html = missedNote + `<p class="hint rank-verifiednote">${esc(t('rank.verified'))} · ${esc(t('rank.intro'))}</p>`;
+  if (!verifiedCount || !boards.length) return null;
+  let html = `<p class="hint rank-verifiednote">${esc(t('rank.verified'))} · ${esc(t('rank.intro'))}</p>`;
   // AK6: ボード上に当時のエンジン版で樹立された記録が混ざるとき、現行で完全再現しない可能性を1行で正直明示
   // (記録は除外せず条件付きで保持・尊重)。全記録が現行版なら出さない。
   if (data.records.some((r) => r.engineVer && r.engineVer !== APP_VERSION)) {
@@ -1025,7 +1096,7 @@ function renderRankings() {
       `<td>${d.recordsHeld}</td><td>${d.wins}</td><td>${d.podiums}</td><td>${d.events}</td><td>${titles}</td></tr>`;
   }
   html += '</tbody></table>';
-  $('rankBody').innerHTML = html;
+  return html;
 }
 
 // ---- ① 👻 ゴースト対戦 (決定論リプレイをコース上に重ねる・animateは UI のみ・物理非参加) ----
@@ -1055,7 +1126,8 @@ function entryForRecord(race, rec) {
   if (!race || !race.entries) return null;
   let e = rec.author ? findEntry(race.entries, rec.author, rec.name) : null;
   if (!e && rec.programRef) {
-    const base = String(rec.programRef).split('/').pop().replace(/\.json$/i, '');
+    // BL4 (層 4 往復 2・F3): programRef は result.json の値 (文字列にできなければ '?'＝どのエントリーの作者とも一致しない)。
+    const base = asText(rec.programRef).split('/').pop().replace(/\.json$/i, '');
     e = race.entries.find((x) => (x.author || '') === base);
   }
   return e || null;
@@ -1064,7 +1136,11 @@ function entryForRecord(race, rec) {
 // 👻 あなた vs 世界ベスト: アクティブ車と、このクラス×コースの世界ベスト記録を同じ時間軸で
 // ゴースト対戦させ差を体感する (interact=false で衝突させず純粋に走りを並べる・ローカル参考)。
 // BF4: course は描画した枠の鍵 (ボタンの data-course)。世界ベストの記録が出た大会のコースで走らせる。
+// BL4 (層 4 往復 2): 入口の try (main.js の rankBody の click 委譲から呼ばれる。投げたら 1 行)。
 function ghostVsWorld(cls, course) {
+  try { ghostVsWorldRun(cls, course); } catch (e) { logLine(t('log.err.setup', { e: errText(e) })); }
+}
+function ghostVsWorldRun(cls, course) {
   if (!ladder) return;
   const rec = worldBest(ladder.boards, cls, course);
   if (!rec) { logLine(t('ghost.none')); return; }

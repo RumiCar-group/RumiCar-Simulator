@@ -61,8 +61,17 @@
 //    再実行検証・🏅 の集計・打破通知・👻 の 6 入口で例外が漏れない表（race_ui.js の asText／asNum・aggregateNow の
 //    「単独で通らない大会を外す」）・結果ダイアログの t()（:115 新記録・:123 最速ラップ・:127 勝者）・🏆 の公式記録の 1 行／
 //    旧版の注記・main.js carTypeName（投稿車種の name）・carTypeLabel・loadCommunityCars（key が文字列にできない投稿）。
+//    G-6（層4 往復 2）欄は event・entries・result の全部の葉と途中の object（regime・maxSec・crashRule・physicsMode・recon・wear・
+//    minField・result の class／course／regime／laps・finishers[].programRef／classifiedMs・entries[].carDef の全パラメータ）。
+//    大会は 2 つ（正常な bl4-h は bl4-f の 2 位と classifiedMs・bestLapMs が並ぶ＝race_ladder の名前比較が走る）で、🏅 から正常な
+//    bl4-h が外れたら赤。各入口は「正常に描く／個別の 1 行」だけが緑（入口の try が拾った＝欄ごとの防御の漏れも赤）。F4（finishers の
+//    object でない 1 件は空の行）・F2（単独なら通り組で投げる 2 大会・一覧の順は両方）。G-6e 入口の try そのもの＝依存
+//    （courseDisplayName・carTypeLabel・setActiveProgram）を投げさせて 🏆 詳細・再実行検証・👻・🍴・🏅（1 つも残らない／描画だけ
+//    投げる）が「【エラー】…」の 1 行を出す。打破通知の try は依存の側から届かない（漏れないことだけを測る）。
 //    赤になる章（2026-10-16 の実測・--root 8248a58＝BL3 後・BL4 前）: 件数は決定ログ BL4 結果。--root 8a4bd2e（BL4 初版）＝
-//    G-4（renderOfficialDetail の fmtTime(asNum(…)) の 2 行）・G-6。実ブラウザは browser/check_bl4_escape.mjs
+//    G-4（renderOfficialDetail の fmtTime(asNum(…)) の 2 行）・G-6。--root b8c7e21（層4 往復 1）＝G-4（renderRankings を
+//    rankingsHtml に分けた 2 行）・G-6 の表（regime・タイの name／bestLapMs・programRef・🍴 の言語 の 16 行）・F4・F2 の 4 行・
+//    G-6e の 7 行。実ブラウザは browser/check_bl4_escape.mjs
 //    （自作車の車種表と編集フォームを実画面で開き、img 要素 0・alert 0）。
 //
 // 使い方: node wf_bl1_ui.mjs              … 検査
@@ -601,11 +610,15 @@ const logs = [];
 // 車種の表示名の依存注入。C〜F 章は従来どおり key の文字列、G 章は main.js の entryCarLabel（product の本文）に差し替える。
 let ECL = (k) => String(k || '');
 let CTL = (k) => String(k);   // G-6 は main.js の carTypeLabel（product の本文）に差し替える
+// G-6／G-6e（層4 往復 2）: コースの表示名と 🍴 の取り込み先も差し替えられるようにする（G-6 は呼び出しの引数を記録・G-6e は投げさせる）。
+const CDN0 = (c) => (c && typeof c === 'object' ? c.name : String(c || ''));
+let CDN = CDN0;
+let SAP = () => {};
 const ui = (await import(UI_URL)).initRaceUI({
   $: el, escapeHtml: escH, logLine: (x) => logs.push(String(x)),
   activeSlot: () => ({ name: 'ME', lang: 'c', src: PROGRAM_BY_KEY.normal_fr.code, carType: 'normal_fr' }),
-  exitEdit() {}, courseDisplayName: (c) => (c && typeof c === 'object' ? c.name : String(c || '')),
-  carTypeLabel: (k) => CTL(k), entryCarLabel: (k, d) => ECL(k, d), setActiveProgram() {}, playCountdown() {},
+  exitEdit() {}, courseDisplayName: (c) => CDN(c),
+  carTypeLabel: (k) => CTL(k), entryCarLabel: (k, d) => ECL(k, d), setActiveProgram: (c, l) => SAP(c, l), playCountdown() {},
   resolveRaceCourse: (ref) => (ref === 'オーバル' ? OVAL : null), submitToGithub() {}, raceCourseUnit: undefined,
 });
 const SRC_C = PROGRAM_BY_KEY.normal_fr.code, SRC_PY = PROGRAM_BY_KEY.py_normal_fr.code;
@@ -950,7 +963,7 @@ const ALLOW = {
       "f.penaltiesSec ? '+' + esc(f.penaltiesSec) + 's' : '—'": 'esc 済み（result.json の値）' },
     officialProgPanels: { i: 'forEach のインデックス' },
     toggleProgSrc: { i: 'HTML ではない（querySelector の数）' },
-    renderRankings: { "i === 0 && r.points > 0 ? ' class=\"rank-record\"' : ''": CONST, 'i + 1': CONST, meMark: PIECE,
+    rankingsHtml: { "i === 0 && r.points > 0 ? ' class=\"rank-record\"' : ''": CONST, 'i + 1': CONST, meMark: PIECE,
       'r.points': NUM_AGG + '（pointsFor の +t[i]）', 'r.wins': NUM_AGG, 'r.podiums': NUM_AGG, 'r.finishes': NUM_AGG, 'r.dnfs': NUM_AGG,
       'r.starts': NUM_AGG, 'x.n': NUM_AGG, "i === 0 ? ' class=\"rank-record\"' : ''": CONST, medal: CONST, crown: PIECE,
       "r.bestLapMs != null ? fmtTime(asNum(r.bestLapMs) / 1000) : '—'": 'fmtTime（割り算の前に asNum＝G-6）', 'p.entries': NUM_AGG, 'p.authors': NUM_AGG, 'p.wins': NUM_AGG,
@@ -1112,7 +1125,7 @@ console.log('\nG-5) car_crud.js 車種表と編集フォーム（自作車・投
   cfg.unregisterCarType('bl4_evil'); cfg.unregisterCarType('bl4_comm');
 }
 
-console.log('\nG-6) 層4 往復 1（F1／F3／F4）: 文字列にできない値の同族 — t() の差し込み・🏆 詳細／🍴／再実行検証／🏅／打破通知／👻 を値の欄ごとに・車種名');
+console.log('\nG-6) 層4 往復 1・2（F1〜F4）: 文字列にできない値の同族 — t() の差し込み・🏆 詳細／🍴／再実行検証／🏅／打破通知／👻 を値の欄ごとに・車種名');
 // 是正前（8a4bd2e）: i18n.js t() の `s.split('{k}').join(vars[k])` は join が値を文字列にするところで TypeError を投げ、
 // t() を esc の前に呼ぶ全部の経路（race_ui の勝者・最速ラップ・公式結果の 1 行・旧版の注記 等）が止まった。
 // 設計: 差し込みの 1 か所（i18n.js t()）で守る。join が投げたときだけ String(v)（Symbol は "Symbol()"）、それも投げれば '?'
@@ -1165,21 +1178,46 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
   console.log(`  t(…, {…}) の呼び出し（差し込みのある t・ファイル別）: ${counts.map(([f, n]) => `${f} ${n}`).join('・')}＝計 ${counts.reduce((a, [, n]) => a + n, 0)}`);
 }
 
-// G-6b: 🏆 詳細（selectOfficialRace → renderOfficialDetail）・「再実行検証」（ofVerify の click → verifyOfficialLocally →
-//   renderRaceResult）・🏅 の集計（loadAllOfficialData → renderRankings）・👻（ghostVsWorld）を、大会（event／entries／result）の
-//   値の欄を 1 つずつ文字列にできない値に替えて呼び、例外が利用者の操作の外へ漏れないこと（欄 × 入口の表）。
+// G-6b: 🏆 詳細（selectOfficialRace → renderOfficialDetail）・🍴 fork・「再実行検証」（ofVerify の click → verifyOfficialLocally →
+//   renderRaceResult）・🏅 の集計（loadAllOfficialData → renderRankings）・打破通知（checkBeaten）・👻（ghostVsWorld）を、大会
+//   （event／entries／result）の値の欄を 1 つずつ文字列にできない値に替えて呼ぶ（欄 × 入口の表）。
 //   JSON で届く値（上流の取得は JSON）＝{"toString":1}。Object.create(null)・Symbol() は JSON から作れないが、同じ表で試す（複製しない）。
+//   層4 往復 2: 欄は event・entries・result の**全部の葉と途中の object**（regime・maxSec・crashRule・physicsMode・recon・wear・
+//   minField・result の class／course／regime／laps・finishers[].programRef／classifiedMs・entries[].carDef の全パラメータと drift.*）。
+//   大会は 2 つ（bl4-f＝値を替える側・bl4-h＝正常で、bl4-f の 2 位〔b2〕と classifiedMs・bestLapMs が並ぶ＝race_ladder の
+//   並べ替えの名前比較が走る）。各入口の判定: ok／入口の try が拾った（「【エラー】…」の 1 行＝欄ごとの防御の漏れ・この表では赤）／
+//   例外が漏れた（赤）／無言（赤）／🏅 から正常な bl4-h が外れた（赤）。入口の try そのものは G-6e が依存の側から投げて測る。
 {
   ECL = L6.entryCarLabel; CTL = L6.carTypeLabel;
+  const CD = () => ({ ...JSON.parse(JSON.stringify(cfg6.CAR_TYPE_BY_KEY.drift_ff)), key: 'bl4_cd', name: 'CD' });
   const RICH = () => ({
     event: { id: 'bl4-f', title: 'T', course: 'オーバル', laps: 1, class: 'open', engineVer: 'v0.0.1', season: 'S1', points: [10, 8],
-      entryWindow: { open: '2026-01-01T00:00:00Z', close: '2026-01-02T00:00:00Z' } },
-    entries: [ent('e1', 'a1', 'c', { k: 0, intro: 'I1' }), ent('e2', 'b2', 'py', { k: 1 })],
-    result: { eventId: 'bl4-f', verifyHash: 'h', engineVer: 'v0.0.1', exec: 'x', finishers: [
-      { rank: 1, name: 'e1', author: 'a1', carType: 'normal_fr', totalTimeMs: 1000, bestLapMs: 900, penaltiesSec: 2 },
-      { rank: 2, name: 'e2', author: 'b2', carType: 'normal_fr', totalTimeMs: 2000, bestLapMs: 1000, penaltiesSec: 0 }],
+      regime: 'tabletop', maxSec: 120, crashRule: { rejoin: true, penaltySec: 3 }, interact: true, physicsMode: 'dynamic', recon: 0, wear: false,
+      minField: 3, entryWindow: { open: '2026-01-01T00:00:00Z', close: '2026-01-02T00:00:00Z' } },
+    entries: [ent('e1', 'a1', 'c', { k: 0, intro: 'I1', carDef: CD() }), ent('e2', 'b2', 'py', { k: 1 })],
+    result: { eventId: 'bl4-f', verifyHash: 'h', engineVer: 'v0.0.1', exec: 'x', class: 'open', course: 'オーバル', regime: 'tabletop', laps: 1,
+      finishers: [
+        { rank: 1, name: 'e1', author: 'a1', carType: 'normal_fr', totalTimeMs: 1000, bestLapMs: 900, penaltiesSec: 2, programRef: 'entries/e1.json', classifiedMs: 3000 },
+        { rank: 2, name: 'e2', author: 'b2', carType: 'normal_fr', totalTimeMs: 2000, bestLapMs: 1000, penaltiesSec: 0, programRef: 'entries/e2.json', classifiedMs: 2000 }],
       dnf: [{ name: 'e3', author: 'c3', carType: 'normal_fr', lapsCompleted: 0, reason: 'crash' }] },
   });
+  // 正常な 2 つ目の大会（同じクラス×コース・b2 と並ぶ 1 件）
+  const H = () => ({
+    event: { id: 'bl4-h', title: 'H', course: 'オーバル', laps: 1, class: 'open', engineVer: 'v0.0.1', season: 'S1' },
+    entries: [ent('h1n', 'h1', 'c', { k: 0 })],
+    result: { eventId: 'bl4-h', verifyHash: 'hh', engineVer: 'v0.0.1', exec: 'x', finishers: [
+      { rank: 1, name: 'h1n', author: 'h1', carType: 'normal_fr', totalTimeMs: 2000, bestLapMs: 1000, penaltiesSec: 0 }], dnf: [] },
+  });
+  BL3.races['bl4-h'] = () => JSON.parse(JSON.stringify(H()));
+  {
+    // 前提: bl4-f の b2 と bl4-h の h1 は同じ枠で classifiedMs・bestLapMs が並ぶ（名前比較まで進む）
+    const ladderM = await import(pathToFileURL(join(JS, 'race_ladder.js')).href);
+    const bd = ladderM.aggregate([RICH(), H()]).boards;
+    const rows = bd.length === 1 ? bd[0].rows : [];
+    const b2 = rows.find((r) => r.author === 'b2'), h1 = rows.find((r) => r.author === 'h1');
+    ok(!!b2 && !!h1 && b2.classifiedMs === h1.classifiedMs && b2.bestLapMs === h1.bestLapMs,
+       `前提: 2 大会は 1 つの枠で b2 と h1 が classifiedMs・bestLapMs とも並ぶ（枠 ${bd.length}・${b2 && h1 ? `${b2.classifiedMs}/${h1.classifiedMs}・${b2.bestLapMs}/${h1.bestLapMs}` : '行なし'}）`);
+  }
   // 打破通知（checkBeaten・🏅 の「抜かれた記録」の行）も通す: 自分＝a1（ペナルティ 2 秒で換算 3.0 秒＞b2 の 2.0 秒＝b2 が世界ベスト）
   localStorage.setItem('rumicar.author', 'a1');
   const leaves = [];
@@ -1196,46 +1234,68 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
   // null 以外の JSON をそのまま entries に積む・result.json の finishers は上流の値のまま）
   const extra = [[['event', 'budget', 'total'], (r) => { r.event.class = 'budget'; r.event.budget = { total: 1e9 }; }],
     // 結果の無い大会は受付期間で状態を決める（race_ui.js raceStatus の Date.parse。結果があれば読まない）
-    [['event', 'entryWindow', 'open'], (r) => { r.result = null; }], [['event', 'entryWindow', 'close'], (r) => { r.result = null; }]];
+    [['event', 'entryWindow', 'open'], (r) => { r.result = null; }], [['event', 'entryWindow', 'close'], (r) => { r.result = null; }],
+    // 世界ベスト（b2）の作者がどのエントリーにも一致しないとき、👻 は programRef で引く（race_ui.js entryForRecord・F3）
+    [['result', 'finishers', 1, 'programRef'], (r) => { r.result.finishers[1].author = 'zz'; }]];
   const whole = [[['entries', 0], 5], [['entries', 1], 'x'], [['entries', 1], true], [['entries', 0], []],
     [['result', 'finishers', 0], null], [['result', 'finishers', 1], 5], [['result'], 5], [['result', 'finishers'], 'x']];
   const VALS = [['{"toString":1}', () => JSON.parse('{"toString":1}'), true], ['Object.create(null)', () => Object.create(null), false], ['Symbol()', () => Symbol(), false]];
+  const ERRP = i18n.t('log.err.setup', { e: '\u0000' }).split('\u0000')[0];   // 入口の try の 1 行の頭（「【エラー】」）
+  const REFUSE = i18n.t('log.err.setup', { e: 'program.lang' });              // 🍴 は言語が文字列でないエントリーを取り込まない
+  const strip = (h) => String(h).replace(/<[^>]+>/g, '').slice(0, 120);
+  const sapCalls = [];
+  const runEntries = async (withFork) => {
+    const st = {};
+    try { await ui.selectOfficialRace('bl4-f'); const d = el('ofDetail').innerHTML; st.detail = d.includes(ERRP) ? '入口の try: ' + strip(d) : d.includes('id="ofVerify"') ? 'ok' : 'ボタン無し'; } catch (e) { st.detail = `漏れ ${e.constructor.name}: ${e.message}`; }
+    if (withFork) {
+      logs.length = 0; sapCalls.length = 0;
+      try {
+        for (let i = 0; i < 2; i++) ui.forkOfficialEntry(i);
+        const outer = logs.filter((x) => x.startsWith(ERRP) && x !== REFUSE);
+        const badArgs = sapCalls.filter(([c, l]) => typeof c !== 'string' || typeof l !== 'string');
+        st.fork = outer.length ? '入口の try: ' + outer[0] : badArgs.length ? 'setActiveProgram に文字列でない値' : 'ok';
+      } catch (e) { st.fork = `漏れ ${e.constructor.name}: ${e.message}`; }
+    }
+    el('ofVerify')._l = {}; el('ofVerifyNote').innerHTML = ''; el('dlgRace').open = false;
+    try {
+      await ui.selectOfficialRace('bl4-f'); el('ofVerify').fire('click');
+      const n = el('ofVerifyNote').innerHTML;
+      st.verify = n.includes(ERRP) ? '入口の try: ' + strip(n) : (el('dlgRace').open || n.trim()) ? 'ok' : '無言';
+    } catch (e) { st.verify = `漏れ ${e.constructor.name}: ${e.message}`; }
+    let rk = '';
+    try {
+      await ui.loadOfficialRaces(true); await ui.loadAllOfficialData(true); ui.renderRankings(); rk = el('rankBody').innerHTML;
+      st.rank = rk.includes(ERRP) ? '入口の try: ' + strip(rk) : !rk.includes('h1n') ? '正常な bl4-h が外れた' : 'ok';
+    } catch (e) { st.rank = `漏れ ${e.constructor.name}: ${e.message}`; }
+    const m = /class="rank-vsworld" data-cls="([^"]*)" data-course="([^"]*)"/.exec(rk);
+    logs.length = 0;
+    try { ui.checkBeaten(); const o = logs.filter((x) => x.startsWith(ERRP)); st.beaten = o.length ? '入口の try: ' + o[0] : 'ok'; } catch (e) { st.beaten = `漏れ ${e.constructor.name}: ${e.message}`; }
+    logs.length = 0;
+    if (m) { try { ui.ghostVsWorld(unescH(m[1]), unescH(m[2])); const o = logs.filter((x) => x.startsWith(ERRP)); st.ghost = o.length ? '入口の try: ' + o[0] : 'ok'; } catch (e) { st.ghost = `漏れ ${e.constructor.name}: ${e.message}`; } } else st.ghost = '—';
+    return st;
+  };
+  SAP = (c, l) => { sapCalls.push([c, l]); };
   const rows = [];
   let cases = 0;
-  BL3.list = ['bl4-f'];
+  BL3.list = ['bl4-f', 'bl4-h'];
   for (const [vl, mk, viaJson] of VALS) {
     for (const [p, pre] of [...leaves.map((p) => [p, null]), ...extra]) {
       cases++;
       const make = () => { const r = RICH(); if (pre) pre(r); return setAt(r, p, mk()); };
       BL3.races['bl4-f'] = viaJson ? () => JSON.parse(JSON.stringify(make())) : make;
-      const st = {};
-      try { await ui.selectOfficialRace('bl4-f'); st.detail = el('ofDetail').innerHTML.includes('id="ofVerify"') ? 'ok' : 'ボタン無し'; } catch (e) { st.detail = `${e.constructor.name}: ${e.message}`; }
-      // 🍴 fork（締切後のプログラム公開の各エントリー・forkOfficialEntry）
-      try { for (let i = 0; i < 2; i++) ui.forkOfficialEntry(i); st.fork = 'ok'; } catch (e) { st.fork = `${e.constructor.name}: ${e.message}`; }
-      el('ofVerify')._l = {}; el('ofVerifyNote').innerHTML = '';
-      try { await ui.selectOfficialRace('bl4-f'); el('ofVerify').fire('click'); st.verify = 'ok'; } catch (e) { st.verify = `${e.constructor.name}: ${e.message}`; }
-      let rk = '';
-      try { await ui.loadOfficialRaces(true); await ui.loadAllOfficialData(true); ui.renderRankings(); rk = el('rankBody').innerHTML; st.rank = rk.includes('rank-board') ? 'ok' : '表が空'; } catch (e) { st.rank = `${e.constructor.name}: ${e.message}`; }
-      const m = /class="rank-vsworld" data-cls="([^"]*)" data-course="([^"]*)"/.exec(rk);
-      try { ui.checkBeaten(); st.beaten = 'ok'; } catch (e) { st.beaten = `${e.constructor.name}: ${e.message}`; }
-      if (m) { try { ui.ghostVsWorld(unescH(m[1]), unescH(m[2])); st.ghost = 'ok'; } catch (e) { st.ghost = `${e.constructor.name}: ${e.message}`; } } else st.ghost = '—';
-      // 「表が空」は例外ではない（結果の無い・検証の無い大会は 🏅 に入らない＝正しい）。漏れは例外だけを数える。
-      const bad = Object.entries(st).filter(([, v]) => v !== 'ok' && v !== '—' && v !== '表が空');
-      rows.push({ v: vl, path: p.join('.'), st, bad });
+      const st = await runEntries(true);
+      rows.push({ v: vl, path: p.join('.'), st, bad: Object.entries(st).filter(([, v]) => v !== 'ok' && v !== '—') });
     }
   }
   for (const [p, v] of whole) {
     cases++;
     const make = () => setAt(RICH(), p, v);
     BL3.races['bl4-f'] = () => JSON.parse(JSON.stringify(make()));
-    const st = {};
-    try { await ui.selectOfficialRace('bl4-f'); st.detail = el('ofDetail').innerHTML.includes('id="ofVerify"') ? 'ok' : 'ボタン無し'; } catch (e) { st.detail = `${e.constructor.name}: ${e.message}`; }
-    el('ofVerify')._l = {}; el('ofVerifyNote').innerHTML = '';
-    try { await ui.selectOfficialRace('bl4-f'); el('ofVerify').fire('click'); st.verify = 'ok'; } catch (e) { st.verify = `${e.constructor.name}: ${e.message}`; }
-    try { await ui.loadOfficialRaces(true); await ui.loadAllOfficialData(true); ui.renderRankings(); st.rank = 'ok'; } catch (e) { st.rank = `${e.constructor.name}: ${e.message}`; }
-    rows.push({ v: J(v), path: p.join('.'), st, bad: Object.entries(st).filter(([, x]) => x !== 'ok') });
+    const st = await runEntries(false);
+    rows.push({ v: J(v), path: p.join('.'), st, bad: Object.entries(st).filter(([, x]) => x !== 'ok' && x !== '—') });
   }
-  // 表が空振りしていない: 元の大会は 4 つの入口を全部通る（👻 のボタンが出て runRace を呼ぶ・再実行検証は「一致／不一致」の行）
+  console.log(`  欄 ${leaves.length + extra.length} 個（葉と途中の object・予算／受付期間／programRef の前提つき）× 値 ${VALS.length} ＋ 1 件ごと object でない ${whole.length} 通り＝${cases} 通り`);
+  // 表が空振りしていない: 元の大会は 6 つの入口を全部通る（👻 のボタンが出て runRace を呼ぶ・再実行検証は「一致／不一致」の行）
   {
     BL3.races['bl4-f'] = () => JSON.parse(JSON.stringify(RICH()));
     el('ofVerify')._l = {}; el('ofVerifyNote').innerHTML = '';
@@ -1248,13 +1308,17 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
     if (m) ui.ghostVsWorld(unescH(m[1]), unescH(m[2]));
     logs.length = 0; ui.checkBeaten();
     const beatenLog = logs.some((x) => x.includes('b2')), beatenRow = rb.includes('<ul class="rank-beaten"><li>');
-    ok(n0 === 1 && /official-verify-note/.test(vn) && rr.includes('race-tab') && !!m && BL3.calls.length === 2 && beatenLog && beatenRow,
-       `元の大会で 5 つの入口を通る（再実行の runRace ${n0} 回・結果表 ${rr.includes('race-tab')}・🏅 の 👻 ボタン ${!!m}・👻 の runRace ${BL3.calls.length - n0} 回・打破通知 ${beatenLog}・🏅 の抜かれた記録の行 ${beatenRow}）`);
+    sapCalls.length = 0; ui.forkOfficialEntry(0); ui.forkOfficialEntry(1);
+    const forkOk = sapCalls.length === 2 && sapCalls.every(([c, l]) => typeof c === 'string' && c.includes(SRC_C.slice(0, 20)) === (l === 'c'));
+    ok(n0 === 1 && /official-verify-note/.test(vn) && rr.includes('race-tab') && !!m && BL3.calls.length === 2 && beatenLog && beatenRow && rb.includes('h1n') && rb.includes('e1') && forkOk,
+       `元の 2 大会で 6 つの入口を通る（再実行の runRace ${n0} 回・結果表 ${rr.includes('race-tab')}・🏅 の 👻 ボタン ${!!m}・👻 の runRace ${BL3.calls.length - n0} 回・打破通知 ${beatenLog}・🏅 の抜かれた記録の行 ${beatenRow}・🏅 に bl4-f と bl4-h ${rb.includes('e1')}/${rb.includes('h1n')}・🍴 ${sapCalls.map(([, l]) => l).join(',')}）`);
   }
   const badRows = rows.filter((r) => r.bad.length);
   for (const r of badRows) console.log(`    ✗ ${r.v} ${r.path}: ${r.bad.map(([k, v]) => `${k}=${v}`).join(' ; ')}`);
-  ok(badRows.length === 0, `大会の値の欄 × 値 ${cases} 通り × 入口（🏆 詳細・🍴 fork・再実行検証・🏅 の集計・打破通知・👻）で例外が漏れない（漏れた行 ${badRows.length}）`);
-  // 🏅: 読めない大会が 1 つあっても、ほかの大会の集計は出る（外すのは単独で通らない大会だけ）。
+  const outerN = rows.filter((r) => r.bad.some(([, v]) => v.startsWith('入口の try'))).length;
+  const leakN = rows.filter((r) => r.bad.some(([, v]) => v.startsWith('漏れ'))).length;
+  ok(badRows.length === 0, `大会の値の欄 × 値 ${cases} 通り × 入口（🏆 詳細・🍴 fork・再実行検証・🏅 の集計・打破通知・👻）がどれも正常に描くか個別の 1 行で知らせる（赤の行 ${badRows.length}＝うち例外が漏れた ${leakN}・入口の try が拾った ${outerN}）`);
+  // 🏅: 読めない大会が 1 つあっても、ほかの大会の集計は出る（外すのは読めない値を持つ大会）。
   {
     const G = () => { const r = RICH(); r.event.id = r.result.eventId = 'bl4-g'; r.event.title = 'G';
       r.entries = [ent('g1n', 'g1', 'c', { k: 0, program: { lang: JSON.parse('{"toString":1}'), src: SRC_C } })];
@@ -1267,10 +1331,116 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
     try { await ui.loadOfficialRaces(true); await ui.loadAllOfficialData(true); ui.renderRankings(); rb = el('rankBody').innerHTML; } catch (e) { th = e; }
     const hasF = rb.includes('rank-board') && rb.includes('b2'), hasG = rb.includes('g1');
     ok(th === null && hasF && !hasG, `🏅 は読めない大会（entries の program.lang が {"toString":1}）だけを外し、ほかの大会の表を出す（例外 ${th ? th.message : 'なし'}・bl4-f の行 ${hasF}・bl4-g の行 ${hasG}）`);
+  }
+  // F4（層4 往復 2）: result.json の finishers の object でない 1 件（null・数）は 7 つの空のセルの行（旧実装は順位のセルに undefined）
+  {
+    const NR = () => { const r = RICH(); r.result.finishers = [null, 5, r.result.finishers[0]]; return r; };
+    BL3.races['bl4-f'] = () => JSON.parse(JSON.stringify(NR())); BL3.list = ['bl4-f'];
+    let d = '', th = null;
+    try { await ui.selectOfficialRace('bl4-f'); d = el('ofDetail').innerHTML; } catch (e) { th = e; }
+    const tb = d.slice(d.lastIndexOf('<tbody>')).split('</tbody>')[0];
+    const trs = tb.match(/<tr>.*?<\/tr>/g) || [];
+    const EMPTY = '<tr>' + '<td></td>'.repeat(7) + '</tr>';
+    ok(th === null && trs.length === 3 && trs[0] === EMPTY && trs[1] === EMPTY && trs[2].includes('<td>e1</td>') && !d.includes('undefined'),
+       `🏆 の公式記録: finishers の null・5 は空の行・3 行目は e1（${th ? '例外 ' + th.message : `行 ${trs.length}・空の行 ${trs.filter((x) => x === EMPTY).length}・undefined ${d.includes('undefined')}`}）`);
+  }
+  // F2（層4 往復 2）: どちらも単独なら通る 2 大会が、組み合わさったときだけ投げる（同タイムで名前比較が走る）。一覧の順を
+  //   どちらにしても、読めない値を持つ側（bl4-x）だけが外れ、正常な側（bl4-h）の行・打破通知・👻 が出る。
+  {
+    const BADV = JSON.parse('{"toString":1}');
+    const X = (field) => () => { const r = H(); r.event.id = r.result.eventId = 'bl4-x'; r.result.verifyHash = 'hx';
+      r.entries = [ent('x1n', 'x1', 'c', { k: 0 })];
+      r.result.finishers = [{ rank: 1, name: 'x1n', author: 'x1', carType: 'normal_fr', totalTimeMs: 2000, bestLapMs: 1000, penaltiesSec: 0 }];
+      r.result.finishers[0][field] = BADV; return JSON.parse(JSON.stringify(r)); };
+    localStorage.setItem('rumicar.author', 'h9');   // 打破通知: h9 の記録（2.5 秒）が h1（2.0 秒）に抜かれている
+    const H9 = () => { const r = H(); r.entries.push(ent('h9n', 'h9', 'c', { k: 1 }));
+      r.result.finishers.push({ rank: 2, name: 'h9n', author: 'h9', carType: 'normal_fr', totalTimeMs: 2500, bestLapMs: 1200, penaltiesSec: 0 }); return JSON.parse(JSON.stringify(r)); };
+    for (const field of ['name', 'bestLapMs']) {
+      for (const order of [['bl4-x', 'bl4-h'], ['bl4-h', 'bl4-x']]) {
+        BL3.races['bl4-x'] = X(field); BL3.races['bl4-h'] = H9; BL3.list = order;
+        // 単独なら通る（＝往復 1 の「単独で通らない大会を外す」では外れない組）
+        const ladderM = await import(pathToFileURL(join(JS, 'race_ladder.js')).href);
+        let alone = true, both = true;
+        try { ladderM.aggregate([BL3.races['bl4-x']()]); } catch (e) { alone = false; }
+        try { ladderM.aggregate([BL3.races['bl4-x'](), BL3.races['bl4-h']()]); } catch (e) { both = false; }
+        let th = null, rb = '';
+        logs.length = 0;
+        try { await ui.loadOfficialRaces(true); await ui.loadAllOfficialData(true); ui.renderRankings(); rb = el('rankBody').innerHTML; ui.checkBeaten(); } catch (e) { th = e; }
+        const m = /class="rank-vsworld" data-cls="([^"]*)" data-course="([^"]*)"/.exec(rb);
+        const n0 = BL3.calls.length;
+        if (m) { try { ui.ghostVsWorld(unescH(m[1]), unescH(m[2])); } catch (e) { th = th || e; } }
+        const ghostRan = BL3.calls.length === n0 + 1;
+        const hasH = rb.includes('h1n'), hasX = rb.includes('x1n'), beaten = logs.some((x) => x.includes('h1'));
+        ok(alone && !both && th === null && hasH && !hasX && !rb.includes(ERRP) && beaten && ghostRan,
+           `F2 ${field} が {"toString":1}・一覧 ${order.join('→')}: 単独 ${alone ? '通る' : '投げる'}・組で ${both ? '通る' : '投げる'} → 例外 ${th ? th.message : 'なし'}・bl4-h の行 ${hasH}・bl4-x の行 ${hasX}・打破通知 ${beaten}・👻 の runRace ${ghostRan}`);
+      }
+    }
+    BL3.races['bl4-h'] = () => JSON.parse(JSON.stringify(H()));
     BL3.list = ['bl4-f'];
   }
   localStorage.removeItem('rumicar.author');
+  SAP = () => {};
   ECL = (k) => String(k || ''); CTL = (k) => String(k);
+}
+
+// G-6e（層4 往復 2）: 入口の try そのもの — 大会の値でなく依存の側（main.js の courseDisplayName・carTypeLabel・setActiveProgram）が
+//   投げても、各入口は例外を漏らさず「【エラー】…」の 1 行を出す（欄ごとの防御が見落とした値の代わり）。🏅 は描けない大会を外した
+//   結果 1 つも残らないとき、空の表（「まだ記録がありません」）と言い切らずに例外を出す（race_ui.js aggregateNow の ladder.error）。
+{
+  const ERRP = i18n.t('log.err.setup', { e: '\u0000' }).split('\u0000')[0];
+  const R = () => ({ event: { id: 'bl4-e', course: 'オーバル', laps: 1, class: 'open' }, entries: [ent('n1', 'a1', 'c', { k: 0 }), ent('n2', 'b2', 'c', { k: 1 })],
+    result: { eventId: 'bl4-e', verifyHash: 'h', finishers: [{ rank: 1, name: 'n1', author: 'a1', carType: 'normal_fr', totalTimeMs: 1000, bestLapMs: 900 },
+      { rank: 2, name: 'n2', author: 'b2', carType: 'normal_fr', totalTimeMs: 2000, bestLapMs: 1000 }] } });
+  BL3.races['bl4-e'] = () => JSON.parse(JSON.stringify(R())); BL3.list = ['bl4-e'];
+  const boom = (tag) => () => { throw new TypeError(tag); };
+  const res = {};
+  // 🏆 詳細: courseDisplayName が投げる（詳細は event.course の文字列で呼ぶ）
+  CDN = boom('bl4-cdn');
+  try { await ui.selectOfficialRace('bl4-e'); const d = el('ofDetail').innerHTML; res.detail = d.includes(ERRP) && d.includes('bl4-cdn'); } catch (e) { res.detail = '漏れ ' + e.message; }
+  // 再実行検証: 結果ダイアログ（renderRaceResult）がコースの object で courseDisplayName を呼んで投げる（詳細は文字列なので描ける）
+  CDN = (c) => { if (c && typeof c === 'object') throw new TypeError('bl4-cdn-obj'); return String(c || ''); };
+  try {
+    el('ofVerify')._l = {}; el('ofVerifyNote').innerHTML = '';
+    await ui.selectOfficialRace('bl4-e'); el('ofVerify').fire('click');
+    const n = el('ofVerifyNote').innerHTML; res.verify = n.includes(ERRP) && n.includes('bl4-cdn-obj') && /official-verify-note (ok|warn)/.test(n.split(ERRP)[0]);
+  } catch (e) { res.verify = '漏れ ' + e.message; }
+  // 👻: 走った後のゴースト再生（openGhostReplay の courseDisplayName）が投げる
+  localStorage.setItem('rumicar.author', 'a1');
+  try {
+    await ui.loadOfficialRaces(true); await ui.loadAllOfficialData(true); ui.renderRankings();
+    const m = /class="rank-vsworld" data-cls="([^"]*)" data-course="([^"]*)"/.exec(el('rankBody').innerHTML);
+    logs.length = 0; if (m) ui.ghostVsWorld(unescH(m[1]), unescH(m[2]));
+    res.ghost = !!m && logs.some((x) => x.startsWith(ERRP) && x.includes('bl4-cdn-obj'));
+  } catch (e) { res.ghost = '漏れ ' + e.message; }
+  CDN = CDN0;
+  // 🍴: setActiveProgram が投げる
+  SAP = boom('bl4-sap');
+  try { await ui.selectOfficialRace('bl4-e'); logs.length = 0; ui.forkOfficialEntry(0); res.fork = logs.some((x) => x.startsWith(ERRP) && x.includes('bl4-sap')); } catch (e) { res.fork = '漏れ ' + e.message; }
+  SAP = () => {};
+  // 🏅・打破通知: carTypeLabel が投げる＝どの大会も描けない → 空の表と言わずに例外の 1 行
+  CTL = boom('bl4-ctl');
+  try {
+    await ui.loadOfficialRaces(true); await ui.loadAllOfficialData(true); ui.renderRankings();
+    const rb = el('rankBody').innerHTML; logs.length = 0; ui.checkBeaten();
+    res.rank = rb.includes(ERRP) && rb.includes('bl4-ctl') && !rb.includes(escH(i18n.t('rank.empty')));
+    res.beaten = logs.length === 0;   // 集計が error のとき打破通知は出さない（外側の try まで届く経路は依存の側から作れない＝漏れないことだけ）
+  } catch (e) { res.rank = res.beaten = '漏れ ' + e.message; }
+  // 🏅 の描画そのもの（aggregateNow が試した後の rankingsHtml）が投げる: 状態で答えが変わる依存（試す 1 回目は通り、描く 2 回目で
+  //   投げる）。aggregateNow の試しをすり抜けて renderRankings の try だけが拾う経路。
+  {
+    let calls = 0; CTL = (k) => { calls++; return String(k); };
+    await ui.loadOfficialRaces(true); await ui.loadAllOfficialData(true);
+    calls = 0; ui.renderRankings(); const per = calls / 2;   // 試す 1 回＋描く 1 回
+    let i = 0; CTL = (k) => { if (i++ >= per) throw new TypeError('bl4-ctl-late'); return String(k); };
+    try { ui.renderRankings(); const rb = el('rankBody').innerHTML; res.rankRender = per > 0 && rb.includes(ERRP) && rb.includes('bl4-ctl-late'); } catch (e) { res.rankRender = '漏れ ' + e.message; }
+  }
+  CTL = (k) => String(k);
+  localStorage.removeItem('rumicar.author');
+  BL3.list = ['bl4-f'];
+  for (const [k, v] of Object.entries(res)) {
+    ok(v === true, k === 'beaten' ? `打破通知: carTypeLabel が投げて 🏅 が描けないときも例外を漏らさず、通知も出さない（${v}）`
+      : `入口の try（${k}）: 依存が投げても例外を漏らさず「${ERRP}…」の 1 行（${v}）`);
+  }
 }
 
 // G-6c: 層4 が名指しした t() の呼び出し（race_ui.js の結果ダイアログ :115 新記録・:123 最速ラップ・:127 勝者／🏆 の詳細の
