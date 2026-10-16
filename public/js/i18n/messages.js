@@ -917,8 +917,9 @@ export const MESSAGES = {
   //   （是正前は 1 回だけ走るプログラムのトップレベルの continue にも「loop() 関数そのものは…」が出た）。i18nKey は breakOutside／continueOutside のまま。
   'interp.err.breakOutsideGeneric':    { ja: 'break はループ (for / while。C は switch も) の中に書いてください。関数の中の break は、その関数を呼んだループには効きません', en: '\'break\' must be inside a loop (for / while, or a switch in C), and a break inside a function does not affect the loop that called it' },
   'interp.err.continueOutsideGeneric': { ja: 'continue はループ (for / while) の中に書いてください。関数の中の continue は、その関数を呼んだループには効きません', en: '\'continue\' must be inside a loop (for / while), and a continue inside a function does not affect the loop that called it' },
-  // BK1: 深い再帰（ユーザー関数の呼び出しの入れ子が SIM.maxCallDepth に達した・または実行環境の呼び出しスタックが尽きた）。
-  //   {n}＝そのときの入れ子の段数。是正前は JS の RangeError「Maximum call stack size exceeded」が行番号なしで漏れた。
+  // BK1: 深い再帰（ユーザー関数の呼び出しの入れ子が SIM.maxCallDepth に達した）。{n}＝そのときの入れ子の段数（＝上限）。
+  //   是正前は JS の RangeError「Maximum call stack size exceeded」が行番号なしで漏れた。BL7 から、上限より前に実行環境の呼び出しスタックが
+  //   尽きたときは、種類（i18nKey）はこの interp.err.recursion のまま文言だけ下の interp.err.recursionStack（段数を書かない）を使う。
   'interp.err.recursion':     { ja: '関数の呼び出しが深すぎます (呼び出しの入れ子が {n} 段に達しました)。再帰を止める条件が正しいか確かめるか、ループで書き直してください', en: 'Function calls are nested too deeply (the nesting reached {n} levels). Check the condition that stops the recursion, or rewrite it as a loop' },
   // BK1 H1: ステップ上限に達した tick の中で millis()／micros() を呼んでいたときだけ、この文言（stepLimit の文言＋ヒント）にする。
   //   時刻の進み方は変えない（millis() は loop() 1 回の中では一定）。i18nKey は stepLimit のまま。
@@ -948,10 +949,16 @@ export const MESSAGES = {
   'interp.err.lenArg':      { ja: 'len() には list・tuple・str・dict を渡してください ({type} には長さがありません)', en: 'len() needs a list, tuple, str or dict ({type} has no length)' },
   'interp.err.choiceArg':   { ja: 'random.choice() には list・tuple・str を渡してください ({type} からは選べません)', en: 'random.choice() needs a list, tuple or str (cannot choose from {type})' },
   'interp.err.choiceEmpty': { ja: 'random.choice(): 空の list・tuple・str からは選べません', en: 'random.choice(): cannot choose from an empty list, tuple or str' },
+  // BL7 fix1（層4 F5）: len()・random.choice() の引数が 1 つでない（0 個・2 個以上）。{fn}＝len／random.choice・{n}＝渡した数。python3 は
+  //   len() が TypeError: len() takes exactly one argument (0 given)。是正前（e961e4b まで）は len() が lenArg の「None には長さがありません」・
+  //   2 個以上は黙って 1 つ目だけを使った。
   // BL7 ⑤: 実行環境の呼び出しスタックが尽きた（上限 SIM.maxCallDepth に届く前）。種類（i18nKey）は interp.err.recursion のまま・文言だけ別。
   //   段数を書かない（是正前は上の recursion の文言で、loop() の中の str(深い入れ子の list) が「1 段に達しました」と出た）。関数の外で
   //   尽きたとき（Model B の while True: の本体・1 回だけ走るプログラム）も同じ文言（是正前は JS の RangeError が漏れた）。
-  'interp.err.recursionStack': { ja: '入れ子が深すぎます (実行環境の呼び出しスタックが尽きました)。再帰を止める条件が正しいか、深く入れ子にした list・dict を str() や print() で文字列にしていないか確かめてください', en: 'Nesting is too deep (the call stack of the runtime ran out). Check the condition that stops the recursion, and whether a deeply nested list or dict is being turned into a string with str() or print()' },
+  'interp.err.oneArg':      { ja: '{fn}() には引数を 1 つだけ渡してください ({n} 個渡されました)', en: '{fn}() takes exactly one argument ({n} given)' },
+  // BL7 fix1（層4 F4）: 文言の例は list だけ（dict は入れ子が浅くても str()/print() が実行環境の TypeError になり＝BK-9 の未是正の差、
+  //   スタック切れまで届かない。e961e4b の文言は「list・dict」）。
+  'interp.err.recursionStack': { ja: '入れ子が深すぎます (実行環境の呼び出しスタックが尽きました)。再帰を止める条件が正しいか、深く入れ子にした list を str() や print() で文字列にしていないか確かめてください', en: 'Nesting is too deep (the call stack of the runtime ran out). Check the condition that stops the recursion, and whether a deeply nested list is being turned into a string with str() or print()' },
 
   // ---- BK1: 字句エラー（lexer.js）・構文エラー（parser_py.js／parser_c.js）。SourceError（lexer.js）が t('interp.' + phase + '.' + sub) で参照し、
   //   頭（head）＋文言＋行の接尾（interp.err.line）で組む。ja は是正前の日本語固定文と 1 文字も変えない（wf_bk1_interp2 A 章が是正前の文言で照合）。

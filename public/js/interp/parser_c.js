@@ -195,8 +195,10 @@ export function parseC(src) {
   function doWhileStmt() {
     eat('ID', 'do');
     const body = bodyAsArray();
+    // BL7 fix1（層4 F3）: condLine＝`} while (…);` の while の行（評価器が条件をこの行で評価する＝条件のエラーの行）。
+    const condLine = peek().line;
     eat('ID', 'while'); eat('PUNC', '('); const cond = expr(); eat('PUNC', ')'); eat('PUNC', ';');
-    return { t: 'dowhile', cond, body };
+    return { t: 'dowhile', cond, body, condLine };
   }
 
   // switch(x){ case k: ...; break; ... default: ... }。case のフォールスルーは評価器が担う。

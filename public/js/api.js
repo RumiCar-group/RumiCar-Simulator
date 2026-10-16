@@ -118,9 +118,15 @@ export function buildApi(world) {
   // BL7 ①: 長さの無い値（None・数・bool・関数）は実行時エラー interp.err.lenArg（python3 は TypeError: object of type '…' has no len()）。
   //   ここでは行を付けない＝evaluator の callHost が呼び出した文の行を付ける（JS で書いたプログラムは行なし）。是正前は
   //   JS の Error を日本語固定の文言（「len(): 対象がありません」／「len(): 対象は list/str/dict のみ」）で投げた＝英語モードでも日本語・行番号なし・i18n キーなし。
-  // BL7 ③: dict（object）の長さは鍵を数えるだけ（是正前の Object.keys(x).length は鍵の配列を作った）。数える鍵は Object.keys と同じ
-  //   自前の列挙できる鍵（py の dict はプロトタイプ無し・ホストのオブジェクトも自前の鍵だけを数える）。
-  const pyLen = (x) => {
+  // BL7 ③: dict（object）の長さは for … in で鍵を数える（Object.keys を呼ばない）。数える鍵は Object.keys と同じ自前の列挙できる鍵
+  //   （py の dict はプロトタイプ無し・ホストのオブジェクトも自前の鍵だけを数える）＝値は是正前と同じ。速くはならない（BL7 fix1・層4 F1 の
+  //   実測〔Node 22.22.1〕: V8 の辞書モードの for … in も鍵を全部集める＝鍵の数に比例。鍵 2 つの dict で 186 ns〔15341f4・Object.keys〕→
+  //   250 ns・N＝1000／20000 で 1.2〜1.6 倍遅い。理由と数は evaluator.js dictNonEmpty の注記・決定ログ BL7 fix1）。
+  // BL7 fix1（層4 F5）: 引数が 1 つでなければ interp.err.oneArg（python3 は TypeError: len() takes exactly one argument (0 given)）。
+  //   是正前（e961e4b まで）は len() が「None には長さがありません」・len(a, b) は黙って len(a)。
+  //   引数の数は arguments.length で数える（list・str の len は 15341f4・e961e4b と同じ 1.5 ns 前後〔Node 22・実測〕）。
+  const pyLen = function (x) {
+    if (arguments.length !== 1) throw new RuntimeError('oneArg', { fn: 'len', n: arguments.length });
     if (typeof x === 'string' || Array.isArray(x)) return x.length;
     if (x != null && typeof x === 'object') {
       let n = 0;
@@ -166,7 +172,10 @@ export function buildApi(world) {
     //   IndexError: Cannot choose from an empty sequence）。どちらも乱数を引く前に投げる。行は evaluator の callHost が付ける。是正前は
     //   choice(None) が JS の TypeError「Cannot read properties of null (reading 'length')」・choice([]) は例外にならず値なし（print は空行）・
     //   dict や数は黙って値なし。選べる列の選び方（乱数 1 回・同じ添字）は是正前と同じ＝出荷・既存の列は不変。
-    choice: (arr) => {
+    // BL7 fix1（層4 F5）: 引数が 1 つでなければ interp.err.oneArg（python3 は choice() が TypeError: … missing 1 required positional
+    //   argument: 'seq'）。是正前（e961e4b まで）は random.choice() が「None からは選べません」・choice(a, b) は黙って a から選んだ。
+    choice: function (arr) {
+      if (arguments.length !== 1) throw new RuntimeError('oneArg', { fn: 'random.choice', n: arguments.length });
       if (!(Array.isArray(arr) || typeof arr === 'string')) throw new RuntimeError('choiceArg', { type: typeName(arr) });
       if (arr.length === 0) throw new RuntimeError('choiceEmpty', {});
       return arr[Math.floor(_rand() * arr.length)];

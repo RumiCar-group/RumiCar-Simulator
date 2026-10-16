@@ -114,8 +114,14 @@
 //    throw new Error( 0 件・evaluator.js callHost が行を付ける）。K-2 Model B（while True:）・1 回だけ走る本文・setup 前の初期化の str()／print()
 //    （深い入れ子の list）が RangeError を漏らさず interp.err.recursion（文言 recursionStack・行＝その文・「1 段」なし）・def loop() の中も同じ文言・
 //    上限 SIM.maxCallDepth の経路は従来の文言（BK1 の値を定数で照合）。K-3 dict の真偽（if／while／not／bool()／三項）と len は是正前と同じ値・
-//    python3 と同じ出力・配線（evaluator.js pyTruthy と api.js pyLen に Object.keys が無い）。
-//    赤になる章（2026-10-17 の実測・--root 15341f4＝BL6 後・BL7 前）: 件数は決定ログ BL7 結果。
+//    python3 と同じ出力・配線（evaluator.js pyTruthy と api.js pyLen に Object.keys が無い＝**形の検査であって速さの主張ではない**。BL7 fix1・
+//    層4 F1: V8 の辞書モードの for … in も鍵を全部集める＝鍵の数に比例・割り当ても Object.keys と同じ。速さは参考の印字だけで判定しない）。
+//    BL7 fix1（層4 往復 1）: K-1 に引数の数（len()・len(a, b)・random.choice()・random.choice(a, b) → interp.err.oneArg・python3 も TypeError）、
+//    K-2 にスタック切れの文言の例が list だけ（dict は浅くても str() が TypeError＝BK-9 の未是正の差・スタック切れに届かない）、K-4 にループの
+//    条件の行（while〔py・C〕の 2 回目以降・C の for の条件と更新部・do-while の条件で出たエラーの行＝そのループの行〔do-while は while の行〕・
+//    エラーの出ない tick の実行位置ハイライトとステップ上限エラーの行は是正前と同じ）。
+//    赤になる章（2026-10-17 の実測・--root 15341f4＝BL6 後・BL7 前）: 件数は決定ログ BL7 結果。--root e961e4b（BL7 初版）＝K-1 の引数の数の行・
+//    K-2 の文言の例・K-4 の条件の行（件数は決定ログ BL7 fix1 結果）。
 //
 // 使い方: node wf_bl1_ui.mjs              … 検査
 //         node wf_bl1_ui.mjs --root <dir>  … <dir>/public/js の product で回す（是正前の木で赤になることの確認用）
@@ -2131,6 +2137,22 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
     ['random.choice(5)', 'py', 'import random\n' + A + '    n = random.choice(5)\n', 1, 'interp.err.choiceArg', 'int', 6, 'import random; random.choice(5)', 'TypeError'],
     ['random.choice({"a": 1})（dict は選べない＝python3 は KeyError）', 'py', 'import random\n' + A + '    n = random.choice({"a": 1})\n', 1, 'interp.err.choiceArg', 'dict', 6, 'import random; random.choice({"a": 1})', 'KeyError'],
   ];
+  // BL7 fix1（層4 F5）: 引数の数（期待の {fn}・{n} は K1N で）。e961e4b は len() が lenArg（None）・len(a, b) は黙って len(a)・choice() は choiceArg（None）。
+  const K1N = [
+    ['len()（引数なし）', 'py', A + '    n = len()\n', 1, 'len', 0, 5, 'len()', 'TypeError'],
+    ['len([1], [2])（引数 2 つ）', 'py', A + '    n = len([1], [2])\n', 1, 'len', 2, 5, 'len([1], [2])', 'TypeError'],
+    ['C の len()', 'c', 'void setup(){}\nvoid loop(){\n  int a = 1;\n  int n = len();\n}', 1, 'len', 0, 4, null, null],
+    ['random.choice()（引数なし）', 'py', 'import random\n' + A + '    n = random.choice()\n', 1, 'random.choice', 0, 6, 'import random; random.choice()', 'TypeError'],
+    ['random.choice([1], [2])（引数 2 つ）', 'py', 'import random\n' + A + '    n = random.choice([1], [2])\n', 1, 'random.choice', 2, 6, 'import random; random.choice([1], [2])', 'TypeError'],
+  ];
+  for (const [label, lang, code, ticks, fn, n, ln, pyc, pyErr] of K1N) {
+    const { ja, en } = runKBoth(code, lang, ticks);
+    const key = 'interp.err.oneArg', p = { fn, n };
+    ok(ja.ctor === 'RuntimeError' && ja.key === key && ja.line === ln && ja.msg === want('ja', key, p, ln),
+      `K-1 ${label} → RuntimeError ${key}（行 ${ln}）ja ${J(ja.msg)}${ja.ctor !== 'RuntimeError' ? '（実 ' + ja.ctor + '）' : ''}`);
+    ok(en.ctor === 'RuntimeError' && en.key === key && en.line === ln && en.msg === want('en', key, p, ln) && !JP.test(en.msg), `K-1 ${label}: en ${J(en.msg)}`);
+    if (pyc && PY3K) { const r = py3(pyc); ok(r.err.startsWith(pyErr + ':'), `K-1 ${label}: python3 も例外（${r.err}）`); }
+  }
   for (const [label, lang, code, ticks, key, type, ln, pyc, pyErr] of ROWS) {
     const { ja, en } = runKBoth(code, lang, ticks);
     const p = type == null ? {} : { type };
@@ -2168,6 +2190,11 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
   ok(MESSAGES[REC] && MESSAGES[REC].ja === OLD_REC[0] && MESSAGES[REC].en === OLD_REC[1], 'K-2 上限の文言 interp.err.recursion はカタログ上 BK1 の値のまま（ja/en）');
   ok(MESSAGES[REC_SUB] && MESSAGES[REC_SUB].ja && MESSAGES[REC_SUB].en && !/\{n\}|段/.test(MESSAGES[REC_SUB].ja) && !/\{n\}|level/.test(MESSAGES[REC_SUB].en) && !JP.test(MESSAGES[REC_SUB].en),
     `K-2 スタック切れの文言 ${REC_SUB}（ja/en 非空・段数を書かない・en に日本語なし）`);
+  { // BL7 fix1（層4 F4）: 文言の例は list だけ。dict は浅くても str() が実行環境の TypeError（BK-9 の未是正の差）＝スタック切れの経路に届かない。
+    const r = runK('d = {"a": 1}\ns = str(d)\n', 'py');
+    ok(MESSAGES[REC_SUB] && !/dict/.test(MESSAGES[REC_SUB].ja + MESSAGES[REC_SUB].en) && r.key !== REC,
+      `K-2 スタック切れの文言の例に dict を書かない（浅い dict の str() は ${r.ctor || '例外なし'}・${REC} ではない＝BK-9 の未是正の差）`);
+  }
   const NEST = (n) => `for i in range(${n}):\n    a = [a]\n`;
   const DEEP = [
     // [ラベル, 本文, tick 数, 行]  — while True:／loop() は入れ子 40 万段（deepB.mjs と同じ 20 tick × 2 万段）・トップレベルで 1 回だけ走る本文は
@@ -2194,7 +2221,7 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
     ok(r.ctor === 'RangeError' && r.key !== REC, `K-2 トップレベルのスタック切れでない RangeError（"%.200f" % 1.5）は変換しない（実 ${r.ctor}）`);
   }
 
-  console.log('\nK-3) dict の真偽と len — 是正前: Object.keys(v).length（判定のたびに鍵の配列）');
+  console.log('\nK-3) dict の真偽と len — 是正前: Object.keys(v).length。値は不変・Object.keys を呼ばない（形）だけを主張し、速さは主張しない（BL7 fix1）');
   const DICT = 'e = {}\nd = {"a": 1}\np = {"__proto__": 1}\nprint(bool(e), bool(d), bool(p), not e, not d)\nif e:\n    print("e-if")\nif d:\n    print("d-if")\nif p:\n    print("p-if")\n'
     + 'n = 0\nwhile d:\n    n += 1\n    d.pop("a")\nprint(n, bool(d))\nwhile e:\n    print("never")\nq = {"x": 1, "y": 2}\nq.clear()\nprint(bool(q), "t" if q else "f")\n'
     + 'print(len({}), len({"a": 1, "b": 2}), len({1: 2, True: 3}), len(p), len(q))\n';
@@ -2213,10 +2240,56 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
     const fnBody = (src, re) => { const m = re.exec(src); if (!m) return null; const i = m.index; const j = src.indexOf('\n}', i); return j < 0 ? null : src.slice(i, j + 2); };
     const truthy = fnBody(evSrc, /^function pyTruthy\(v\) \{/m);
     const nonEmpty = fnBody(evSrc, /^function dictNonEmpty\(o\) \{/m) || ((/^function dictNonEmpty\(o\) \{.*\}$/m.exec(evSrc) || [])[0] || null);
-    const lenM = /const pyLen = \(x\) => \{[\s\S]*?\n {2}\};/.exec(apiSrc);
+    const lenM = /const pyLen = (?:\(x\) =>|function \(x\)) \{[\s\S]*?\n {2}\};/.exec(apiSrc);   // e961e4b までは (x) =>・fix1 から function (x)（arguments.length）
     ok(truthy && !truthy.includes('Object.keys') && /dictNonEmpty\(v\)/.test(truthy) && nonEmpty && !nonEmpty.includes('Object.keys') && /for \(const k in o\) return true/.test(nonEmpty),
-      `K-3 配線: evaluator.js pyTruthy は dictNonEmpty（最初の鍵で抜ける for … in）で判定し Object.keys を使わない（pyTruthy ${truthy ? truthy.length + ' 字' : '無し'}）`);
-    ok(lenM && !lenM[0].includes('Object.keys') && /for \(const k in x\)/.test(lenM[0]), `K-3 配線: api.js pyLen は鍵を数えるだけで Object.keys を使わない（${lenM ? lenM[0].length + ' 字' : 'pyLen 無し'}）`);
+      `K-3 配線（形）: evaluator.js pyTruthy は dictNonEmpty（for … in）で判定し Object.keys を呼ばない（pyTruthy ${truthy ? truthy.length + ' 字' : '無し'}）`);
+    ok(lenM && !lenM[0].includes('Object.keys') && /for \(const k in x\)/.test(lenM[0]), `K-3 配線（形）: api.js pyLen は for … in で鍵を数え Object.keys を呼ばない（${lenM ? lenM[0].length + ' 字' : 'pyLen 無し'}）`);
+    // BL7 fix1（層4 F1）: 「O(1)」「鍵の一覧を作らない」を主張しない（e961e4b はコメントと physics_model §9 に書いた）。同じ語が戻ったら赤。
+    const pmJa = readFileSync(join(ROOT, 'docs/physics_model.md'), 'utf8'), pmEn = readFileSync(join(ROOT, 'docs/physics_model.en.md'), 'utf8');
+    const claims = [/O\(1\)/.test(nonEmpty || '') && 'evaluator.js dictNonEmpty の O(1)', /O\(1\)/.test(lenM ? lenM[0] : '') && 'api.js pyLen の O(1)',
+      pmJa.includes('鍵の一覧を作らない') && 'physics_model.md「鍵の一覧を作らない」', pmEn.includes('no longer builds the list of keys') && 'physics_model.en.md "no longer builds the list of keys"'].filter(Boolean);
+    ok(claims.length === 0, `K-3 速さの主張が無い（O(1)・鍵の一覧を作らない）${claims.length ? '（残り: ' + claims.join('・') + '）' : ''}`);
+  }
+  { // 参考の印字（判定しない）: 本番の pyTruthy（Interp.tr）と pyLen の 1 回あたりの時間を、是正前の式（Object.keys(v).length）と並べる。
+    const ipK = runK('x = 1\n', 'py').ctrl.interp;   // 本番の buildController が作った py の Interp
+    const lenK = buildApi({ car: new DynCar(courseK.start), walls: courseK.walls, start: courseK.start, log() {}, _sensors: [], _pendingDelay: 0, _others: [], _simMs: 0 }).len;
+    const per = (f, d, it) => { let s = 0; const t0 = process.hrtime.bigint(); for (let i = 0; i < it; i++) s += f(d) ? 1 : 0; return [Number(process.hrtime.bigint() - t0) / it / 1000, s]; };
+    const row = [];
+    for (const N of [1, 1000, 20000]) {
+      const d = Object.create(null); for (let i = 0; i < N; i++) d['k' + i] = i;
+      const it = N >= 20000 ? 50 : N >= 1000 ? 2000 : 50000;
+      const [a] = per((v) => ipK.tr(v), d, it), [b] = per((v) => Object.keys(v).length > 0, d, it), [c] = per(lenK, d, it), [e] = per((v) => Object.keys(v).length, d, it);
+      row.push(`N=${N} 真偽 ${a.toFixed(2)}／${b.toFixed(2)} µs・len ${c.toFixed(2)}／${e.toFixed(2)} µs`);
+    }
+    console.log(`  （参考・判定しない）本番／Object.keys 版: ${row.join('・')}`);
+  }
+
+  console.log('\nK-4) ループの条件で出たエラーの行（BL7 fix1・層4 F3）— e961e4b まで: 2 回目以降の条件は本体の最後の文の行のまま評価した');
+  const LOOPS = [
+    // [ラベル, 言語, 本文, tick 数, 期待のキー, 行]
+    ['py while の条件の len(None)（2 回目）', 'py', 'x = 2\ny = [1]\nwhile len(y) > 0:\n    x = x - 1\n    y = None\n', 0, 'interp.err.lenArg', 3],
+    ['py while の条件のゼロ除算（2 回目・def loop() の中）', 'py', 'def loop():\n    k = 1\n    while 10 / k:\n        k = k - 1\n        z = 5\n', 1, 'interp.err.divZero', 3],
+    ['py while の条件が呼んだ関数の中のエラー（行＝関数の中の文）', 'py', 'def f(v):\n    return len(v)\nx = 2\ny = [1]\nwhile f(y) > 0:\n    y = None\n    x = 0\n', 0, 'interp.err.lenArg', 2],
+    ['C while の条件（2 回目）', 'c', 'void setup(){\n  int k = 1;\n  while ((10 % k) + 1) {\n    k = k - 1;\n    k = k + 0;\n  }\n}\nvoid loop(){}', 0, 'interp.err.divZero', 3],
+    ['C for の条件（2 回目）', 'c', 'void setup(){\n  int k = 1;\n  for (int i = 0; (10 % k) + 1; i++) {\n    k = k - 1;\n    k = k + 0;\n  }\n}\nvoid loop(){}', 0, 'interp.err.divZero', 3],
+    ['C for の更新部', 'c', 'void setup(){\n  int k = 1;\n  for (int i = 0; i < 3; i = 10 % k) {\n    k = k - 1;\n    k = k + 0;\n  }\n}\nvoid loop(){}', 0, 'interp.err.divZero', 3],
+    ['C do-while の条件（行＝while の行）', 'c', 'void setup(){\n  int k = 1;\n  do {\n    k = k - 1;\n    k = k + 0;\n  } while (10 % k);\n}\nvoid loop(){}', 0, 'interp.err.divZero', 6],
+  ];
+  for (const [label, lang, code, ticks, key, ln] of LOOPS) {
+    const r = runK(code, lang, ticks);
+    ok(r.ctor === 'RuntimeError' && r.key === key && r.line === ln && r.ctrl && r.ctrl.line() === ln, `K-4 ${label} → ${key}（行 ${ln}）（実 ${r.ctor || '例外なし'} ${r.key || ''}・行 ${r.line}・ハイライト ${r.ctrl ? r.ctrl.line() : '?'}）`);
+  }
+  // エラーの出ない tick の後の実行位置ハイライトとステップ上限エラーの行は是正前と同じ（条件の評価の後に curLine を戻す・更新部の tick は先）。
+  const SAME = [
+    ['py while の後のハイライト（本体の最後の文）', 'py', 'def loop():\n    x = 3\n    while x > 0:\n        x = x - 1\n        y = 1\n', 1, null, 5],
+    ['C for の後のハイライト（本体の最後の文）', 'c', 'void setup(){}\nvoid loop(){\n  int k = 0;\n  for (int i = 0; i < 3; i++) {\n    k = k + 1;\n    k = k + 0;\n  }\n}', 1, null, 6],
+    ['py while のステップ上限（行＝本体の最後の文）', 'py', 'def loop():\n    x = 1\n    while x > 0:\n        x = x + 1\n        y = 2\n', 1, 'interp.err.stepLimit', 5],
+    ['C for のステップ上限（行＝本体の最後の文）', 'c', 'void setup(){}\nvoid loop(){\n  int k = 0;\n  for (int i = 0; i < 3; i = i + 0) {\n    k = k + 1;\n    k = k + 0;\n  }\n}', 1, 'interp.err.stepLimit', 6],
+  ];
+  for (const [label, lang, code, ticks, key, ln] of SAME) {
+    const r = runK(code, lang, ticks);
+    const got = key ? r.line : (r.ctor ? 'ERR ' + r.msg : r.ctrl.line());
+    ok((key ? r.key === key : !r.ctor) && got === ln && r.ctrl && r.ctrl.line() === ln, `K-4 ${label}: 行 ${ln}（実 ${r.key || '例外なし'}・${got}）`);
   }
   i18nK.setLang('ja');
 }

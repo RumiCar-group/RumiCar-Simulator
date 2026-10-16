@@ -120,6 +120,26 @@ export class Interp {
     if (e instanceof ReturnSignal) return new RuntimeError('returnOutside', {}, e.line);
     return e;
   }
+  // BL7 fix1（層4 F3）: ループの条件を行 ln（そのループの文の行）で評価して真偽を返し、curLine を評価前の値へ戻す（例外で抜けたときは
+  //   戻さない＝エラーの行は ln か、条件が呼んだ関数の中の行）。
+  condAt(ln, cond, scope) {
+    const keep = this.curLine;
+    if (ln) this.curLine = ln;
+    const v = this.tr(this.evalExpr(cond, scope));
+    this.curLine = keep;
+    return v;
+  }
+  // BL7 fix1（層4 F3）: C の for の更新部（parser_c の { t: 'exprstmt' }・行なし）を for の行で評価する。execStmt と同じく先に tick()
+  //   （ステップの数とステップ上限エラーの行は是正前と同じ）・評価の後は curLine を戻す。行を持つ・式でない更新部は従来どおり execStmt。
+  execUpdate(node, fs) {
+    const u = node.update;
+    if (u.t !== 'exprstmt' || u.line) { this.execStmt(u, fs); return; }
+    this.tick();
+    const keep = this.curLine;
+    if (node.line) this.curLine = node.line;
+    this.evalExpr(u.expr, fs);
+    this.curLine = keep;
+  }
   // BJ3: 関数の外の文（トップレベル。Model A の setup 前の初期化・Model B の while True: より前・Model C の全体）を走らせる。
   //   ここまで届いた break／continue／return は、外側にループも関数も無い＝エラー（Python も SyntaxError）。
   // BL7 ④: 関数の外（トップレベル）で実行環境のスタックが尽きたとき（Model B の `while True:` の本体や 1 回だけ走るプログラムの
@@ -191,8 +211,12 @@ export class Interp {
         else if (node.els) this.execBlock(node.els, scope);
         return;
       }
+      // BL7 fix1（層4 F3）: ループの条件（while・C の for の条件と更新・do-while の条件）は、そのループの文の行で評価する（condAt・execUpdate）。
+      //   是正前は 2 回目以降の条件を本体の最後に実行した文の行のまま評価し、条件の中で出たエラー（len(None)・ゼロ除算・未定義の名前ほか）の
+      //   行が本体の最後の文を指した（1 回目だけ while の行）。評価の後は curLine を元へ戻す＝エラーが出ない限り、実行位置ハイライト（line()）・
+      //   ステップ上限エラーの行・評価ステップの数は是正前と同じ。
       case 'while': {
-        while (this.tr(this.evalExpr(node.cond, scope))) {
+        while (this.condAt(node.line, node.cond, scope)) {
           this.tick();
           try { this.execBlock(node.body, scope); }
           catch (e) { if (e instanceof BreakSignal) break; if (e instanceof ContinueSignal) continue; throw e; }
@@ -204,7 +228,7 @@ export class Interp {
           this.tick();
           try { this.execBlock(node.body, scope); }
           catch (e) { if (e instanceof BreakSignal) break; if (e instanceof ContinueSignal) continue; throw e; }
-        } while (this.tr(this.evalExpr(node.cond, scope)));
+        } while (this.condAt(node.condLine || node.line, node.cond, scope));   // condLine＝`} while (…);` の while の行（parser_c）
         return;
       }
       case 'switch': {
@@ -225,11 +249,11 @@ export class Interp {
       case 'for': {
         const fs = { vars: Object.create(null), parent: scope };
         if (node.init) this.execStmt(node.init, fs);
-        while (node.cond ? this.tr(this.evalExpr(node.cond, fs)) : true) {
+        while (node.cond ? this.condAt(node.line, node.cond, fs) : true) {
           this.tick();
           try { this.execBlock(node.body, fs); }
           catch (e) { if (e instanceof BreakSignal) break; if (e instanceof ContinueSignal) {} else throw e; }
-          if (node.update) this.execStmt(node.update, fs);
+          if (node.update) this.execUpdate(node, fs);
         }
         return;
       }
@@ -563,8 +587,12 @@ function pyTruthy(v) {
   if (typeof v === 'object' && Object.getPrototypeOf(v) === null) return dictNonEmpty(v);
   return true;
 }
-// BL7 ③: 素の辞書（プロトタイプ無し）に鍵が 1 つでもあるか。最初の鍵で抜ける＝O(1)（是正前は Object.keys(v).length＝判定のたびに
-//   鍵の数の配列を作った）。プロトタイプ無しなので for … in が数えるのは自前の列挙できる鍵だけ（Object.keys と同じ集合）。
+// BL7 ③: 素の辞書（プロトタイプ無し）に鍵が 1 つでもあるか。是正前の Object.keys(v).length > 0 と同じ値（プロトタイプ無しなので
+//   for … in が数えるのは自前の列挙できる鍵だけ＝Object.keys と同じ集合）。ソースの上では最初の鍵で抜けるが、**速くはならない**:
+//   BL7 fix1（層4 F1）の実測（Node 22.22.1）で、Object.create(null) の辞書は V8 の辞書モード（%HasFastProperties＝false）で、for … in は
+//   始める前に全部の鍵を集める＝鍵の数に比例（N＝1／1000／20000 で 0.29／22.8／2132 µs・Object.keys 版との比 1.0〜1.6）・割り当ても同じ
+//   （N＝1000 を 2 万回で GC の scavenge が両方 160 回）。O(1) にするには dict に要素数を持たせ、全部の更新箇所で同期する必要がある
+//   （採らない・決定ログ BL7 fix1）。値は是正前と同じ・Object.keys を呼ばない（wf_bl1_ui K-3 の配線）ことだけを主張する。
 function dictNonEmpty(o) { for (const k in o) return true; return false; }
 
 // ===== AP9: Python 組込メソッド (str / list / dict) =====
