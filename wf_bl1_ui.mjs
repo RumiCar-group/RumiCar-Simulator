@@ -7,11 +7,13 @@
 //    是正前（ad5ddd1＝v10.3.0）は main.js の中の NG 語を `includes` で部分一致させていたため、アプリ自身の語彙
 //    「カスタム車種」（カス）・「cockpit」（cock）・「Essex」「Sussex」（sex）・「Dickens」（dick）・「die hard」（"die "）・
 //    「スカスカ」（カス）が拒否された。A-1 の通過表（PLAN BL1 の 9 行＋設計で決めた規則の行）と A-2 の拒否表
-//    （product の NG_WORDS の全語から機械生成・語ごとに複数の文）と A-3 の URL 過多・A-4 の配線を固定する。
+//    （product の NG_WORDS の全語から機械生成・語ごとに複数の文）と A-3 の URL 過多・A-4 の配線、A-5 の取りこぼし側の表
+//    （v10.3.0 は拒否していた攻撃表現: BL1 初版の語境界化で通るようになり一覧に足した行＝拒否／直さずに残した行＝
+//    moderate.js 冒頭「既知の残り」と一致すること／v10.3.0 から残る誤検出）を固定する。
 //    `--root <是正前の木>` で回すと、moderate.js が無い木では main.js の NG_WORDS と moderate の本文を
 //    取り出して評価する（是正前の木の判定を是正前のまま測るためだけの読み口＝product の経路は変えない）。
-//    是正前の木では A-1 の PLAN の 9 行のうち diesel・differential 以外の 7 行と、規則の行の多く、A-4 が赤
-//    （2026-10-16 の実測は決定ログ BL1 結果）。
+//    是正前の木では A-1 の PLAN の 9 行のうち diesel・differential 以外の 7 行と、規則の行の多く、A-4 が赤、
+//    A-5 は「既知の取りこぼし」の行（v10.3.0 は拒否）と文書照合の行が赤（2026-10-16 の実測は決定ログ BL1 結果）。
 //
 // 使い方: node wf_bl1_ui.mjs              … 検査
 //         node wf_bl1_ui.mjs --root <dir>  … <dir>/public/js の product で回す（是正前の木で赤になることの確認用）
@@ -62,6 +64,9 @@ const PASS_RULE = [  // moderate.js 冒頭の規則 ①② から導いた行（
   'ESSEX', 'Charles Dickens の小説', 'peacock', 'Hancock', 'cocktail', 'sextant と sexagesimal', 'the skill you need',
   'the engine would die here', 'RC_xxx の関数', 'retarder（減速装置）', 'バカンス', 'デブリ', 'コロンブス', 'エロージョン',
   'クズネツォフ', '差別化する', '無差別', '滞在日数', 'カスケード制御', '少しねじれる',
+  // 層4 F1/F3/F4 の是正で足した規則の行（retard は -s/-ed だけ・kill your は kill you と別・在日は直前だけを見る・
+  // ひらがなに挟まれた しね・サロゲート対の漢字〔CJK 拡張 B〕も漢字として読む）
+  'retarding force', 'retardation', 'kill your speed before the corner', '現在日時', 'わたしね、', 'もしね、', '\u{20BB7}在日',
 ];
 for (const s of [...PASS_PLAN, ...PASS_RULE]) {
   const r = moderate(s);
@@ -118,6 +123,33 @@ console.log('\nA-4) 配線（main.js の askSendBtn が moderate.js の moderate
   const msrc = existsSync(join(JS, 'moderate.js')) ? readFileSync(join(JS, 'moderate.js'), 'utf8') : '';
   ok(msrc !== '' && !/\b(document|window|localStorage)\b/.test(msrc.replace(/^\s*\/\/.*$/gm, '')),
      'moderate.js は DOM に触れない（document/window/localStorage の参照 0 件・コメントを除く）');
+}
+
+console.log('\nA-5) 取りこぼし側（v10.3.0 は部分一致で拒否していた攻撃表現。層4 F1 の実測）');
+// A-5a: BL1 初版（9f5b4c2）の語境界化で通るようになったため一覧・規則に足した行＝拒否（是正前の木でも拒否）。
+for (const [s, w] of [['kill yourself', 'kill yourself'], ['you should kill yourselves', 'kill yourselves'],
+  ['dickhead', 'dickhead'], ['cocksucker', 'cocksucker'], ['idiotic', 'idiot'], ['idiotically slow', 'idiot'],
+  ['stupidity', 'stupid'], ['stupidly', 'stupid'], ['die in a fire', 'die in a fire'], ['you should die now', 'you should die'],
+  ['バカヤロー', 'バカヤロ'], ['バカヤロウ', 'バカヤロ'], ['デブス', 'デブス'], ['アホンダラ', 'アホンダラ'],
+  ['在日韓国人は出ていけ', '在日'], ['在日朝鮮人', '在日'], ['人種差別', '人種差別'], ['差別的な発言', '差別的'],
+  ['sex_toy', 'sex'], ['sex69', 'sex'], ['sexy69', 'sex'], ['dickface', 'dickface'], ['dickwad', 'dickwad'],
+  ['cockhead', 'cockhead'], ['エロゲーム', 'エロゲ'], ['stupider', 'stupid']]) {
+  const r = moderate(s);
+  ok(r && r.ok === false, `拒否（取りこぼしの是正）「${s}」（実 ${J(r)}・現行の語「${w}」）`);
+}
+// A-5b／A-5c: 直さずに残した行。moderate.js 冒頭「既知の残り」に同じ文が書いてあり、挙動もその記述どおりであること
+// （直したらここが赤になる＝記述も直す）。
+const MSRC = existsSync(join(JS, 'moderate.js')) ? readFileSync(join(JS, 'moderate.js'), 'utf8') : '';
+for (const s of ['お前はしね', 'しねよ', 'もうしね', 'i will kill your family', 'エロイ', '性差別', '差別発言',
+  'クソバカ', 'ドアホ', 'カスヤロー', '差別野郎', 'sexist', 'cockface']) {
+  const r = moderate(s);
+  ok(r && r.ok === true && MSRC.includes(`「${s}」`), `既知の取りこぼし「${s}」＝通過かつ moderate.js に記述あり（実 ${J(r)}）`);
+}
+for (const [s, w] of [['少しね', 'しね'], ['勢いを殺す', '殺す'], ['pussyfoot', 'pussy'], ['Penistone', 'penis'],
+  ['在日外国人向けの英語 UI', '在日'], ['在日本大使館', '在日']]) {
+  const r = moderate(s);
+  ok(r && r.ok === false && r.word === w && MSRC.includes(`「${s}」`),
+     `既知の誤検出「${s}」→ 語「${w}」かつ moderate.js に記述あり（実 ${J(r)}）`);
 }
 
 const line = '─'.repeat(64);
