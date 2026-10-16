@@ -16,6 +16,7 @@ import { buildApi } from './public/js/api.js';
 import { setCarScale, setRegimeScale, CAR, SIM, SENSOR_NOISE } from './public/js/config.js';
 import { applyRegime } from './public/js/physics_dyn.js';
 import { PROGRAM_BY_KEY, PROGRAMS } from './public/js/programs.js';
+import { runLiveFrame } from './public/js/loopsched.js';   // BL6: ライブの loop() の段取りは product の関数（main.js frame と同じ・写しを作らない）
 import { FROZEN } from './wf_frozen.mjs';   // AP3: 凍結値は中央マニフェスト経由
 
 const specs = JSON.parse(fs.readFileSync('./public/data/courses.json', 'utf8'));
@@ -47,10 +48,16 @@ console.log('B) ライブ多台のねじ込み(走り出せない)=0');
   for (const s of slots) { s.car.reset(s.spawn); s.world._others = []; s.hostEnv = buildApi(s.world); s.lap.reset(crs, { carType: s.carType, persist: false }); try { s.controller = buildController(s.src, s.lang, s.hostEnv); s.controller.setup(); s.running = true; s.loopTimer = 0; } catch (e) { s.running = false; } }
   const x0 = slots.map((s) => ({ x: s.car.x, y: s.car.y }));
   for (let f = 0; f < 140; f++) {   // 7s @ sdt=0.05 (ライブ粗い積分・substep=1/loopHz)
-    const edges = slots.map((s) => carEdges(s.car));
-    slots.forEach((s, i) => { if (!s.running) return; s.loopTimer -= 0.05; if (s.loopTimer <= 0) { tickSlot(s, othersFor(edges, i, true)); s.loopTimer += 1 / SIM.loopHz; } });
-    let rem = 0.05; const mx = 1 / SIM.loopHz;
-    while (rem > 1e-6) { const st = Math.min(mx, rem); const e = slots.map((s) => carEdges(s.car)); slots.forEach((s, i) => integrateSlot(s, st, othersFor(e, i, true), crs.walls, true)); rem -= st; }
+    // BL6: loop() の段取りは loopsched.js の runLiveFrame (main.js frame と同じ)。sdt 0.05 = 1 周期なので区間 1 つ＝1 フレーム 1 回の
+    //   loop() → 0.05 の積分 (BL6 前のこのゲートの式と同じ呼び出し・同じ値。wf_bl1_ui.mjs J-4)。
+    let edges = slots.map((s) => carEdges(s.car));
+    runLiveFrame(0.05, SIM.loopHz, slots,
+      (s, i) => { if (!edges) edges = slots.map((x) => carEdges(x.car)); tickSlot(s, othersFor(edges, i, true)); return s.world._pendingDelay || 0; },
+      (dt) => {
+        let rem = dt; const mx = 1 / SIM.loopHz;
+        while (rem > 1e-6) { const st = Math.min(mx, rem); const e = slots.map((s) => carEdges(s.car)); slots.forEach((s, i) => integrateSlot(s, st, othersFor(e, i, true), crs.walls, true)); rem -= st; }
+        edges = null;
+      });
   }
   const stuck = slots.filter((s, i) => Math.hypot(s.car.x - x0[i].x, s.car.y - x0[i].y) < 0.5 * CAR.length && !s.car.crashed).length;
   const wallStuck = slots.filter((s) => checkCollision(s.car, crs.walls)).length;

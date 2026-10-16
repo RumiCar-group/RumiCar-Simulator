@@ -715,10 +715,13 @@ const SOLO_LIVE = {
 // 【BL6・2026-10-17】ライブの loop() の段取りを「1 フレームの sdt を loop の周期で刻み、区間ごとに loop() → 積分」に変えた（product の
 //   loopsched.js・wf_bg_live.mjs の liveTicks が呼ぶ）。V0 の 2 フレーム目（▶ 直後の長いフレーム＝sdt 0.15 s＝3 周期）だけが sdt > 1 周期で、
 //   是正前は loop() 1 回＋0.15 s の積分、是正後は 0.05 s ごとに loop() → 積分 を 3 回（2・3 回目は前の区間を進めた後のセンサー）。
-//   loopsched.js のある木（BL6 後）は下の SOLO_LIVE_BL6 の 12 本をその値で照合し、無い木（--root で BL6 前の木）は上の値のまま照合する。
+//   loopsched.js のある木（BL6 後）は下の SOLO_LIVE_BL6 の 12 本をその値で照合し、無い木（BL6 前の木）は上の値のまま照合する分岐。
+//   ただし --root では E 章が走らない（上の PRODUCT_ONLY・`if (PRODUCT_ONLY) finish();`）ので、BL6 前の木の側はこのゲートでは通らない
+//   （BL6 fix1・層4 F4。BL6 前の木の照合は下の実測が証拠）。
 //   実測（2026-10-17・internal docs/stage_bl/bl6/logs/evidence_solo_live_repin.txt）: BL6 前の木 fee6e7a × V0 は上の 27 本と 27/27 一致・
 //   2 フレーム目も 0.05 にした列（全フレーム sdt ≤ 1 周期）では BL6 前と後の木の指紋が 27/27 一致・BL6 後 × V0 で変わるのは 12/27（残り
-//   15 本は追加の 2 回の loop() が同じ指令を出した）。∴ 変わったのは sdt > 1 周期のフレームの段取りだけ。
+//   15 本は 2 フレーム目を区間に分けても指紋が変わらなかった）。∴ 変わったのは sdt > 1 周期のフレームの段取りだけ（区間ごとの loop() と、
+//   区間ごとに働く積分の呼び出し単位の処理＝loopsched.js 冒頭）。
 const SOLO_LIVE_BL6 = {
   "オーバル|v2": "2d10efbe",
   "トライアングル|standard": "2dc26c53",

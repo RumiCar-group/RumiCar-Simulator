@@ -211,7 +211,8 @@ const GATES = [
   //   非文字列耐性・テンプレート文字列の ${…} の配線（一覧に無い式は赤）。改修前の木（8248a58）で赤＝G-1〜G-5。
   //   H/I) BL5 CSS 変数の未定義・ファイル入力の a11y の配線・elev3d.js の canvas 文言の i18n。改修前の木（81e44bf）で赤＝H-1〜H-4・I-1〜I-4。
   //   J) BL6 live の loop() の段取り（main.js frame の走行中・非ポーズ分岐を治具で評価・loopsched.js の runLiveFrame）: 低 fps×速度 3× でも
-  //   loop() が loopHz の ±5 %・負債 ≤ 1 周期・delay(100) の遅れ・1 フレームの上限・sdt ≤ 1 周期で是正前と同一。改修前の木（fee6e7a）で赤＝J-1・J-2・J-3・J-5。
+  //   loop() が loopHz の ±5 %・負債 ≤ 1 周期・delay(100) の遅れ・1 フレームの上限・sdt ≤ 1 周期で是正前と同一・J-6 呼ぶ時刻が期限の来た区間の
+  //   始まりで間隔が 0〜2 周期＋delay（BL6 fix1）。改修前の木（fee6e7a）で赤＝J-1・J-2・J-3・J-5・J-6。
   //   実ブラウザは browser/check_bl1_moderate.mjs・check_bl2_runview.mjs・check_bl3_rankorder.mjs・check_bl4_escape.mjs・check_bl5_a11y.mjs・check_bl6_loop.mjs。
   //   所要は本ホスト実測 約 27 秒（単独・2026-10-17。BL1 時点の記載は約 1.5 秒・BL5 の wf_run_all の実測は 26.2 秒）。
   'wf_bl1_ui.mjs',

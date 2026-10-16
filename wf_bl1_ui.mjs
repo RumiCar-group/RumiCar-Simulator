@@ -101,8 +101,11 @@
 //    60 fps×1× に戻した最初の 1 sim 秒が loopHz ± 1・負の delay でも負債 ≤ 1 周期。J-2 delay(100) で次の loop() が呼ばない双子より
 //    100 ms ± 1 周期 遅れる。J-3 上限 LIVE_MAX_TICKS_PER_FRAME ≥ UI で出せる最大の区間の数（index.html #speed の max × main.js の打ち切り）と
 //    上限に当たったときの挙動（UI の外・速度 5×）。J-4 sdt ≤ 1 周期のフレーム列で是正前の式と呼び出し・値が 1 ビットも違わない。J-5 配線。
+//    J-6（BL6 fix1・層4 F3）loop() を呼ぶ時刻が、治具の外で独立に作った期限の列の「期限の来た区間の始まり」で、続く 2 回の間隔が 0 より長く
+//    2 周期＋delay 以下（Δt の揺れ・端数の区間・delay の 7 行。続けて呼んだ回数〔間隔 5 ms 未満〕は参考の印字）。
 //    赤になる章（2026-10-17 の実測・--root fee6e7a＝BL5 後・BL6 前）: J-1（30・20・10 fps×3× と参考の 45・40 fps×3×・負の delay）・
-//    J-2（同じ 5 条件）・J-3（2 行）・J-5（4 行）の 17 件。J-4 は是正前の木では同じ本文どうしの比較で緑。実ブラウザは
+//    J-2（同じ 5 条件）・J-3（2 行）・J-5（4 行）の 17 件（BL6 初版の時点）＋fix1 の J-6 は 60 fps×1× 以外の 6 行（是正前は loop() が期限より
+//    遅れ・頻度が落ちる）＝計 23 件（739/23）。J-4 は是正前の木では同じ本文どうしの比較で緑。実ブラウザは
 //    browser/check_bl6_loop.mjs（本物の rAF の間隔と速度で、loop() のたびに回数を print するプログラムのシリアル出力から頻度を測る）。
 //
 // 使い方: node wf_bl1_ui.mjs              … 検査
@@ -1834,7 +1837,8 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
 // 100 ms ± 1 周期 遅れる（位相 4 通り）・その間隔 − 1 周期 も 100 ms ± 1 周期。J-3 上限: UI で出せる最大の sdt（main.js の 1 フレームの打ち切り
 // × index.html #speed の max）の区間の数 ≤ LIVE_MAX_TICKS_PER_FRAME・UI の外（速度 5×・10 fps）で上限に当たったときの挙動（1 フレーム ≤ 上限の
 // loop()・物理は sdt を全部積分・負債 ≤ 1 周期・60 fps×1× に戻した直後 loopHz ± 1）。J-4 sdt ≤ 1 周期のフレーム列（乱数 3 系列・4 台・
-// delay と running の切替あり）で tick と積分の呼び出しの並び・loopTimer の値が是正前の式と 1 ビットも違わない。J-5 配線。
+// delay と running の切替あり）で tick と積分の呼び出しの並び・loopTimer の値が是正前の式と 1 ビットも違わない。J-5 配線。J-6 loop() を呼ぶ
+// 時刻と間隔を独立の期限の列と照合（BL6 fix1・下の注記）。
 {
   console.log('\nJ) BL6 live の loop() の段取り — main.js frame の走行中・非ポーズ分岐の本文を治具で評価');
   const cfg = await import(pathToFileURL(join(JS, 'config.js')).href);
@@ -1863,7 +1867,7 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
 
   // 治具: 1 フレームを本物の分岐で回す。delayOf(slot, n) → その回の loop() が積む delay [ms]（n＝そのスロットの何回目の loop() か・0 始まり）。
   function makeRig(nSlots, delayOf = () => 0) {
-    const R = { simT: 0, minTimer: 0, calls: [], slots: [], log: null };
+    const R = { simT: 0, minTimer: 0, calls: [], slots: [], log: null, sl: [] };   // sl＝積分した区間 [始まりの sim 時刻, 長さ] の列（J-6）
     for (let i = 0; i < nSlots; i++) R.slots.push({ running: true, loopTimer: 0, world: { _pendingDelay: 0 }, ticks: [] });
     const watch = (v) => { if (v < R.minTimer) R.minTimer = v; };
     const tickSlot = (s, others) => {
@@ -1876,6 +1880,7 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
       if (R.log) R.log.push(`T${i}:${s.loopTimer}`);
     };
     const integrateLive = (dt) => {
+      R.sl.push([R.simT, dt]);
       R.simT += dt;
       for (const s of R.slots) watch(s.loopTimer);
       if (R.log) R.log.push(`I:${dt}`);
@@ -2013,6 +2018,59 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
   ok(!/loopTimer\s*(?:[-+]=|<=)/.test(fr ? fr.text : ''), 'frame の本文に loopTimer の引き算・足し算・比較が無い（段取りは loopsched.js の 1 か所）');
   ok(/integrateLive\(dt\)/.test(branch) && /tickSlot\(s, othersFor\(e, i, interact\)\)/.test(branch) && /return s\.world\._pendingDelay \|\| 0;/.test(branch),
     '分岐の tick は tickSlot(s, othersFor(e, i, interact)) の後に world._pendingDelay を返し、積分は integrateLive(dt)（区間ごと）');
+
+  console.log('\nJ-6) loop() を呼ぶ時刻 — 期限（前の期限＋1 周期＋delay）の来た区間の始まり・続く 2 回の間隔は 0 より長く 2 周期＋delay 以下（Δt の揺れ・端数の区間）');
+  // 層4 F3（BL6 fix1）: 既定の速度 3× で Δt が 16.7 ms をわずかに超えると [P, 端数] に刻まれ、loop() が sim 時間 1 ms 未満の間隔で続けて
+  // 呼ばれることがある（許容した設計判断＝loopsched.js 冒頭）。ここでは physics_model §0 の主張「期限の来た区間の始まりで呼ぶ（期限より最大
+  // 1 区間早い）」「間隔は 0 より長く 2 周期＋delay 以下」を、治具の外で独立に作った期限の列と照合する: 期限₀ = 0（▶ の直後の loopTimer 0）・
+  // 期限ₖ₊₁ = 期限ₖ + P + delayₖ/1000。k 回目の loop() の時刻 cₖ（治具の simT）が積分した区間の始まりで、その区間 [cₖ, cₖ＋長さ] に期限ₖ が
+  // 入ること（遅れない・最大 1 区間早い）・呼んだ回数＝sim 時間の中に来た期限の数 ±1。続けて呼んだ回数（間隔 5 ms 未満）は参考の印字。
+  if (branchFn) {
+    let seed = 20261017;
+    const rnd = () => { seed = (Math.imul(seed, 1103515245) + 12345) >>> 0; return seed / 4294967296; };
+    const gauss = () => { let u = 0; for (let i = 0; i < 12; i++) u += rnd(); return u - 6; };
+    const mkJit = (sigmaMs, missP, speed) => { const a = []; for (let i = 0; i < 4000; i++) { let ms = 1000 / 60 + gauss() * sigmaMs; if (rnd() < missP) ms += 1000 / 60; a.push(speed * Math.min(capSec, Math.max(0, ms) / 1000)); } return (f) => a[f % a.length]; };
+    const ROWS = [
+      ['60 fps×3×・Δt 16.5/16.8/16.8/16.5/16.7 ms の繰り返し', (f) => 3 * Math.min(capSec, [16.5, 16.8, 16.8, 16.5, 16.7][f % 5] / 1000), () => 0],
+      ['60 fps×3×・Δt の揺れ σ 0.3 ms＋5 % のフレームで 1 回取りこぼし', mkJit(0.3, 0.05, 3), () => 0],
+      ['60 fps×3×・Δt の揺れ σ 1 ms', mkJit(1, 0, 3), () => 0],
+      ['45 fps×3×', () => sdtOf(45, 3), () => 0],
+      ['40 fps×3×', () => sdtOf(40, 3), () => 0],
+      ['30 fps×3×・7 回に 1 回 delay(0〜150)', () => sdtOf(30, 3), (s, n) => (n % 7 === 3 ? (n * 37) % 151 : 0)],
+      ['60 fps×1×・7 回に 1 回 delay(0〜150)', () => sdtOf(60, 1), (s, n) => (n % 7 === 3 ? (n * 37) % 151 : 0)],
+    ];
+    for (const [label, sdtFn, delayOf] of ROWS) {
+      let err = null, bad = 0, ex = '', ivBad = 0, ivEx = '', nearDup = 0, ivMin = Infinity, earlyMax = 0, calls = 0, dues = 0, frames = 0;
+      try {
+        const R = makeRig(1, delayOf);
+        while (R.simT < 60 - 1e-9 && frames < 1e6) { R.frame(sdtFn(frames)); frames++; }
+        const T = R.slots[0].ticks, SL = R.sl;
+        calls = T.length;
+        let due = 0, j = 0;
+        const dueOf = [];
+        for (let k = 0; k < T.length; k++) {
+          const c = T[k];
+          while (j < SL.length && SL[j][0] < c) j++;
+          const atStart = j < SL.length && SL[j][0] === c;
+          const len = atStart ? SL[j][1] : NaN;
+          const early = due - c;
+          if (!(atStart && early >= -1e-9 && early <= len + 1e-9)) { bad++; if (!ex) ex = `${k} 回目: 時刻 ${c.toFixed(4)}・期限 ${due.toFixed(4)}・${atStart ? '区間の長さ ' + len.toFixed(4) : '区間の始まりでない'}`; }
+          if (early > earlyMax) earlyMax = early;
+          dueOf.push(due);
+          due += P + delayOf(null, k) / 1000;
+        }
+        for (let k = 0; k + 1 < T.length; k++) {
+          const iv = T[k + 1] - T[k], cap = 2 * P + delayOf(null, k) / 1000;
+          if (iv < ivMin) ivMin = iv;
+          if (iv < 0.005) nearDup++;
+          if (!(iv > 1e-12 && iv <= cap + 1e-9)) { ivBad++; if (!ivEx) ivEx = `${k}→${k + 1} 回目 ${(iv * 1000).toFixed(2)} ms（上限 ${(cap * 1000).toFixed(1)}）`; }
+        }
+        let d2 = 0; while (d2 <= R.simT + 1e-9) { dues++; d2 += P + delayOf(null, dues - 1) / 1000; }
+      } catch (e) { err = e; }
+      ok(!err && bad === 0 && ivBad === 0 && Math.abs(calls - dues) <= 1,
+        `${label}（${frames} フレーム・60 sim 秒）: ${err ? '例外 ' + err.message : `期限の来た区間の始まりで呼んだ ${calls - bad}/${calls} 回（期限より早い最大 ${(earlyMax * 1000).toFixed(1)} ms）${ex ? '・外れ ' + ex : ''}・間隔が 0 より長く 2 周期＋delay 以下 ${calls - 1 - ivBad}/${calls - 1}${ivEx ? '・外れ ' + ivEx : ''}・呼んだ回数 ${calls}＝期限の数 ${dues} ±1・参考: 最短の間隔 ${(ivMin * 1000).toFixed(2)} ms・5 ms 未満 ${nearDup} 回`}`);
+    }
+  }
 }
 
 const line = '─'.repeat(64);

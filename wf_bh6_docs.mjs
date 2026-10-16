@@ -91,10 +91,12 @@ function soloSlot(course, { src, lang = 'c', mode = 'dynamic' }) {
   return slot;
 }
 const DT = 1 / config.SIM.physicsHz;
+// 1 台を 1/60 秒（60 fps×1× の ▶ の 1 フレーム）進める。loop() の段取りは product の loopsched.js の runLiveFrame（main.js frame と同じ
+// 関数・写しを作らない・BL6）。DT ≤ 1 周期なので区間 1 つ＝BL6 前のこのゲートの式と同じ呼び出し・同じ値（wf_bl1_ui.mjs J-4）。
 function stepSolo(slot, course, recover) {
-  slot.loopTimer -= DT;
-  if (slot.loopTimer <= 0) { fleet.tickSlot(slot, []); slot.loopTimer += (1 / config.SIM.loopHz) + (slot.world._pendingDelay || 0) / 1000; }
-  fleet.integrateSlot(slot, DT, [], course.walls, recover, [slot]);
+  M.loopsched.runLiveFrame(DT, config.SIM.loopHz, [slot],
+    (s) => { fleet.tickSlot(s, []); return s.world._pendingDelay || 0; },
+    (dt) => fleet.integrateSlot(slot, dt, [], course.walls, recover, [slot]));
 }
 const box = (x0, y0, x1, y1) => [{ x1: x0, y1: y0, x2: x1, y2: y0 }, { x1: x1, y1: y0, x2: x1, y2: y1 }, { x1: x1, y1: y1, x2: x0, y2: y1 }, { x1: x0, y1: y1, x2: x0, y2: y0 }];
 const FWD_C = 'void setup() { RC_setup(); }\nvoid loop() { RC_steer(CENTER); RC_drive(FORWARD, 200); }';

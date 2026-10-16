@@ -500,7 +500,7 @@ function applyManual() {
 // (#22 では freeSpawn/integrateSlot 自体は無改変だった。BG2 で integrateSlot に車どうしの ESCAPE/STUCK を足した＝
 //  fleet.js の注記。ライブとレースは同じ integrateSlot を通る。)
 function integrateLive(dt) {
-  applyStartGate(slots, interact);   // Stage AK7: 発走の順次化 (held を1フレーム1回更新・レースと同一機構)
+  applyStartGate(slots, interact);   // Stage AK7: 発走の順次化 (held を integrateLive の呼び出しごとに更新＝ライブの走行中は区間ごと〔BL6〕・レースは 1/60 の tick ごと・同一機構)
   // Stage AO4: mode==='v2' は全車同時積分＋インパルス接触 (integrateFleetV2 が内部で 1/60 サブステップ＋
   // 接触一括解決＝#22 のライブ大 dt デッドロックは構造的に非発生)。dynamic/standard は従来サブステップ経路。
   if (PHYSICS.mode === 'v2') { integrateFleetV2(slots, dt, course.walls, recover, interact); return; }
@@ -540,6 +540,8 @@ function frame(t) {
       //   (loopsched.js の冒頭。是正前は loop() が 1 フレーム 1 回までで、sdt > 1/loopHz の低 fps×高倍率で loop() が落ち負債が溜まった)。
       //   sdt ≤ 1/loopHz のフレームは区間 1 つ＝是正前と同じ呼び出し。2 つ目以降の区間の loop() は、前の区間を積分した後の
       //   車体エッジで他車を見る (1 つ目は上の edges＝是正前と同じ)。1 フレームの loop() は 1 台 LIVE_MAX_TICKS_PER_FRAME 回まで。
+      //   integrateLive も区間ごとに呼ぶので、呼び出し単位で働く処理 (壁に当たった後の残りを捨てる break・復帰の上書き・applyStartGate・
+      //   向き直し・周回の判定) も区間ごとに働く＝sdt > 1/loopHz のフレームでは軌跡が是正前と変わる (loopsched.js の冒頭)。
       let e = edges;
       runLiveFrame(sdt, SIM.loopHz, slots,
         (s, i) => { if (!e) e = fleetEdgesOf(slots); tickSlot(s, othersFor(e, i, interact)); return s.world._pendingDelay || 0; },

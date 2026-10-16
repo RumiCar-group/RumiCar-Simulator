@@ -10,6 +10,8 @@
 //      で loop() の頻度が loopHz (ページの config.js の SIM.loopHz) の ±5 %。
 //   ④ ③ の直後に負荷を外し速度を 1× に戻した最初の 1 sim 秒の loop() の回数が loopHz ± 1・続く 5 sim 秒の頻度が ±5 %。
 //   ⑤ JS エラー 0。
+//   参考（BL6 fix1・合否に使わない）: ① の窓で sdt が 1 周期を超え区間に分けたフレームの数と、その sdt の列を product の runLiveFrame で
+//   再生したときの loop() の間隔（最短・5 ms 未満の回数＝端数の区間の始まりと次のフレームの始まりで続けて呼ばれた回数）。
 //   前提の照合 (外れたら合否の前に ✗): ② の sdt の中央値が 1.5 周期以上 (＝是正前の if が 1 フレーム 1 回で取りこぼす条件)・
 //   ③ の sdt の中央値が速度×0.05 (＝1 フレームの上限に当たる条件)・④ の Δt の中央値が 1 周期未満 (60 fps 相当)。
 //
@@ -20,6 +22,7 @@
 //
 // 使い方: cd browser && bash run.sh check_bl6_loop.mjs   （所要: 約 1 分）
 import { launch, newPage, appModule } from './lib.mjs';
+import { runLiveFrame, liveSlices } from '../public/js/loopsched.js';   // 参考の再生だけに使う（合否には使わない・BL6 fix1）
 
 let pass = 0, fail = 0;
 const fails = [];
@@ -134,6 +137,19 @@ const fmt = (r) => r ? `${r.hz.toFixed(2)} Hz（${r.count} 回 / ${r.span.toFixe
 console.log('\n① 60 fps×3×（負荷なし）');
 const r1 = rate(0, 0, 10);
 ok(!!r1 && r1.hz >= lo && r1.hz <= hi, `loop() の頻度 ${fmt(r1)} が ${lo.toFixed(1)}〜${hi.toFixed(1)} Hz`);
+// 参考（BL6 fix1・層4 F3。合否には使わない）: ① の窓のフレームのうち sdt が 1 周期を超えて区間に分けたもの（＝物理も区間ごとに積分し、
+// 軌跡が是正前と変わりうるフレーム）の数と、その sdt の列を product の runLiveFrame で 1 台ぶん再生したときの loop() の間隔
+// （最短・5 ms 未満の回数）。Xvfb の rAF の揺れは利用者の画面と違うので、値は「この環境ではこうだった」の記録。
+{
+  const fr = F.filter((f) => f.phase === 0);
+  const s0 = fr.length ? fr[0].sim : 0;
+  const win = fr.filter((f) => f.sim >= s0 && f.sim < s0 + 10);
+  const split = win.filter((f) => liveSlices(f.sdt, loopHz).length > 1).length;
+  const slot = { running: true, loopTimer: 0 }; let t = 0; const tk = [];
+  for (const f of win) runLiveFrame(f.sdt, loopHz, [slot], () => { tk.push(t); return 0; }, (dt) => { t += dt; });
+  const iv = tk.slice(1).map((x, i) => x - tk[i]);
+  console.log(`  参考: sdt が 1 周期を超え区間に分けたフレーム ${split}/${win.length}・その列を runLiveFrame で再生した loop() の間隔 最短 ${iv.length ? (Math.min(...iv) * 1000).toFixed(2) : '—'} ms・5 ms 未満 ${iv.filter((x) => x < 0.005).length} 回（${tk.length} 回中）`);
+}
 
 console.log('\n② 約 30 fps×3×（25 ms の負荷）');
 const r2 = rate(1, 1, 21);
