@@ -1,4 +1,4 @@
-// wf_bl1_ui.mjs — Stage BL（UI 不具合）の常設ゲート。BL1 が新設し、BL2〜BL7 が章を足す（A＝BL1・B＝BL2）。
+// wf_bl1_ui.mjs — Stage BL（UI 不具合）の常設ゲート。BL1 が新設し、BL2〜BL7 が章を足す（A＝BL1・B＝BL2・C〜F＝BL3）。
 // ════════════════════════════════════════════════════════════════════════════
 // 本番モジュールを import して答えさせる（再実装しない・CI-9）。実ブラウザでしか測れない部分は
 // browser/check_bl<n>_*.mjs（run_all.sh が glob で拾う）。
@@ -26,6 +26,23 @@
 //    stopAuto() を呼ぶ、B-4 発火元（courseSel → selectCourse → applyCourse → loadCourse・enforceFitRatio の fx.regime →
 //    regimeSel の change・startAuto の失敗経路）。見た目（■・.cc-editor・.cc-code）は browser/check_bl2_runview.mjs。
 //    赤になる章（2026-10-16 の実測）: ad5ddd1／b649a95（BL1 後・BL2 前）＝B-1・B-3・B-4（startAuto の行）。
+//
+// C) BL3 ① 順位表（HUD の leaderboard）の並び — hud.js drawFleetHud を mock ctx で呼び fillText の順で読む。
+//    lap.js の lapTime は現周回の経過時間（周回を数えると 0）＝同じ周回数なら lapTime の長い車が先に線を越えた。
+//    是正前は同周回を lapTime の昇順に並べ後続車を 1 位に描いた。峠のゴール済み同士はタイムの短い順・周回数違いは従来どおり。
+// D) BL3 ② 記録 → エントリーの名前引き — race_ladder.js recordsFrom（言語別ラダーの lang）と race_ui.js の 2 か所
+//    （📖 ショーケースの優勝エントリーの intro＝D-3・👻 の相手のプログラム＝D-4。E/F の治具で本番の経路から測る）。
+//    是正前は作者の先勝ちで、同じ作者の 2 件目（C と py）の記録が 1 件目を引いた。
+// E) BL3 ③ 再実行検証（verifyOfficialLocally）— frozenField を try の中へ。carDef.key が {toString:1} のエントリーで
+//    TypeError が漏れず official.verify.badEntry（ja/en）を出す。正常な event は生成側（frozenField → resolveEventSpec →
+//    runRace＝wf_official_result と同じ）と同じ verifyHash で「一致」と出す（是正前後で同じ値）。
+// F) BL3 ④ 👻 あなた vs 世界ベスト（ghostVsWorld）の runRace の spec に physics/recon/wear が resolveEventSpec と同じ値で入る。
+//    E/F の治具: race_ui.js を本番のまま import し、それが import する './race_engine.js'・'./loader.js' だけを
+//    module.registerHooks で「本物を再輸出して runRace（呼び出しを記録して本物を呼ぶ）・上流の取得（治具の大会を返す）を
+//    包む module」に解決する。🏆 の大会選択（selectOfficialRace）→「再実行検証」の click、🏅 の集計（loadAllOfficialData →
+//    renderRankings）→ 👻 ボタンの data-cls/data-course で ghostVsWorld、と利用者と同じ入口から呼ぶ。DOM は $ の mock。
+//    赤になる章（2026-10-16 の実測・--root）: f61d970（BL2 後・BL3 前）＝C-1・C-5・D-1・D-2b・D-3・E（例外と文言 ja/en）・
+//    F（physics・recon・wear）・D-4 の 15 件。実ブラウザは browser/check_bl3_rankorder.mjs（順位表を実走で測る）。
 //
 // 使い方: node wf_bl1_ui.mjs              … 検査
 //         node wf_bl1_ui.mjs --root <dir>  … <dir>/public/js の product で回す（是正前の木で赤になることの確認用）
@@ -404,6 +421,267 @@ ok(!!fitB && /const sel = \$\('regimeSel'\)/.test(fitB.text) && /sel\.dispatchEv
    'enforceFitRatio の fx.regime は regimeSel の change を発火する（＝B-3 の regimeSel の経路を通る）');
 const startB = fnBody('startAuto');
 ok(!!startB && /if \(ok === 0\) \{ stopAuto\(\); return; \}/.test(startB.text), 'startAuto の「全車の setup 失敗」も stopAuto で止める');
+
+// ── C) BL3 ① 順位表（HUD の leaderboard）の同周回内の並び ────────────────────────────
+// 本番 hud.js の drawFleetHud を mock ctx で呼び、fillText の順で行（順位・名前）を読む（probe/rank.mjs の型）。
+// lap.js の lapTime は現周回の経過時間（周回を数えると 0 へ戻る）＝同じ周回数なら lapTime が長い車ほど先に線を越えた。
+// 峠（lap.touge）はゴールまで lapTime == totalTime で、ゴール済み（finished・laps=1）はタイム（totalTime）の短い順。
+if (!globalThis.localStorage || typeof globalThis.localStorage.getItem !== 'function') {
+  globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+}
+console.log('\nC) 順位表の並び（hud.js drawFleetHud を mock ctx で呼ぶ）— 是正前: 同周回は lapTime の昇順＝後続車が 1 位');
+const hud = await import(pathToFileURL(join(JS, 'hud.js')).href);
+function lbOrder(slots) {
+  const texts = [];
+  const ctx = new Proxy({}, { get(t, k) {
+    if (k === 'measureText') return (x) => ({ width: String(x).length * 7 });
+    if (k === 'fillText') return (x) => texts.push(String(x));
+    if (k in t) return t[k];
+    return () => {};
+  }, set(t, k, v) { t[k] = v; return true; } });
+  hud.drawFleetHud(ctx, slots, { wPx: 800 }, -1);
+  const names = new Set(slots.map((x) => x.name));   // 名前は 5 文字以下（lbName が切らない長さ）
+  return texts.filter((x) => names.has(x));
+}
+const car = (name, lap) => ({ name, color: '#888', running: true, car: {}, lap });
+const C_CASES = [
+  // [見出し, slots, 期待の並び（1 位→）, 是正前も緑か]
+  ['C-1 同周回（laps=2）: lapTime 10.0 の車（先行）が 1 位・1.0（後続）が 2 位',
+    [car('AHEAD', { laps: 2, lapTime: 10.0, totalTime: 40 }), car('BACK', { laps: 2, lapTime: 1.0, totalTime: 31 })], ['AHEAD', 'BACK'], false],
+  ['C-2 周回数が違えば周回数の多い順（lapTime に依らない）',
+    [car('L2', { laps: 2, lapTime: 9.0 }), car('L3', { laps: 3, lapTime: 0.5 }), car('L0', { laps: 0, lapTime: 20 })], ['L3', 'L2', 'L0'], true],
+  ['C-3 峠のゴール済み 2 台（laps=1・lapTime==totalTime）は totalTime の短い順',
+    [car('SLOW', { laps: 1, finished: true, touge: true, lapTime: 30, totalTime: 30, lastLap: 30 }),
+     car('FAST', { laps: 1, finished: true, touge: true, lapTime: 25, totalTime: 25, lastLap: 25 })], ['FAST', 'SLOW'], true],
+  ['C-4 峠: ゴール済み（laps=1）は走行中（laps=0）より上',
+    [car('RUN', { laps: 0, touge: true, lapTime: 50, totalTime: 50 }), car('GOAL', { laps: 1, finished: true, touge: true, lapTime: 40, totalTime: 40 })], ['GOAL', 'RUN'], true],
+  ['C-5 3 台: 周回数 → 同周回は先に線を越えた順（lapTime の長い順）',
+    [car('P3', { laps: 1, lapTime: 2.0 }), car('P1', { laps: 2, lapTime: 1.0 }), car('P2', { laps: 1, lapTime: 7.5 })], ['P1', 'P2', 'P3'], false],
+  ['C-6 同周回・同じ lapTime は入力順のまま（安定）・lap の無い車は 0 周',
+    [car('X1', { laps: 1, lapTime: 3 }), car('X2', { laps: 1, lapTime: 3 }), { name: 'NOLAP', color: '#888', running: false, car: {} }], ['X1', 'X2', 'NOLAP'], true],
+];
+for (const [label, slots, want] of C_CASES) {
+  for (const rev of [false, true]) {
+    if (rev && label.startsWith('C-6')) continue;   // 安定性の行は入力順そのものが期待
+    const got = lbOrder(rev ? [...slots].reverse() : slots);
+    ok(J(got) === J(want), `${label}${rev ? '（入力を逆順）' : ''}: 実 ${got.join(' → ')}`);
+  }
+}
+
+// ── D) BL3 ② 記録 → エントリーの名前引き（同じ作者の 2 件目）───────────────────────
+// 本番 race_ladder.js の recordsFrom（言語別ラダーの lang を entries から引く）。是正前は entryIndex の byAuthor が
+// 先勝ちで、同じ作者の C と py の 2 エントリーの記録がどちらも 1 件目（C）を引いた（probe/author.mjs）。
+// race_ui.js の 2 か所（📖 ショーケースの優勝エントリー・👻 の entryForRecord）は下の E/F の治具で本番の経路から測る（D-3・D-4）。
+console.log('\nD) 記録 → エントリーの名前引き（race_ladder.js recordsFrom）— 是正前: 同じ作者の 2 件目を引けない');
+const ladderM = await import(pathToFileURL(join(JS, 'race_ladder.js')).href);
+const langOfRecs = (race) => Object.fromEntries(ladderM.recordsFrom([race]).map((r) => [r.name, r.lang]));
+const raceOf = (entries, finishers) => ({ event: { id: 'ev', course: 'X' }, entries, result: { eventId: 'ev', verifyHash: 'h', finishers } });
+{
+  const r = langOfRecs(raceOf(
+    [{ name: 'carC', author: 'alice', program: { lang: 'c', src: 'c' } }, { name: 'carPy', author: 'alice', program: { lang: 'py', src: 'p' } }],
+    [{ rank: 1, name: 'carPy', author: 'alice', totalTimeMs: 1000 }, { rank: 2, name: 'carC', author: 'alice', totalTimeMs: 2000 }]));
+  ok(r.carPy === 'py', `D-1 同じ作者 alice の py エントリーの記録 carPy → lang py（実 ${r.carPy}）`);
+  ok(r.carC === 'c', `D-1 同じ作者 alice の C エントリーの記録 carC → lang c（実 ${r.carC}）`);
+}
+{  // 既存の引き方（是正前も緑）: 作者違い・名前の無い記録・作者の無い記録・改名（記録の名前と entries の名前が違う）・補充車
+  const r = langOfRecs(raceOf(
+    [{ name: 'b1', author: 'bob', program: { lang: 'c' } }, { name: 'c1', author: 'carol', program: { lang: 'py' } },
+     { name: 'anon', author: '', program: { lang: 'js' } }, { name: 'old', author: 'dave', program: { lang: 'py' } }],
+    [{ rank: 1, name: 'b1', author: 'bob' }, { rank: 2, name: 'c1', author: 'carol' }, { rank: 3, name: 'anon', author: '' },
+     { rank: 4, name: 'renamed', author: 'dave' }, { rank: 5, name: 'BOT-1', author: '(filler)' }]));
+  ok(J(r) === J({ b1: 'c', c1: 'py', anon: 'js', renamed: 'py', 'BOT-1': null }),
+     `D-2 作者違い・作者の無い記録（名前で引く）・改名（作者で引く）・補充車（null）は従来どおり（実 ${J(r)}）`);
+}
+{  // 同じ作者で名前の一致が無い記録は作者の 1 件目（従来どおり）。名前が同じで作者が違うエントリーは引かない。
+  const r = langOfRecs(raceOf(
+    [{ name: 'same', author: 'erin', program: { lang: 'js' } }, { name: 'e1', author: 'frank', program: { lang: 'c' } },
+     { name: 'same', author: 'frank', program: { lang: 'py' } }],
+    [{ rank: 1, name: 'same', author: 'frank' }, { rank: 2, name: 'zzz', author: 'frank' }]));
+  ok(r.same === 'py' && r.zzz === 'c', `D-2b 名前が同じでも作者の違うエントリーは引かない・名前の一致が無ければ作者の 1 件目（実 ${J(r)}）`);
+}
+
+// ── E/F の治具: race_ui.js を本番のまま import し、上流（loader.js の一覧・大会の取得）と runRace の呼び出しだけを差し替える ──
+// race_ui.js が import する './race_engine.js'・'./loader.js' だけを、本物を再輸出して 1 関数だけ包む module に解決する
+// （module.registerHooks。ほかのモジュールは本物の race_engine.js / loader.js と同じ実体を使う）。runRace は本物を呼び、
+// 受け取った spec と結果を記録する（＝呼び出しの捕捉。結果は product のまま）。DOM は $ の mock（innerHTML を読むだけ）。
+const { registerHooks } = await import('node:module');
+const BL3 = (globalThis.__BL3 = { calls: [], list: [], races: {} });
+const UI_URL = pathToFileURL(join(JS, 'race_ui.js')).href;
+const ENGINE_URL = pathToFileURL(join(JS, 'race_engine.js')).href;
+const LOADER_URL = pathToFileURL(join(JS, 'loader.js')).href;
+const SPY_SRC = {
+  'bl3-spy:engine': `import * as real from ${J(ENGINE_URL)};\nexport * from ${J(ENGINE_URL)};\n` +
+    'export function runRace(spec) { const c = { spec }; globalThis.__BL3.calls.push(c); c.res = real.runRace(spec); return c.res; }\n',
+  'bl3-spy:loader': `export * from ${J(LOADER_URL)};\n` +
+    'export async function listOfficialRacesState() { return { list: globalThis.__BL3.list.map((id) => ({ id })), state: "ok" }; }\n' +
+    'export async function listOfficialRaces() { return globalThis.__BL3.list.map((id) => ({ id })); }\n' +
+    'export async function fetchRace(id) { const r = globalThis.__BL3.races[id]; if (!r) throw new Error("no race " + id); return r(); }\n',
+};
+registerHooks({
+  resolve(spec, ctx, next) {
+    if (ctx.parentURL === UI_URL && spec === './race_engine.js') return { url: 'bl3-spy:engine', shortCircuit: true };
+    if (ctx.parentURL === UI_URL && spec === './loader.js') return { url: 'bl3-spy:loader', shortCircuit: true };
+    return next(spec, ctx);
+  },
+  load(url, ctx, next) {
+    if (SPY_SRC[url]) return { format: 'module', source: SPY_SRC[url], shortCircuit: true };
+    return next(url, ctx);
+  },
+});
+globalThis.requestAnimationFrame ??= () => 0;
+globalThis.cancelAnimationFrame ??= () => {};
+const ctx2d = new Proxy({}, { get(t, k) {
+  if (k === 'measureText') return (x) => ({ width: String(x).length * 7 });
+  if (k in t) return t[k];
+  return () => ({ addColorStop() {} });
+}, set(t, k, v) { t[k] = v; return true; } });
+const ELS = new Map();
+function el(id) {
+  if (!ELS.has(id)) {
+    ELS.set(id, {
+      id, innerHTML: '', textContent: '', value: '', hidden: false, open: false, disabled: false, checked: false,
+      width: 300, height: 200, clientWidth: 300, clientHeight: 200, style: {}, dataset: {}, _l: {},
+      addEventListener(type, fn) { (this._l[type] ||= []).push(fn); }, removeEventListener() {},
+      fire(type, ev = {}) { for (const fn of this._l[type] || []) fn(ev); },
+      showModal() { this.open = true; }, show() { this.open = true; }, close() { this.open = false; this.fire('close'); },
+      querySelector() { return null; }, querySelectorAll() { return []; },
+      classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+      setAttribute() {}, getAttribute() { return null; }, appendChild() {}, focus() {}, scrollIntoView() {},
+      getBoundingClientRect() { return { left: 0, top: 0, width: 300, height: 200, right: 300, bottom: 200 }; },
+      getContext() { return ctx2d; },
+    });
+  }
+  return ELS.get(id);
+}
+// escapeHtml は main.js:escapeHtml と同じ式（DOM を前提にする main.js は import できない＝依存注入の相手を同じ形で置く）。
+const escH = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const unescH = (s) => String(s).replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+const { buildFromSpec } = await import(pathToFileURL(join(JS, 'course.js')).href);
+const { PROGRAM_BY_KEY } = await import(pathToFileURL(join(JS, 'programs.js')).href);
+const engine = await import(ENGINE_URL);
+const raceEvent = await import(pathToFileURL(join(JS, 'race_event.js')).href);
+const i18n = await import(pathToFileURL(join(JS, 'i18n.js')).href);
+const COURSE_SPECS = JSON.parse(readFileSync(join(ROOT, 'public/data/courses.json'), 'utf8'));
+const OVAL = buildFromSpec(COURSE_SPECS.find((x) => x.name === 'オーバル'));
+const logs = [];
+const ui = (await import(UI_URL)).initRaceUI({
+  $: el, escapeHtml: escH, logLine: (x) => logs.push(String(x)),
+  activeSlot: () => ({ name: 'ME', lang: 'c', src: PROGRAM_BY_KEY.normal_fr.code, carType: 'normal_fr' }),
+  exitEdit() {}, courseDisplayName: (c) => (c && typeof c === 'object' ? c.name : String(c || '')),
+  carTypeLabel: (k) => String(k), entryCarLabel: (k) => String(k || ''), setActiveProgram() {}, playCountdown() {},
+  resolveRaceCourse: (ref) => (ref === 'オーバル' ? OVAL : null), submitToGithub() {}, raceCourseUnit: undefined,
+});
+const SRC_C = PROGRAM_BY_KEY.normal_fr.code, SRC_PY = PROGRAM_BY_KEY.py_normal_fr.code;
+const ent = (name, author, lang, extra = {}) => ({ name, author, program: { lang, src: lang === 'py' ? SRC_PY : SRC_C },
+  carType: 'normal_fr', submittedAt: '2026-01-01T00:00:0' + (extra.k || 0) + 'Z', ...extra });
+// 大会を 1 つ置き、🏆 で選んで（本番の selectOfficialRace → renderOfficialDetail）「再実行検証」を押す（ofVerify の click）。
+async function openRace(id, make) {
+  BL3.races[id] = () => JSON.parse(JSON.stringify(make()));
+  await ui.selectOfficialRace(id);
+  return el('ofDetail').innerHTML;
+}
+async function clickVerify(id, make) {
+  el('ofVerify')._l = {}; el('ofVerifyNote').innerHTML = '';
+  await openRace(id, make);
+  BL3.calls.length = 0;
+  let thrown = null;
+  try { el('ofVerify').fire('click'); } catch (e) { thrown = e; }
+  return { thrown, note: el('ofVerifyNote').innerHTML, calls: [...BL3.calls] };
+}
+
+// D-3: 📖 ショーケース（締切後の優勝エントリーの intro）— 是正前は作者の 1 件目の intro を出した
+console.log('\nD-3/D-4) race_ui.js の名前引き（📖 ショーケースの intro・👻 のエントリー）');
+const TWO = () => ({
+  event: { id: 'bl3-two', course: 'オーバル', laps: 1, class: 'open' },
+  entries: [ent('carC', 'alice', 'c', { intro: 'INTRO-OF-C', k: 0 }), ent('carPy', 'alice', 'py', { intro: 'INTRO-OF-PY', k: 1 })],
+  result: { eventId: 'bl3-two', verifyHash: 'h-two', course: 'オーバル', class: 'open',
+    finishers: [{ rank: 1, name: 'carPy', author: 'alice', carType: 'normal_fr', totalTimeMs: 1000 },
+                { rank: 2, name: 'carC', author: 'alice', carType: 'normal_fr', totalTimeMs: 2000 }] },
+});
+{
+  // 締切後はプログラム公開欄が全エントリーの intro を出すので、📖 ショーケースの区画（official-showcase〜再実行ボタン）だけを見る。
+  const html = await openRace('bl3-two', TWO);
+  const a = html.indexOf('class="official-showcase"'), sc = a >= 0 ? html.slice(a, html.indexOf('id="ofVerify"', a)) : '';
+  ok(sc.includes('INTRO-OF-PY') && !sc.includes('INTRO-OF-C'),
+     `D-3 📖 ショーケースは優勝 carPy（alice の 2 件目）の intro を出す（区画 ${sc.length} 字・INTRO-OF-PY ${sc.includes('INTRO-OF-PY')}・INTRO-OF-C ${sc.includes('INTRO-OF-C')}）`);
+}
+
+// ── E) BL3 ③ 再実行検証（verifyOfficialLocally）の frozenField を try の中へ ──────────────
+console.log('\nE) 再実行検証の読めないエントリー（race_ui.js verifyOfficialLocally）— 是正前: frozenField が try の外で TypeError が漏れる');
+const BAD_KEY = () => ({
+  event: { id: 'bl3-badkey', course: 'オーバル', laps: 1, class: 'budget', budget: { total: 100 } },
+  entries: [ent('x', 'a', 'c', { carDef: { key: { toString: 1 } }, k: 0 }), ent('y', 'b', 'c', { k: 1 })],
+  result: null,
+});
+const wantKey = 'official.verify.badEntry';
+for (const lang of ['ja', 'en']) {
+  i18n.setLang(lang);
+  const pre = i18n.t(wantKey, { e: '\u0001' }).split('\u0001')[0];
+  for (const [label, id, make] of [['carDef.key が {toString:1}（budget クラス）', 'bl3-badkey', BAD_KEY]]) {
+    const r = await clickVerify(id, make);
+    ok(r.thrown === null, `E [${lang}] ${label}: 例外が漏れない（実 ${r.thrown ? r.thrown.constructor.name + ': ' + r.thrown.message : 'なし'}）`);
+    ok(i18n.hasKey(wantKey) && pre.length > 0 && r.note.includes(escH(pre)) && r.calls.length === 0,
+       `E [${lang}] ${label}: 利用者向けの失敗文言（${wantKey}）を出し、再走しない（文言 ${r.note.includes(escH(pre))}・runRace ${r.calls.length} 回・実「${r.note.replace(/<[^>]+>/g, '').slice(0, 70)}」）`);
+  }
+}
+i18n.setLang('ja');
+{  // 参考（合否に数えない）: name が object のエントリーは、再実行検証より前に 🏆 の詳細の描画（renderOfficialDetail の
+   // escapeHtml(e.name)＝main.js の String(s)）で止まり、ボタンまで届かない（BL3 の範囲外＝決定ログ BL-3 で BL4 へ申し送り）。
+  let th = null;
+  try { await openRace('bl3-badname', () => ({ event: { id: 'bl3-badname', course: 'オーバル', laps: 1, class: 'open' },
+    entries: [ent({ toString: 1 }, '', 'c', { k: 0 }), ent('y', 'b', 'c', { k: 1 })], result: null })); } catch (e) { th = e; }
+  console.log(`  参考: name が {toString:1} の大会を 🏆 で選ぶ → ${th ? `詳細の描画で ${th.constructor.name}（${th.message}）＝再実行検証に届かない` : '詳細を描けた'}`);
+}
+{  // 正常な event: 生成側（wf_official_result.mjs runOfficial と同じ: frozenField → resolveEventSpec → runRace）と同じ verifyHash
+  const NORMAL = () => ({
+    event: { id: 'bl3-normal', course: 'オーバル', laps: 1, class: 'open', physicsMode: 'v2' },
+    entries: [ent('n1', 'alice', 'c', { k: 0 }), ent('n2', 'alice', 'py', { k: 1 }), ent('n3', 'bob', 'c', { k: 2 })],
+    result: null,
+  });
+  const nr = NORMAL();
+  const es = raceEvent.resolveEventSpec(nr.event, OVAL);
+  const direct = engine.runRace({ course: OVAL, regime: es.regime, laps: es.laps, field: raceEvent.frozenField(nr.event, nr.entries),
+    crashRule: es.crashRule, interact: es.interact, maxSec: es.maxSec, physics: es.physics, recon: es.recon, wear: es.wear, report: true, ghost: true });
+  const r = await clickVerify('bl3-normal', () => ({ ...NORMAL(), result: { eventId: 'bl3-normal', verifyHash: direct.verifyHash, finishers: [] } }));
+  const got = r.calls[0] && r.calls[0].res ? r.calls[0].res.verifyHash : null;
+  console.log(`  正常な event の verifyHash: 生成側 ${direct.verifyHash}・再実行検証 ${got}`);
+  ok(r.thrown === null && r.calls.length === 1 && got === direct.verifyHash && r.note.includes(escH(i18n.t('official.verify.match', { hash: direct.verifyHash }))),
+     `E 正常な event は生成側と同じ verifyHash で「一致」と出す（${got} / ${direct.verifyHash}）`);
+}
+
+// ── F) BL3 ④ 👻 あなた vs 世界ベスト（ghostVsWorld）の runRace に physics/recon/wear ────────────
+// 🏅 の集計（本番の loadAllOfficialData → renderRankings）が描いた 👻 ボタンの data-cls/data-course で ghostVsWorld を呼ぶ
+// （main.js の click 委譲と同じ引数）。runRace の呼び出しを捕捉し、spec の physics/recon/wear が resolveEventSpec と一致するか。
+console.log('\nF) 👻 ゴースト対戦の再走条件（race_ui.js ghostVsWorld）— 是正前: physics/recon/wear を渡さない');
+{
+  const GH = () => {
+    const r = TWO();
+    r.event = { id: 'bl3-ghost', course: 'オーバル', laps: 1, class: 'open', physicsMode: 'v2', recon: 1, wear: true };
+    r.result = { ...r.result, eventId: 'bl3-ghost', verifyHash: 'h-ghost' };
+    return r;
+  };
+  BL3.list = ['bl3-ghost']; BL3.races['bl3-ghost'] = () => JSON.parse(JSON.stringify(GH()));
+  await ui.loadAllOfficialData(true);
+  ui.renderRankings();
+  const html = el('rankBody').innerHTML;
+  const m = /class="rank-vsworld" data-cls="([^"]*)" data-course="([^"]*)"/.exec(html);
+  ok(!!m, `🏅 の集計に 👻 ボタンがある（${m ? `data-cls=${unescH(m[1])}・data-course=${unescH(m[2])}` : '無し'}）`);
+  BL3.calls.length = 0; logs.length = 0;
+  let thrown = null;
+  if (m) { try { ui.ghostVsWorld(unescH(m[1]), unescH(m[2])); } catch (e) { thrown = e; } }
+  const c = BL3.calls[0];
+  const es = raceEvent.resolveEventSpec(GH().event, OVAL);
+  ok(thrown === null && BL3.calls.length === 1, `ghostVsWorld が runRace を 1 回呼ぶ（${BL3.calls.length} 回${thrown ? '・例外 ' + thrown.message : ''}${logs.length ? '・ログ ' + logs.join(' / ') : ''}）`);
+  const sp = c ? c.spec : {};
+  for (const k of ['physics', 'recon', 'wear']) {
+    ok(c && k in sp && J(sp[k]) === J(es[k]), `F ${k}: spec ${c && k in sp ? J(sp[k]) : '（渡していない）'}・resolveEventSpec ${J(es[k])}`);
+  }
+  for (const k of ['regime', 'laps', 'crashRule', 'maxSec']) ok(c && J(sp[k]) === J(es[k]), `F ${k} は従来どおり resolveEventSpec の値（${c ? J(sp[k]) : '-'}）`);
+  ok(c && sp.interact === false && sp.ghost === true, 'F interact=false・ghost=true（ゴースト対戦の条件は従来どおり）');
+  // D-4: 世界ベスト carPy（alice の 2 件目）のプログラムで走る（是正前は alice の 1 件目＝C）
+  const w = c && Array.isArray(sp.field) ? sp.field[1] : null;
+  ok(!!w && w.lang === 'py' && w.src === SRC_PY, `D-4 👻 の相手は世界ベスト carPy のエントリー（lang ${w ? w.lang : '-'}・src が py の本文 ${!!w && w.src === SRC_PY}）`);
+}
 
 const line = '─'.repeat(64);
 console.log('\n' + line);

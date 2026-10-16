@@ -456,6 +456,8 @@ export const MESSAGES = {
   // BI2: 大会の欠落欄の既定を決める関数 (race_event.js の resolveEventSpec) が無い＝古い race_event.js がキャッシュに残っている。
   //   既定を推測して走らせると公式と別の条件の再走になるので、走らせずに再読込を促す (検証再走・ゴースト対戦の両方)。
   'official.verify.stale':      { ja: '⚠ ページの部品の一部が古い版のまま読み込まれているため、再実行しませんでした。ページを再読込してから、もう一度お試しください。', en: '⚠ Part of the page is still loaded from an older version, so the re-run was not started. Reload the page and try again.' },
+  // BL3: 確定エントリー列を組めない (エントリーの欄が読めない) ときの再実行検証の 1 行。{e} は読めなかった理由 (JS の文言)。
+  'official.verify.badEntry':   { ja: '⚠ この大会のエントリーに読めない値があるため、再実行できませんでした（{e}）。', en: '⚠ Could not re-run: an entry of this race has a value that cannot be read ({e}).' },
   // AZ5【層 4 レビュー是正】ゴースト対戦 (`ghostVsWorld`) は verifyHash を一切照合しない経路なので、
   //   下の `official.verify.fitReduced`（検証ハッシュの不一致に言及する）を流用してはいけない。
   //   ここで言うべきは「2 台のはずが減った＝対戦が成立していない」だけ。

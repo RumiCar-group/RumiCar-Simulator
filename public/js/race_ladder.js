@@ -126,19 +126,37 @@ function langOfEntry(e, progLang) {
   return null;
 }
 
-// author (無ければ name) → entry の索引。author は W_spec §1 の一次識別子、name は表示名。
+// 記録 (finisher の name・author) → entry の索引。author は W_spec §1 の一次識別子、name は表示名。
+// BL3: 同じ作者が複数のエントリー (例: C と Python) を出せる。旧実装は作者の先勝ちで、同じ作者の 2 件目の記録も
+//   1 件目のエントリー (言語・プログラム) を引いた。**作者が同じエントリーの中で名前が一致するもの**を引き、無ければ従来どおり
+//   作者の 1 件目、作者で引けなければ名前の 1 件目 (作者の無い記録)。名前だけ一致して作者が違うエントリーは、作者で
+//   引けるときは引かない (別人の同名エントリー)。欄が文字列にできない値 (`{toString:1}` 等) でも投げずに空として読む
+//   (1 件の壊れたエントリーで全大会の集計を止めない＝BH1 と同じ方針)。
+const keyStr = (v) => { if (!v) return ''; try { return String(v).trim(); } catch (e) { return ''; } };
 function entryIndex(race) {
   const byAuthor = new Map(), byName = new Map();
   for (const e of ((race && race.entries) || [])) {
-    const a = String(e.author || '').trim();
-    const n = String(e.name || '').trim();
-    if (a && !byAuthor.has(a)) byAuthor.set(a, e);
+    if (e === null || typeof e !== 'object') continue;
+    const a = keyStr(e.author);
+    const n = keyStr(e.name);
+    if (a) { if (!byAuthor.has(a)) byAuthor.set(a, []); byAuthor.get(a).push(e); }
     if (n && !byName.has(n)) byName.set(n, e);
   }
   return { byAuthor, byName };
 }
-const entryOf = (ix, author, name) =>
-  (author && ix.byAuthor.get(String(author).trim())) || (name && ix.byName.get(String(name).trim())) || null;
+// 作者で引けるエントリー (同じ作者の中で名前が一致するもの → 作者の 1 件目)。作者が無い・一致しなければ null。
+function authorEntry(ix, author, name) {
+  const mine = ix.byAuthor.get(keyStr(author));
+  if (!mine) return null;
+  const n = keyStr(name);
+  return (n && mine.find((e) => keyStr(e.name) === n)) || mine[0];
+}
+const entryOf = (ix, author, name) => authorEntry(ix, author, name) || ix.byName.get(keyStr(name)) || null;
+// BL3: race_ui.js (📖 ショーケースの優勝エントリー・👻 ゴースト対戦の相手) も同じ規則で引く。名前だけの一致には落とさない
+//   (作者の無い記録・作者が entries に無い記録は null＝呼び出し側の従来の扱い)。
+export function entryForFinisher(entries, author, name) {
+  return authorEntry(entryIndex({ entries }), author, name);
+}
 
 // 検証済レース群 → finisher レコードの平坦配列。各レコードは順位/著者/タイム/クラス/コース等を持つ。
 // AS13 で **season / lang / points** を追記 (いずれも event/entries 由来＝result.json は不変)。

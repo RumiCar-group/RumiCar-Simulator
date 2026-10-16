@@ -474,7 +474,8 @@ function renderOfficialDetail(race) {
   // 原作者クレジットは公開＋fork に永続 (晒すのでなく名が刻まれ続ける)。作者は intro で自ら発表できる。
   if (status === 'closed' && result && Array.isArray(result.finishers) && result.finishers.length) {
     const w = result.finishers[0];
-    const wEntry = entries.find((e) => (e.author || '') === (w.author || '') && (w.author || '')) || null;
+    // BL3: 同じ作者の 2 件目が優勝したら、その 2 件目の intro を出す (旧実装は作者の 1 件目を引いた)。
+    const wEntry = (w.author || '') ? findEntry(entries, w.author, w.name) : null;
     const wIntro = wEntry && wEntry.intro ? wEntry.intro : '';
     html += `<div class="official-showcase"><div class="official-badge">${esc(t('official.featured'))}</div>` +
       `<p class="official-winner">${esc(t('official.winner'))}: <b>${esc(w.name || '')}</b> <span class="hint">by ${esc(w.author || '?')}</span></p>` +
@@ -517,7 +518,18 @@ function verifyOfficialLocally(race) {
   //   (AO5/AO9/AO12: 記録のエンジン・試走周回数・タイヤ摩耗設定で再走)。
   const es = eventSpecOf(event, rcourse);
   if (!es) { if (note) note.innerHTML = `<p class="official-verify-note warn">${escapeHtml(t('official.verify.stale'))}</p>`; return; }
-  const field = frozenField(event, entries);
+  // BL3: 確定エントリー列 (frozenField) は他人が書いた entries を読む。読めない欄 (carDef.key が文字列にできない値 等) で
+  //   投げると、旧実装は try の外で例外が漏れ、ボタンを押しても何も出なかった。ここで受けて利用者向けの 1 行にする。
+  //   (frozenField は生成側 wf_official_result.mjs と同じ関数のまま＝公式記録の決定論には触れない)
+  let field;
+  try {
+    field = frozenField(event, entries);
+  } catch (e) {
+    const why = (e && e.message) || String(e);
+    const s = t('official.verify.badEntry', { e: why });   // 古い messages.js (キーが無い＝キー名が返る) なら既存の 1 行で代える
+    if (note) note.innerHTML = `<p class="official-verify-note warn">${escapeHtml(s === 'official.verify.badEntry' ? t('log.race.err', { e: why }) : s)}</p>`;
+    return;
+  }
   const { regime, laps, crashRule } = es;
   // AD1: 記録に凍結グリッド (result.grid) があれば渡して算法非依存に忠実再現する。
   // 旧記録 (grid 未刻) は null=従来の freeSpawn 算法フォールバック (作成時と同条件＝hash 不変)。
@@ -981,6 +993,13 @@ function renderRankings() {
 function raceForEvent(eventId) {
   return officialData.find((r) => ((r.result && r.result.eventId) || (r.event && r.event.id)) === eventId) || null;
 }
+// BL3: 記録 (author・name) → エントリー。規則は race_ladder.js entryForFinisher (同じ作者の中は名前で引く) が持つ。
+//   名前付き import しない (BA1: 古い race_ladder.js がキャッシュに残るとモジュールグラフ全体が読めない)。無ければ従来どおり
+//   作者の 1 件目。
+function findEntry(entries, author, name) {
+  if (typeof ladderNS.entryForFinisher === 'function') return ladderNS.entryForFinisher(entries, author, name);
+  return (entries || []).find((x) => (x.author || '') === author) || null;
+}
 // 記録の出どころの大会 (取得済みの {event,entries,result})。
 // BH1: 集計がレコードごとに覚えている大会 (race_ladder raceOfRecord) を引く。eventId は event.json / result.json の中身で、
 //   重複も欠落もしうる (大会の実体は上流のディレクトリ)。eventId で探し直すと、重複したとき最初の大会 (別のコース・
@@ -990,10 +1009,11 @@ function raceForRecord(rec) {
   const src = typeof ladderNS.raceOfRecord === 'function' ? ladderNS.raceOfRecord(rec) : null;
   return src || raceForEvent(rec.eventId);
 }
-// 記録に対応するエントリー (program+carDef) を author / programRef で引く。
+// 記録に対応するエントリー (program+carDef) を author (同じ作者の中は name) / programRef で引く。
+// BL3: 同じ作者の 2 件目の記録は 2 件目のエントリーで走らせる (旧実装は作者の 1 件目＝別のプログラム・車で走った)。
 function entryForRecord(race, rec) {
   if (!race || !race.entries) return null;
-  let e = rec.author ? race.entries.find((x) => (x.author || '') === rec.author) : null;
+  let e = rec.author ? findEntry(race.entries, rec.author, rec.name) : null;
   if (!e && rec.programRef) {
     const base = String(rec.programRef).split('/').pop().replace(/\.json$/i, '');
     e = race.entries.find((x) => (x.author || '') === base);
@@ -1031,6 +1051,9 @@ function ghostVsWorld(cls, course) {
     res = runRace({ course: rcourse, regime: es.regime, laps: es.laps, field,
       crashRule: es.crashRule, interact: false,
       maxSec: es.maxSec,   // AB2: 記録の凍結 timeout で忠実再現 (欄が無ければ生成側と同じ computeRaceTimeout)
+      // BL3: 記録のエンジン・試走周回数・タイヤ摩耗設定でも再走する (検証再走 verifyOfficialLocally と同じ spec。
+      //   旧実装は渡さず、v2・試走・摩耗の大会の世界ベストを、利用者がいま選んでいる物理エンジン・試走なし・摩耗なしで走らせていた)。
+      physics: es.physics, recon: es.recon, wear: es.wear,
       ghost: true });
   } catch (e) {   // AZ5: 収容 0 台 (NO_ROOM) は専用文言 (検証再走と同じ扱い＝兄弟経路を取り残さない)
     logLine((e && e.code === 'NO_ROOM') ? t('official.verify.noRoom', { name: rcourse.name })

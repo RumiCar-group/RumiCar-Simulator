@@ -443,16 +443,21 @@ export function hudNeedH(lay) {
 }
 
 // 複数車両のリーダーボード (右上。狭い画面ではメーターの下＝layoutHud)。slots=[{name,color,lap,car,running}], activeIdx=強調表示。
-// 周回数の多い順 → 現ラップ経過の短い順に並べる。view.wPx = HUD 座標系での画面幅。
+// 周回数の多い順 → 同じ周回数なら先に線を越えた車が上。view.wPx = HUD 座標系での画面幅。
+//   BL3: lap.js の lapTime は**現周回の経過時間** (周回を数えた瞬間に 0 へ戻る) なので、同じ周回数なら lapTime が長い車ほど
+//   先に線を越えた＝前を走っている (降順)。是正前 (〜v10.3.0) は昇順で、後続車を 1 位に描いていた。峠のゴール済み同士
+//   (finished・laps=1・lapTime==totalTime で止まる) はタイムの短い順。同じ値どうしは入力順のまま (sort は安定)。
 // top/metrics は layoutHud の結果 (省略時は右上・その場で寸法を測る)。
 // 列の位置・色ドットの半径・フォントは **すべて metrics (fleetHudMetrics) から受け取る**。ここに数値を
 // 置き直すと、狭い画面の詰め (BD2) が枠だけに効いて中身が枠からはみ出す。
 export function drawFleetHud(ctx, slots, view, activeIdx, top = 12, metrics = null) {
   if (!slots || slots.length === 0) return;
   const order = slots.map((s, i) => ({ s, i })).sort((a, b) => {
-    const dl = (b.s.lap?.laps || 0) - (a.s.lap?.laps || 0);
+    const la = a.s.lap, lb = b.s.lap;
+    const dl = (lb?.laps || 0) - (la?.laps || 0);
     if (dl) return dl;
-    return (a.s.lap?.lapTime || 0) - (b.s.lap?.lapTime || 0);
+    if (la?.finished && lb?.finished) return (la.totalTime || 0) - (lb.totalTime || 0);   // 峠: ゴールタイムの短い順
+    return (lb?.lapTime || 0) - (la?.lapTime || 0);                                       // 現周回の経過の長い順
   });
   // 2026-08-02 利用者指摘「右上の表示が小さすぎて読めない」により拡大 (行高/余白/フォント/列幅を
   // 約 1.2 倍・box 幅を余裕をもって拡張)。表示内容・並び順・判定ロジックは無変更 (描画のみ)。

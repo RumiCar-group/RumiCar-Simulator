@@ -205,7 +205,9 @@ const GATES = [
   //   ad5ddd1＝A-1・A-4・A-5・A-6・A-7／9f5b4c2＝A-1・A-5・A-6・A-7／e2869c0＝A-5・A-6・A-7（wf_bl1_ui.mjs 冒頭と同じ）。
   //   B) BL2 走行中の設定変更の停止処理の配線（main.js の `running = false` が stopAuto の中だけ・9 経路が stopAuto() を呼ぶ・
   //   発火元）。改修前の木で赤＝ad5ddd1／b649a95 の B-1・B-3・B-4。
-  //   実ブラウザは browser/check_bl1_moderate.mjs・check_bl2_runview.mjs。所要は本ホスト実測 1 秒未満（単独・2026-10-16）。
+  //   C〜F) BL3 順位表の同周回内の並び（hud.js）・記録 → エントリーの名前引き（race_ladder.js・race_ui.js）・再実行検証の
+  //   frozenField を try の中へ・👻 の runRace に physics/recon/wear。改修前の木（f61d970）で赤＝C-1・C-5・D-1・D-2b・D-3・D-4・E・F。
+  //   実ブラウザは browser/check_bl1_moderate.mjs・check_bl2_runview.mjs・check_bl3_rankorder.mjs。所要は本ホスト実測 約 1.2 秒（単独・2026-10-16）。
   'wf_bl1_ui.mjs',
 ].map((name) => ({ name, args: [] }));
 
