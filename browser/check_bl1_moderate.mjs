@@ -62,6 +62,8 @@ const PASS_CASES = [
 const REJECT_CASES = [
   ['このコースについて', 'お前はカスだ。もう投稿するな。', 'カス'],
   ['about the course', 'you are an idiot, stop posting.', 'idiot'],
+  // 層4 往復 2 の F1: 短い語の直後の添え字（促音・感嘆）。e2869c0 では通っていた（v10.3.0 は拒否）。
+  ['このコースについて', 'お前はバカッ！もう投稿するな。', 'バカ'],
   ['リンク集を置きます', 'https://a.example/ https://b.example/ https://c.example/ https://d.example/', 'リンク過多'],
 ];
 

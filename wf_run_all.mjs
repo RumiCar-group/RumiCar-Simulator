@@ -200,8 +200,10 @@ const GATES = [
   'wf_bk1_interp2.mjs',
   // BL1: Stage BL（UI 不具合）の常設ゲート（BL2〜BL7 が章を足す）。A) 質問・提案（💬）の NG ワード判定 moderate.js の
   //   通過表（アプリ自身の語彙「カスタム車種」「cockpit」・地名・人名・語の前後の文字種）と拒否表（product の NG_WORDS の
-  //   全語から機械生成）・URL 過多・main.js の配線。改修前の木（--root）では A-1 と配線が赤。実ブラウザは browser/check_bl1_moderate.mjs。
-  //   所要は本ホスト実測 1 秒未満（単独・2026-10-16）。
+  //   全語から機械生成）・URL 過多・main.js の配線（A-1〜A-4）、A-5 取りこぼし側の表（是正した行・既知の取りこぼし・既知の誤検出）、
+  //   A-6／A-7 語の前後の文字の機械列挙（v10.3.0 は拒否・現在は通る行を型ごとに表で出す）。改修前の木（--root）で赤になる章:
+  //   ad5ddd1＝A-1・A-4・A-5・A-6・A-7／9f5b4c2＝A-1・A-5・A-6・A-7／e2869c0＝A-5・A-6・A-7（wf_bl1_ui.mjs 冒頭と同じ）。
+  //   実ブラウザは browser/check_bl1_moderate.mjs。所要は本ホスト実測 1 秒未満（単独・2026-10-16）。
   'wf_bl1_ui.mjs',
 ].map((name) => ({ name, args: [] }));
 

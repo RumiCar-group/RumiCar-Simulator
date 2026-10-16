@@ -5,9 +5,10 @@
 // ── 判定の規則（BL1 で部分一致 includes から改めた・v10.3.0 までは全語が部分一致）─────────────
 //  v10.3.0 までは全語を `includes` で探したため、アプリ自身の語彙「カスタム車種」（カス）・「cockpit」（cock）・
 //  地名「Essex」「Sussex」（sex）・人名「Dickens」（dick）・「die hard」（"die "）が投稿できなかった。
-//  ① 英字の語（a-z と空白だけ）: 語境界で照合する。直前が英数字・_ でなく（"RC_xxx" の xxx は語の一部）、
-//     直後が英字でない（数字・_ は区切り＝"sex69"・"sex_toy" は拒否）。語尾の活用（既定 -s/-es/-ed/-ing/-y・
-//     語ごとに `suf` で変える）までは同じ語とみなす（"idiots"・"idiotic"・"stupidity"・"retarded"・"sexy" は拒否。
+//  ① 英字の語（a-z と空白だけ）: 語境界で照合する。直前が英字・_ でなく（"RC_xxx" の xxx は語の一部。数字は
+//     区切り＝"69sex" は拒否）、直後が英字でない（数字・_ は区切り＝"sex69"・"sex_toy" は拒否）。語尾の活用（既定
+//     -s/-es/-ed/-ing/-y・語ごとに `suf` で変える）までは同じ語とみなす（"idiots"・"idiotic"・"stupidity"・
+//     "retarded"・"sexy"・"sexual" は拒否。
 //     "Essex"・"cockpit"・"Dickens" は通る。retard は -s/-ed だけ＝"retarder"〔減速装置〕・"retarding force"
 //     〔減速力〕・"retardation" は通る）。`sub: true` の語は部分一致のまま（"motherfucker" のような合成語も拒否）。
 //     大小文字は区別しない。
@@ -16,30 +17,49 @@
 //     文字種は Unicode の Script で引く（漢字＝Han〔CJK 拡張・互換漢字・々〇〕と〆、カタカナ＝Katakana〔ヽヾ・
 //     半角カナ〕と長音ー・半角ｰ・半角濁点ﾞﾟ、ひらがな＝Hiragana〔ゝゞ〕）。前後の文字はサロゲート対
 //     （CJK 拡張 B 以降）を 1 文字として読む。
+//     前後の「添え字」は読み飛ばしてその先の文字で決める（層4 往復 2 の F1）: カタカナの語では小書きのカタカナ
+//     （ァィゥェォッャュョヮヵヶ・ㇰ〜ㇿ・半角ｧ〜ｯ）・長音ー／ｰ・半角濁点ﾞﾟ・ヽヾ、ひらがなの語では小書きのひらがな
+//     （ぁぃぅぇぉっゃゅょゎゕゖ）・ゝゞ（漢字の語は読み飛ばさない）。添え字だけで終わる・添え字の先が別の文字種
+//     なら一致とする（「バカッ！」「アホー！」「エロッ」「カスｯ」「ちょーバカ」〔ー の前が ょ＝ひらがな〕・「すげーアホ」
+//     「しねっ！」「しねぇ」は拒否）。添え字の先が同じ文字種の文字なら長い語の一部とする（「エロージョン」「パーカス」
+//     「ルーカス」「ホッブス」は通る）。
 //     「カスタム」「スカスカ」「バカンス」「デブリ」「差別化」「無差別」「滞在日数」「現在日時」は通り、
 //     「カス」「このカスが」「在日韓国人」は拒否。
 //  ③ それ以外（3 文字以上の日本語・文字種の混じった語）: 従来どおり部分一致。②で通るようになった語の
 //     うち意図の明らかな合成語（バカヤロ・デブス・アホンダラ・エロゲ・人種差別・差別的）と英語の句（kill yourself・
 //     die in a fire・you should die）、英語の合成語（dickhead・dickface・dickwad・cockhead・cocksucker）は一覧に足した
-//     （無害な語の綴りに現れる例を見つけていない形だけ。「ドアホ」は「ドアホン」に現れるので足さない）。
+//     （「ドアホ」は「ドアホン」に現れるので足さない。足した語が無害な文に現れる例は下の「誤検出」に書いた）。
 //  "die "（末尾空白つき）は「die hard」「the engine would die here」を拒否していたので一覧から外し、
 //  意図の明らかな句 "go die" に置き換えた（語境界で照合）。
 //  連絡先/URL スパムの軽い抑止: http(s):// が 4 本以上なら拒否（従来どおり）。
 //
-// ── 既知の残り（v10.3.0 との差を wf_bl1_ui.mjs A-5 が固定する。直すと A-5 の行が赤になる＝ここも直す）──
-//  取りこぼし（v10.3.0 は拒否・現在は通る）: 「お前はしね」「しねよ」「もうしね」（ひらがなに挟まれた しね は
-//  「わたしね、」「もしね、」「少しねじれる」と区別できない）・「i will kill your family」（"kill your" は
-//  「kill your speed」と区別できない）・「エロイ」（「エロイカ」と区別できない）・「性差別」「差別発言」
-//  （差別 は「差別化」「無差別」と同じ漢字の並び）。同じ型の合成語は一般に通る: カタカナの短い語を含むカタカナの
-//  合成語（「クソバカ」「ドアホ」「カスヤロー」＝「カスタム」と同じ字の並び）・漢字の合成語（「差別野郎」）・
-//  英字の語の合成語（「sexist」「cockface」＝「Essex」「cockpit」と同じ語境界の規則・PLAN BL1 の指定）。
-//  誤検出（v10.3.0 も拒否）: 「少しね」（しね）・「勢いを殺す」（殺す）・「pussyfoot」（pussy）・
-//  「Penistone」（penis）・「在日外国人向けの英語 UI」（在日）・「在日本大使館」（在日）。
+// ── 既知の残り（v10.3.0 との差を wf_bl1_ui.mjs A-5〜A-7 が固定する。直すと A 章の行が赤になる＝ここも直す）──
+//  取りこぼし（v10.3.0 は拒否・現在は通る）。A-6／A-7 が前後の文字を機械的に並べて v10.3.0 と突き合わせた表で、
+//  v10.3.0 は拒否・現在は通る行は次の型だけ（ほかの形は v10.3.0 と同じく拒否。v10.3.0 と差が出うるのは②の短い語・
+//  ①の語・外した "die " だけで、③と `sub: true` の語は v10.3.0 と同じ部分一致）:
+//   (j1) カタカナの短い語の前後に、添え字（上の②）を挟むかどうかに関わらずカタカナの文字が続く＝カタカナの合成語
+//        （「クソバカ」「ドアホ」「カスヤロー」「バカッタレ」「スーパーバカ」「バカバカ」「エロイ」＝「カスタム」「パーカス」
+//        「エロージョン」と同じ字の並び。「エロイ」は「エロイカ」と区別できない）。
+//   (j2) ひらがなの しね の前後に、添え字を挟むかどうかに関わらずひらがなの文字が続く（「お前はしね」「しねよ」
+//        「もうしね」「しねぇよ」＝「わたしね、」「もしね、」「少しねじれる」と区別できない）。
+//   (j3) 漢字の短い語の前後に漢字（々を含む）が続く＝漢字の合成語（「性差別」「差別発言」「差別野郎」＝「差別化」
+//        「無差別」と同じ漢字の並び）。在日 は直前だけを見る。
+//   (e1) 英字の語の前に英字か _ が付く・後ろに活用（①）でない英字が付く＝英字の合成語（「sexist」「cockface」
+//        「homosexual」＝「Essex」「cockpit」と同じ語境界の規則・PLAN BL1 の指定）。
+//   (e2) 一覧から外した "die "（末尾空白つき）にだけ当たっていた文（「just die already」「die bitch」＝"die" は
+//        「die hard」「the engine would die here」と区別できない。意図の明らかな go die・die in a fire・
+//        you should die だけを一覧に置く）・「i will kill your family」（"kill your" は「kill your speed」と区別できない）。
+//  一覧に無い書き方（v10.3.0 と同じく通る＝回帰ではない・本ブロックの範囲外）: ひらがな書き（「ばか」「あほ」「かす」）・
+//  半角カナ書き（「ﾊﾞｶ」「ｱﾎ」「ｶｽ」）・全角英字（「ＳＥＸ」）。
+//  誤検出（v10.3.0 も拒否）: 「少しね」（しね）・「勢いを殺す」（殺す）・「pussyfoot」（pussy）・「Penistone」（penis）・
+//  「在日外国人向けの英語 UI」（在日）・「在日本大使館」（在日）・「非差別的な扱い」「無差別的」（差別的。「無差別」は通る）・
+//  「反人種差別」「人種差別撤廃条約」（人種差別）・「エラーコード 0xxx」（xxx。数字は区切り）。
 
 const RAW_NG_WORDS = [
   // 猥褻・性的 (日本語/ローマ字/英)
   'セックス', 'エロ', 'av女優', 'ちんちん', 'まんこ', 'ペニス', 'ヴァギナ', 'パイズリ', 'オナニー',
-  'sex', { w: 'porn', sub: true }, { w: 'pussy', sub: true }, 'dick', 'cock', { w: 'penis', sub: true },
+  { w: 'sex', suf: ['', 's', 'es', 'ed', 'ing', 'y', 'ual', 'ually', 'uality'] },
+  { w: 'porn', sub: true }, { w: 'pussy', sub: true }, 'dick', 'cock', { w: 'penis', sub: true },
   { w: 'vagina', sub: true }, { w: 'boobs', sub: true }, 'nude', 'xxx', { w: 'fuck', sub: true },
   { w: 'dickhead', sub: true }, { w: 'dickface', sub: true }, { w: 'dickwad', sub: true }, { w: 'cockhead', sub: true },
   { w: 'cocksucker', sub: true },
@@ -57,8 +77,14 @@ const RAW_NG_WORDS = [
 const KATA = /^[\p{Script=Katakana}\u30FC\uFF70\uFF9E\uFF9F]$/u;
 const HIRA = /^\p{Script=Hiragana}$/u;
 const KANJI = /^[\p{Script=Han}\u3006]$/u;
-const WORD_BEFORE = /[a-z0-9_]/;  // 直前: 語の文字＝正規表現の \w と同じ（RC_xxx の xxx は語の一部）
+const WORD_BEFORE = /[a-z_]/;     // 直前: 英字と _ が語の続き（RC_xxx の xxx は語の一部・数字は区切り＝69sex は拒否）
 const WORD_AFTER = /[a-z]/;       // 直後: 英字だけが語の続き（数字・_ は区切り＝sex69・sex_toy は拒否）
+// 添え字（② の読み飛ばし）。語の文字種ごと。漢字の語は読み飛ばさない。
+const MARKS = {
+  kata: /^[\u30A1\u30A3\u30A5\u30A7\u30A9\u30C3\u30E3\u30E5\u30E7\u30EE\u30F5\u30F6\u31F0-\u31FF\u30FC\u30FD\u30FE\uFF67-\uFF70\uFF9E\uFF9F]$/u,
+  hira: /^[\u3041\u3043\u3045\u3047\u3049\u3063\u3083\u3085\u3087\u308E\u3095\u3096\u309D\u309E]$/u,
+  kanji: /^(?!)$/u,
+};
 const scriptOf = (ch) => (ch && (KATA.test(ch) ? 'kata' : HIRA.test(ch) ? 'hira' : KANJI.test(ch) ? 'kanji' : null)) || null;
 const ASCII_WORD = /^[a-z ]+$/;
 const SUFFIXES = ['', 's', 'es', 'ed', 'ing', 'y'];
@@ -109,9 +135,15 @@ function matchAt(t, i, c) {
     }
     return false;
   }
-  // short: 前後の文字が同じ文字種でない（leftOnly は直前だけ）。
-  if (scriptOf(charBefore(t, i)) === c.script) return false;
-  return c.leftOnly || scriptOf(charAt(t, end)) !== c.script;
+  // short: 前後の添え字を読み飛ばした先の文字が同じ文字種でない（leftOnly は直前だけ）。
+  const mk = MARKS[c.script];
+  let b = charBefore(t, i);
+  for (let k = i; b && mk.test(b); b = charBefore(t, k)) k -= b.length;
+  if (scriptOf(b) === c.script) return false;
+  if (c.leftOnly) return true;
+  let a = charAt(t, end);
+  for (let k = end; a && mk.test(a); a = charAt(t, k)) k += a.length;
+  return scriptOf(a) !== c.script;
 }
 
 function hits(t, c) {

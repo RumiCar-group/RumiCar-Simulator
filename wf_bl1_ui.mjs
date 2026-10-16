@@ -8,12 +8,15 @@
 //    「カスタム車種」（カス）・「cockpit」（cock）・「Essex」「Sussex」（sex）・「Dickens」（dick）・「die hard」（"die "）・
 //    「スカスカ」（カス）が拒否された。A-1 の通過表（PLAN BL1 の 9 行＋設計で決めた規則の行）と A-2 の拒否表
 //    （product の NG_WORDS の全語から機械生成・語ごとに複数の文）と A-3 の URL 過多・A-4 の配線、A-5 の取りこぼし側の表
-//    （v10.3.0 は拒否していた攻撃表現: BL1 初版の語境界化で通るようになり一覧に足した行＝拒否／直さずに残した行＝
-//    moderate.js 冒頭「既知の残り」と一致すること／v10.3.0 から残る誤検出）を固定する。
+//    （v10.3.0 は拒否していた攻撃表現: 語境界化で通るようになり一覧・規則に足した行＝拒否／直さずに残した行＝
+//    moderate.js 冒頭「既知の残り」と一致すること／v10.3.0 から残る誤検出）、A-6／A-7 の前後の文字の機械列挙
+//    （日本語の短い語・英字の語の前後に小書き仮名・長音・促音・半角カナ・記号・数字・英字などを付けた文を、文字の分類表と
+//    規則から決まる期待と照合し、v10.3.0 は拒否・現在は通る行を「既知の残り」の型 (j1)〜(j3)・(e1) ごとに表で出す）を固定する。
 //    `--root <是正前の木>` で回すと、moderate.js が無い木では main.js の NG_WORDS と moderate の本文を
 //    取り出して評価する（是正前の木の判定を是正前のまま測るためだけの読み口＝product の経路は変えない）。
-//    是正前の木では A-1 の PLAN の 9 行のうち diesel・differential 以外の 7 行と、規則の行の多く、A-4 が赤、
-//    A-5 は「既知の取りこぼし」の行（v10.3.0 は拒否）と文書照合の行が赤（2026-10-16 の実測は決定ログ BL1 結果）。
+//    赤になる章（2026-10-16 の実測・件数は決定ログ BL1 結果）: ad5ddd1（v10.3.0）＝A-1（PLAN の 9 行のうち diesel・
+//    differential 以外の 7 行と規則の行）・A-4・A-5・A-6・A-7。9f5b4c2（BL1 初版）＝A-1 の 2 行・A-5・A-6・A-7。
+//    e2869c0（層4 往復 1）＝A-5・A-6・A-7（添え字の付いた短い語・数字の後の英字の語・sexual）。
 //
 // 使い方: node wf_bl1_ui.mjs              … 検査
 //         node wf_bl1_ui.mjs --root <dir>  … <dir>/public/js の product で回す（是正前の木で赤になることの確認用）
@@ -67,6 +70,8 @@ const PASS_RULE = [  // moderate.js 冒頭の規則 ①② から導いた行（
   // 層4 F1/F3/F4 の是正で足した規則の行（retard は -s/-ed だけ・kill your は kill you と別・在日は直前だけを見る・
   // ひらがなに挟まれた しね・サロゲート対の漢字〔CJK 拡張 B〕も漢字として読む）
   'retarding force', 'retardation', 'kill your speed before the corner', '現在日時', 'わたしね、', 'もしね、', '\u{20BB7}在日',
+  // 層4 往復 2 の F1（添え字の先がカタカナの文字なら長い語の一部）
+  'エロージョン', 'パーカス', 'ルーカス', 'ホッブス', 'ジョブス', 'sextant',
 ];
 for (const s of [...PASS_PLAN, ...PASS_RULE]) {
   const r = moderate(s);
@@ -133,7 +138,11 @@ for (const [s, w] of [['kill yourself', 'kill yourself'], ['you should kill your
   ['バカヤロー', 'バカヤロ'], ['バカヤロウ', 'バカヤロ'], ['デブス', 'デブス'], ['アホンダラ', 'アホンダラ'],
   ['在日韓国人は出ていけ', '在日'], ['在日朝鮮人', '在日'], ['人種差別', '人種差別'], ['差別的な発言', '差別的'],
   ['sex_toy', 'sex'], ['sex69', 'sex'], ['sexy69', 'sex'], ['dickface', 'dickface'], ['dickwad', 'dickwad'],
-  ['cockhead', 'cockhead'], ['エロゲーム', 'エロゲ'], ['stupider', 'stupid']]) {
+  ['cockhead', 'cockhead'], ['エロゲーム', 'エロゲ'], ['stupider', 'stupid'],
+  // 層4 往復 2 の F1／F3（添え字の読み飛ばし・数字は区切り・sex の語尾 -ual）
+  ['お前はバカッ', 'バカ'], ['バカッ！', 'バカ'], ['アホー！', 'アホ'], ['おまえ、バカッ！', 'バカ'], ['ちょーバカ', 'バカ'],
+  ['マジでちょーカスだな', 'カス'], ['すげーアホ', 'アホ'], ['お前はエロッ', 'エロ'], ['クズーッ', 'クズ'], ['ブスｯ', 'ブス'],
+  ['デブァ', 'デブ'], ['しねっ！', 'しね'], ['しねぇ', 'しね'], ['sexual content', 'sex'], ['69sex', 'sex']]) {
   const r = moderate(s);
   ok(r && r.ok === false, `拒否（取りこぼしの是正）「${s}」（実 ${J(r)}・現行の語「${w}」）`);
 }
@@ -141,15 +150,177 @@ for (const [s, w] of [['kill yourself', 'kill yourself'], ['you should kill your
 // （直したらここが赤になる＝記述も直す）。
 const MSRC = existsSync(join(JS, 'moderate.js')) ? readFileSync(join(JS, 'moderate.js'), 'utf8') : '';
 for (const s of ['お前はしね', 'しねよ', 'もうしね', 'i will kill your family', 'エロイ', '性差別', '差別発言',
-  'クソバカ', 'ドアホ', 'カスヤロー', '差別野郎', 'sexist', 'cockface']) {
+  'クソバカ', 'ドアホ', 'カスヤロー', '差別野郎', 'sexist', 'cockface',
+  'バカッタレ', 'スーパーバカ', 'バカバカ', 'しねぇよ', 'homosexual', 'just die already', 'die bitch']) {
   const r = moderate(s);
   ok(r && r.ok === true && MSRC.includes(`「${s}」`), `既知の取りこぼし「${s}」＝通過かつ moderate.js に記述あり（実 ${J(r)}）`);
 }
 for (const [s, w] of [['少しね', 'しね'], ['勢いを殺す', '殺す'], ['pussyfoot', 'pussy'], ['Penistone', 'penis'],
-  ['在日外国人向けの英語 UI', '在日'], ['在日本大使館', '在日']]) {
+  ['在日外国人向けの英語 UI', '在日'], ['在日本大使館', '在日'], ['非差別的な扱い', '差別的'], ['無差別的', '差別的'],
+  ['反人種差別', '人種差別'], ['人種差別撤廃条約', '人種差別'], ['エラーコード 0xxx', 'xxx']]) {
   const r = moderate(s);
   ok(r && r.ok === false && r.word === w && MSRC.includes(`「${s}」`),
      `既知の誤検出「${s}」→ 語「${w}」かつ moderate.js に記述あり（実 ${J(r)}）`);
+}
+
+// ── A-6／A-7: 前後の文字を機械的に並べて v10.3.0（部分一致）と突き合わせる（層4 往復 2 の F1／F3）─────────────
+// v10.3.0 の判定は「NG 語のどれかを部分一致で含めば拒否」だったので、NG 語を含む文は全部拒否していた。
+// ここでは NG 語の前後に付きうる文字（小書き仮名・長音・促音・半角カナ・半角濁点・踊り字・ひらがな・漢字・記号・感嘆・
+// 数字・英字）を文字の分類つきで列挙し、moderate.js 冒頭の規則（② の添え字の読み飛ばし・① の語境界）から決まる
+// 期待（通過／拒否）と product の答えを全行で照合する。通過の行＝「v10.3.0 は拒否・現在は通る」行で、その表を
+// 分類（moderate.js「既知の残り」の (j1)〜(j3)・(e1)）ごとに全件出す。期待は文字の分類表から決める（判定の写しではない）。
+const OLD_V1030 = ['セックス', 'エロ', 'av女優', 'ちんちん', 'まんこ', 'ペニス', 'ヴァギナ', 'パイズリ', 'オナニー',
+  'sex', 'porn', 'pussy', 'dick', 'cock', 'penis', 'vagina', 'boobs', 'nude', 'xxx', 'fuck',
+  '死ね', '殺す', 'しね', 'バカ', 'アホ', 'クズ', 'カス', 'キモい', 'ブス', 'デブ', 'きちがい', 'キチガイ',
+  '在日', '差別', 'idiot', 'stupid', 'retard', 'kill you', 'die '];  // ad5ddd1 main.js:2685-2692 の写し（比較専用・39 語）
+const oldRejects = (s) => { const t = s.toLowerCase(); return OLD_V1030.some((w) => t.includes(w.toLowerCase())); };
+
+console.log('\nA-6) 日本語の短い語の前後の文字（v10.3.0 は全行拒否。通過は「既知の残り」(j1)〜(j3) の型だけ）');
+// 文字の分類。kata/hira/kanji＝その文字種の文字、kataM/hiraM＝その文字種の語で読み飛ばす添え字、other＝区切り。
+const CH = [];
+const addCh = (cat, str) => { for (const c of str) CH.push({ c, cat }); };
+addCh('kata', 'アカンタｱｶスパルホジレマエロバクズブデ');
+addCh('kataM', 'ァィゥェォッャュョヮヵヶㇰㇱㇲㇳㇴㇵㇶㇷㇸㇹㇺㇻㇼㇽㇾㇿｧｨｩｪｫｬｭｮｯーｰﾞﾟヽヾ');
+addCh('hira', 'あはちげよだなてのすめおまえでたれしね');
+addCh('hiraM', 'ぁぃぅぇぉっゃゅょゎゕゖゝゞ');
+addCh('kanji', '漢超々〆\u{20BB7}前在日差別');
+addCh('other', '！？!?。、…〜～・「」（）() 　wｗ♪☆♡💢#@-_/.,01１a');
+const catOf = new Map(CH.map((x) => [x.c, x.cat]));
+const SCRIPT_OF_CAT = { kata: 'kata', kataM: 'kata', hira: 'hira', hiraM: 'hira', kanji: 'kanji', other: null };
+// 規則②: 語の文字種 sc の添え字（sc+'M'）を読み飛ばし、その先の文字（無ければ文の端）が sc なら「続き」。
+const contOf = (chars, sc) => {
+  for (const c of chars) {
+    const k = catOf.get(c);
+    if (!k) throw new Error(`A-6 の文字の分類表に無い文字「${c}」`);
+    if (k === sc + 'M') continue;
+    return SCRIPT_OF_CAT[k] === sc;
+  }
+  return false;
+};
+const scriptOfWord = (w) => (/^[ァ-ヺ]+$/.test(w) ? 'kata' : /^[ぁ-ゖ]+$/.test(w) ? 'hira' : /^[一-鿿]+$/.test(w) ? 'kanji' : null);
+const SHORT = NG_WORDS.filter((w) => [...w].length <= 2 && scriptOfWord(w));
+const LEFT_ONLY = new Set(['在日']);  // moderate.js の side: 'left'
+const NG3 = NG_WORDS.filter((w) => !/^[a-z ]+$/.test(w) && !SHORT.includes(w));  // 規則③（部分一致）の日本語の語
+// 文 s の期待（規則②③）: ③ の語を含めば拒否。② の語は出現ごとに、直前（leftOnly でなければ直後も）が「続き」で
+// なければ拒否（「バカ」＋「ス」＝バカス は カス の直前が カ＝続き・直後が文の端＝拒否。デブス は ③）。
+const specPassJa = (s) => {
+  if (NG3.some((x) => s.includes(x))) return false;
+  for (const x of SHORT) {
+    const sc = scriptOfWord(x);
+    for (let i = s.indexOf(x); i >= 0; i = s.indexOf(x, i + 1)) {
+      const lc = contOf([...s.slice(0, i)].reverse(), sc);
+      const rc = contOf([...s.slice(i + x.length)], sc);
+      if (!(lc || (!LEFT_ONLY.has(x) && rc))) return false;
+    }
+  }
+  return true;
+};
+ok(J(SHORT) === J(['エロ', 'しね', 'バカ', 'アホ', 'クズ', 'カス', 'ブス', 'デブ', '在日', '差別']),
+   `2 文字以下の日本語の語＝${J(SHORT)}`);
+// 文脈: 1 文字ぜんぶ＋各添え字の先に代表の文字を 1 つ（右は「添え字＋X」、左は「X＋添え字」）＋語ごとの実例。
+const REPS = ['', '！', 'ア', 'あ', '漢', 'ー', 'ッ', 'っ'];
+const RIGHT = new Set(['']), LEFT = new Set(['']);
+for (const { c, cat } of CH) {
+  RIGHT.add(c); LEFT.add(c);
+  if (cat === 'kataM' || cat === 'hiraM') for (const r of REPS) { RIGHT.add(c + r); LEFT.add(r + c); }
+}
+for (const r of ['ーッ！', 'ッ！', 'ー！', 'ーーー', 'ッッ', 'ァァ', 'ーｯ', 'ージョン', 'ッタレ', 'ッたれ', 'ぇよ', 'ーよ', 'っての', 'だな', 'だ']) RIGHT.add(r);
+for (const l of ['ちょー', 'すげー', 'めっちゃー', 'スーパー', 'パー', 'ルー', 'ホッ', 'ジョ', 'ちょっ', 'お前は', 'おまえ、', 'マジでちょー', 'ーー']) LEFT.add(l);
+const passTable = new Map();  // `${sc}|${side}` → Map(文脈 → 通った語の配列)
+let a6rows = 0;
+for (const w of SHORT) {
+  const sc = scriptOfWord(w);
+  const lo = LEFT_ONLY.has(w);
+  const bad = { left: [], right: [], cross: [] };
+  const run = (side, l, r) => {
+    const s = l + w + r;
+    const expPass = specPassJa(s);
+    const got = moderate(s);
+    a6rows++;
+    if (!oldRejects(s)) bad[side].push(`${s}（v10.3.0 が拒否しない＝表の前提外）`);
+    if (!got || got.ok !== expPass) bad[side].push(`${s}（期待 ${expPass ? '通過' : '拒否'}・実 ${J(got)}）`);
+    if (expPass && side !== 'cross') {
+      const key = `${sc}|${side}`, ctx = side === 'left' ? l : r;
+      if (!passTable.has(key)) passTable.set(key, new Map());
+      const m = passTable.get(key);
+      if (!m.has(ctx)) m.set(ctx, []);
+      m.get(ctx).push(w);
+    }
+  };
+  for (const l of LEFT) run('left', l, '');
+  if (!lo) for (const r of RIGHT) run('right', '', r);
+  const CL = ['', 'ー', 'ッ', 'ちょー', 'パー', 'あ', 'ア', '漢', '！', 'お前は'];
+  const CR = ['', 'ー', 'ッ！', 'ージョン', 'あ', 'ア', '漢', '！', 'ぇよ', 'だな'];
+  for (const l of CL) for (const r of CR) run('cross', l, r);
+  for (const side of ['left', 'right', 'cross']) {
+    if (side === 'right' && lo) continue;
+    const n = side === 'left' ? LEFT.size : side === 'right' ? RIGHT.size : CL.length * CR.length;
+    ok(bad[side].length === 0, `「${w}」${side === 'left' ? '直前' : side === 'right' ? '直後' : '前後の組'} ${n} 通りが規則②どおり${bad[side].length ? `（食い違い ${bad[side].length}: ${bad[side].slice(0, 6).join(' / ')}）` : ''}`);
+  }
+}
+// 表は文字種×側で 1 本（文字種の全語では通らない文脈は「（…だけ）」で通る語を示す）。
+const CLASS = { kata: '(j1)', hira: '(j2)', kanji: '(j3)' };
+console.log(`  ── 表: v10.3.0 は拒否・現在は通る文脈（${a6rows} 文から機械生成。語の前後の片側だけに付けた文脈）`);
+for (const [key, m] of [...passTable].sort()) {
+  const [sc, side] = key.split('|');
+  const words = SHORT.filter((w) => scriptOfWord(w) === sc && !(side === 'right' && LEFT_ONLY.has(w)));
+  const cell = ([ctx, ws]) => `[${ctx}]${ws.length < words.length ? `（${ws.join('・')}だけ）` : ''}`;
+  console.log(`  ${CLASS[sc]} ${sc}（${words.join('・')}）の${side === 'left' ? '直前' : '直後'} ${m.size} 種: ${[...m].map(cell).join(' ')}`);
+  ok(MSRC.includes(CLASS[sc]), `表の型 ${CLASS[sc]} が moderate.js「既知の残り」に書いてある`);
+  // 型の中身: 通る文脈は、添え字の先に語と同じ文字種の文字（添え字でない）を含むものだけ（「ちょーバカ」「すげーアホ」は拒否）。
+  ok([...m.keys()].every((ctx) => [...ctx].some((c) => catOf.get(c) === sc)),
+     `${CLASS[sc]} の${side === 'left' ? '直前' : '直後'}で通る文脈はすべて ${sc} の文字を含む（添え字・記号だけの文脈は拒否）`);
+}
+// 参考: ひらがな書き・半角カナ書き・全角英字は v10.3.0 から一覧に無い（v10.3.0 と同じく通る＝回帰ではない）。
+for (const s of ['ばか', 'あほ', 'かす', 'ﾊﾞｶ', 'ｱﾎ', 'ｶｽ', 'ＳＥＸ']) {
+  const r = moderate(s);
+  ok(r && r.ok === !oldRejects(s) && MSRC.includes(`「${s}」`), `v10.3.0 と同じ「${s}」（実 ${J(r)}・v10.3.0 ${oldRejects(s) ? '拒否' : '通過'}）かつ moderate.js に記述あり`);
+}
+
+console.log('\nA-7) 英字の語の前後の文字（v10.3.0 は全行拒否〔一覧に無かった句を除く〕。通過は (e1) の型だけ）');
+const DEF_SUF = ['', 's', 'es', 'ed', 'ing', 'y'];
+const ASCII_SPEC = {  // moderate.js ① の語尾（suf）。一覧を変えたらここも変える（下の照合が赤になる）。
+  sex: [...DEF_SUF, 'ual', 'ually', 'uality'], dick: DEF_SUF, cock: DEF_SUF, nude: DEF_SUF, xxx: DEF_SUF,
+  idiot: ['', 's', 'ic', 'ically'], stupid: ['', 's', 'ity', 'ly', 'er', 'est'], retard: ['', 's', 'ed'],
+  'kill you': DEF_SUF, 'kill yourself': DEF_SUF, 'kill yourselves': DEF_SUF, 'go die': DEF_SUF, 'die in a fire': DEF_SUF,
+  'you should die': DEF_SUF,
+};
+const SUB_ASCII = ['porn', 'pussy', 'penis', 'vagina', 'boobs', 'fuck', 'dickhead', 'dickface', 'dickwad', 'cockhead', 'cocksucker'];
+ok(J(NG_WORDS.filter((w) => /^[a-z ]+$/.test(w)).sort()) === J([...Object.keys(ASCII_SPEC), ...SUB_ASCII].sort()),
+   '英字の語＝語境界の語（ASCII_SPEC）＋部分一致の語（SUB_ASCII）');
+// 直前: 英字・_ は語の続き（通過）、それ以外（数字・記号・空白・日本語・文の端）は区切り。
+const PRE = { '': false, ' ': false, a: true, x: true, Q: true, homo: true, _: true, 9: false, 69: false, 0: false, '-': false,
+  '#': false, '.': false, '@': false, "'": false, '(': false, 'の': false, 'お前は': false, 'é': false };
+const SUFS = ['', 's', 'es', 'ed', 'ing', 'y', 'ual', 'ually', 'uality', 'ual content', 'ic', 'ically', 'ity', 'ly', 'er', 'est',
+  'ist', 'ish', 'tant', 'ens', 'pit', 'x', 'S', 'ED', 'Y', '69', '9', '_', '_toy', '!', '.', ' ', ' content', '-', 'é', 'の'];
+const sufCont = (w, s) => { const t = s.toLowerCase(); return !ASCII_SPEC[w].some((x) => t.startsWith(x) && !/[a-z]/.test(t[x.length] ?? '')); };
+const passE = new Map();
+let a7rows = 0;
+for (const w of Object.keys(ASCII_SPEC)) {
+  const bad = [];
+  for (const [pre, pc] of Object.entries(PRE)) for (const suf of SUFS) {
+    const s = pre + w + suf;
+    const expPass = pc || sufCont(w, suf);
+    const got = moderate(s);
+    a7rows++;
+    if (!got || got.ok !== expPass) bad.push(`${s}（期待 ${expPass ? '通過' : '拒否'}・実 ${J(got)}）`);
+    if (expPass && oldRejects(s)) {
+      if (!passE.has(w)) passE.set(w, { pre: new Set(), suf: new Set() });
+      if (pc) passE.get(w).pre.add(pre);
+      else passE.get(w).suf.add(suf);
+    }
+  }
+  ok(bad.length === 0, `「${w}」前 ${Object.keys(PRE).length}×後 ${SUFS.length} 通りが規則①どおり${bad.length ? `（食い違い ${bad.length}: ${bad.slice(0, 6).join(' / ')}）` : ''}`);
+}
+console.log(`  ── 表: v10.3.0 は拒否・現在は通る形（${a7rows} 文から機械生成。前だけ／後だけに付けた形）`);
+for (const [w, { pre, suf }] of passE) console.log(`  (e1) ${w}: 前 [${[...pre].join('] [')}]・後 [${[...suf].join('] [')}]`);
+ok(passE.size === 0 || MSRC.includes('(e1)'), '表の型 (e1) が moderate.js「既知の残り」に書いてある');
+// "die "（v10.3.0 の末尾空白つきの語）にだけ当たっていた文: 意図の明らかな句だけ拒否・ほかは (e2)。
+for (const [s, exp] of [['go die now', false], ['die in a fire now', false], ['you should die now', false], ['die idiot', false],
+  ['just die already', true], ['die bitch', true], ['die hard', true], ['the engine would die here', true]]) {
+  const r = moderate(s);
+  ok(r && r.ok === exp && oldRejects(s) && (!exp || PASS_PLAN.includes(s) || PASS_RULE.includes(s) || MSRC.includes(`「${s}」`)),
+     `"die " の文「${s}」→ ${exp ? '通過' : '拒否'}（実 ${J(r)}・v10.3.0 は拒否）`);
 }
 
 const line = '─'.repeat(64);
