@@ -33,9 +33,9 @@ export function drawTougeElevation(canvas, course) {
   const wigScale = Math.min(34, (H * 0.18) / maxDev);
 
   const pt = (i) => {
-    const t = cum[i] / total;
-    const x = mx + t * (W - 2 * mx) + dev[i] * wigScale * 0.5;
-    const y = baseY - elevPx * (1 - t);   // 頂上(t=0)が高く、麓(t=1)が低い
+    const u = cum[i] / total;   // 道のりの割合 (BL5 fix1: 旧名 t は import した i18n の t を隠していた)
+    const x = mx + u * (W - 2 * mx) + dev[i] * wigScale * 0.5;
+    const y = baseY - elevPx * (1 - u);   // 頂上(u=0)が高く、麓(u=1)が低い
     return [x, y];
   };
 

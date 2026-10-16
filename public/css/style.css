@@ -560,9 +560,11 @@ input.cc-ghurl { flex: 1; min-width: 0; background: var(--bg-1); color: var(--te
 .cc-expand { padding: 1px 7px; font-size: 10.5px; font-weight: 600; margin-left: 6px; vertical-align: middle; text-transform: none; }
 
 /* 大きなプログラムエディタ (モーダル・行番号つき) */
-/* BL5: 背景は他のダイアログ (.docdlg) と同じ --surface。旧 var(--surface-1) は :root にも 11 テーマにも無く、計算値の時点で無効＝透明だった。 */
+/* BL5: 背景は他のダイアログ (.docdlg) と同じ --surface (10 テーマは不透明・glass だけ半透明 .08＝.docdlg と同じ)。旧 var(--surface-1) は :root にも 11 テーマにも無く、計算値の時点で無効＝透明だった。 */
 .dlg-editor { width: min(960px, 92vw); max-width: 92vw; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); box-shadow: 0 18px 60px rgba(0,0,0,.5); }
-.dlg-editor::backdrop { background: rgba(0,0,0,.5); }
+/* BL5 fix1: 背後の幕も .docdlg と同じ (暗く＋2px ぼかす)。glass の --surface は半透明 (.08) なので、幕をぼかさないと背後のボタンや
+   文字がくっきりコードと重なって見えた (層4 F2)。glass では他のダイアログと同じく「半透明＋背後のぼかし」の見え方にそろえる。 */
+.dlg-editor::backdrop { background: rgba(0, 0, 0, .55); backdrop-filter: blur(2px); }
 .le-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
 .le-head b { font-size: 14px; }
 .le-dot { width: 11px; height: 11px; border-radius: 50%; flex: none; }

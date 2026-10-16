@@ -3234,10 +3234,16 @@ holdButton('mLeft', 'ArrowLeft'); holdButton('mRight', 'ArrowRight');
 //   ・ダイアログが開いている（本アプリのダイアログはすべて showModal＝背後は操作できない前提の画面）。
 //     改修前はダイアログ内のボタンにフォーカスがあると背後の車が走り、矢印での本文のスクロールも奪われていた。
 //   ボタン（▶ 等）にフォーカスが残っているときは従来どおり走る（押した直後に矢印で運転する使い方を壊さない）。
+//   BL5 fix1: ファイル入力（<input type=file>）もボタンと同じ扱いで走る。矢印を自分では使わない（95ef692 で実測: 既定の動作は
+//     頁のスクロールだけ・ファイル選択は開かない＝ボタンと同じ）うえ、
+//     BL5 で display:none をやめて視覚的に隠したので、マウスで ⬆（.cc-up）・「JSON 読込」・「📥 バックアップを読み込む」の
+//     label を押すとフォーカスが見えない入力へ移る（display:none の頃は移らず <body> のまま）。除外したままだと、別の場所を
+//     押すまで矢印の手動運転が無言で効かなくなった（層4 F1・回帰）。Tab で入力へ来たときも同じく走る（ボタンと同じ）。
 function arrowKeysForCar() {
   if (document.querySelector('dialog[open]')) return false;
   const ae = document.activeElement;
   if (!ae) return true;
+  if (ae.tagName === 'INPUT' && String(ae.type).toLowerCase() === 'file') return true;
   return !(ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.tagName === 'SELECT' || ae.isContentEditable);
 }
 const ARROW_KEYS = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];

@@ -237,9 +237,9 @@ export const MESSAGES = {
   'elev3d.top':           { ja: '頂上 +{m}m', en: 'Summit +{m}m', h: '2e2cef9e' },
   'elev3d.foot':          { ja: '麓 0m', en: 'Base 0m', h: '5a77d01d' },
   'elev3d.title':         { ja: '立体プレビュー — 高低差 {m}m を下る ▼', en: '3D preview — {m}m descent ▼', h: '3d8e50e6' },
-  // ファイル入力 (視覚的に隠した <input type=file>) のアクセシブル名 (BL5)
-  'aria.file.backup':     { ja: 'バックアップ JSON を読み込む', en: 'Import a backup JSON', h: 'dcf8e669' },
-  'aria.file.course':     { ja: 'コース JSON を読み込む', en: 'Import a course JSON', h: '731d91c3' },
+  // ファイル入力 (視覚的に隠した <input type=file>) のアクセシブル名 (BL5)。見える文言のある label (📥 バックアップを読み込む・
+  // JSON 読込) は aria-label を付けず label の文言をそのまま名前にする (見える文言と名前を一致させる＝WCAG 2.5.3・BL5 fix1)。
+  // 名前が要るのはアイコンだけの label (車両カードの ⬆) だけ。
   'aria.file.program':    { ja: 'プログラムをファイルから取り込む', en: 'Load a program from a file', h: '6fc7b093' },
   'aria.drive.status':    { ja: '{name}: {n}周目 {state} 速度{kmh}km/h', en: '{name}: lap {n}, {state}, {kmh} km/h' },
   'aria.drive.touge':     { ja: '{name}: {state} 速度{kmh}km/h', en: '{name}: {state}, {kmh} km/h' },

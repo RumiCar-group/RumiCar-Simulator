@@ -77,8 +77,11 @@
 // H) BL5 ① CSS 変数の未定義と ③ ファイル入力の a11y の配線 — H-1 style.css・index.html・public/js の全 .js で var(--x) が参照する
 //    変数は全部どこかで定義（docs/stage_bl/probe/cssvars.mjs の型。`var(--warn, …)` のようなフォールバック付きは対象外＝一覧に出す）。
 //    H-2 style.css のフォールバックの無い参照は :root で定義（テーマは :root の上書き＝:root にあれば 11 テーマ全部で値が決まる）・
-//    .dlg-editor の background。H-3 `.filebtn input` を display:none／visibility:hidden にしない・3 つの <input type=file>
-//    （index.html #dataImport・#edImport＝data-i18n-aria／main.js .cc-file＝aria-label="${t('…')}"）にカタログの名前のキー。
+//    .dlg-editor の background。H-3 `.filebtn input` を display:none／visibility:hidden にしない・<input type=file> を index.html と
+//    public/js の全 .js から引用符の形を問わず数えて計 3 個（index.html #dataImport・#edImport／main.js .cc-file・コメントは数えない・
+//    JS で type を file にする形 0）・名前は見える文言と一致（見える文言のある label は aria の上書きなし＝label の文言が名前・
+//    アイコンだけの ⬆ は aria-label="${t('aria.file.program')}"）。H-4 矢印キーの手動運転の判定 arrowKeysForCar（main.js の本文を評価）
+//    はファイル入力にフォーカスがあっても走る（BL5 fix1・層4 F1 の回帰: マウスで label を押すとフォーカスが隠した入力へ移る）。
 //    是正前は `.dlg-editor { background: var(--surface-1) }`（全テーマで未定義＝透明）・`.filebtn input { display: none; }`。
 // I) BL5 ② elev3d.js（峠コースの立体プレビュー）の canvas 文言の i18n — I-1 文字列リテラルに日本語 0（字句解析・コメントは数えない・
 //    検出力の自己点検つき）・I-2 カタログ elev3d.top／foot／title（ja/en 非空・en に日本語なし・{m}）・I-3 courses.json の峠全部を
@@ -87,6 +90,10 @@
 //    赤になる章（2026-10-16 の実測・--root 81e44bf＝BL4 後・BL5 前）: H-1・H-2（2 行）・H-3（4 行）・I-1・I-2（4 行）・I-3・I-4（2 行）の
 //    15 件。実ブラウザは browser/check_bl5_a11y.mjs（全 11 テーマのエディタの背景の計算値・Tab で到達して Space でファイル選択・
 //    言語切替後の立体プレビューの fillText）。
+//    BL5 fix1（層4 往復 1・2026-10-17 の実測）: --root 95ef692（BL5 初版）＝H-3（#dataImport・#edImport の aria の上書き＝見える文言と
+//    食い違う名前）・H-4（file・FILE の 2 行）の 4 件。--root 81e44bf＝H-1・H-2（2 行）・H-3（display:none・⬆ の名前）・H-4（2 行＝判定は
+//    BL5 前から同じ。81e44bf では入力が display:none でフォーカスが移らなかったので実害は無かった）・I-1・I-2（4 行）・I-3・I-4（2 行）の
+//    15 件。I-1／G-4 の字句解析は後置 ++／-- の後の / を割り算と読み、I-1 も正規表現の途中の改行で投げる（層4 F3）。
 //
 // 使い方: node wf_bl1_ui.mjs              … 検査
 //         node wf_bl1_ui.mjs --root <dir>  … <dir>/public/js の product で回す（是正前の木で赤になることの確認用）
@@ -874,6 +881,8 @@ function templateSubs(src) {
     let k = j - 1; while (k >= 0 && /\s/.test(src[k])) k--;
     if (k < 0) return true;
     const c = src[k];
+    // 後置の ++／--（`k++ / 2`）の後の / は割り算（層4 F3）。前置（`++/re/`）は文法上ありえないので後置だけ見る。
+    if ((c === '+' || c === '-') && src[k - 1] === c) { let m = k - 2; while (m >= 0 && /\s/.test(src[m])) m--; if (m >= 0 && /[\w$)\]]/.test(src[m])) return false; }
     if ('(,=:[!&|?{};+-*%<>~^'.includes(c)) return true;
     return /[\w$]/.test(c) ? KW.test(src.slice(Math.max(0, k - 10), k + 1)) : false;
   };
@@ -1026,6 +1035,10 @@ const attrCtx = (before) => {
   const synth = "function f(x) { return `<b title='${esc(x)}'>a</b><i title=${esc(x)}>b</i><u title=\"${esc(x)}\">c</u><s data-i=\"${x} ${esc(x)}\">d</s><p>${esc(x)}</p>`; }";
   const got = templateSubs(synth).map((r) => attrCtx(r.before));
   ok(J(got) === J(['sq', 'bare', 'dq', 'dq', 'dq', 'text']), `判定の自己検査: ' 囲み・引用符なし・" 囲み×3・本文 → ${J(got)}`);
+  // BL5 層4 F3 の兄弟: 後置 ++／-- の後の / を正規表現と取り違えない（取り違えると正規表現の途中の改行で投げる＝G-4 が赤で止まる）
+  const pf = (src) => { try { return templateSubs(src).map((r) => r.expr); } catch (e) { return 'throw'; } };
+  const q1 = pf("k++ / 2;\nconst s = `${esc(a)}`;\nconst q = W / 3;"), q2 = pf("k-- / 2;\nconst s = `${esc(b)}`;\nconst q = W / 3;");
+  ok(J(q1) === J(['esc(a)']) && J(q2) === J(['esc(b)']), `字句解析の自己検査: 後置 ++／-- の後の / は割り算 → ${J(q1)}・${J(q2)}`);
   for (const file of ['car_crud.js', 'race_ui.js']) {
     const subs = templateSubs(readFileSync(join(JS, file), 'utf8'));
     const tally = { text: 0, tag: 0, dq: 0, sq: 0, bare: 0 };
@@ -1592,17 +1605,80 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
   const fileRules = [...css.matchAll(/([^{}]*\.filebtn[^{}]*\binput\b[^{}]*)\{([^{}]*)\}/g)].map((m) => ({ sel: m[1].trim(), body: m[2] }));
   const hiding = fileRules.filter((r) => /display\s*:\s*none|visibility\s*:\s*hidden/.test(r.body));
   ok(fileRules.length >= 1 && hiding.length === 0, `.filebtn の input の規則 ${fileRules.length} 個のうち display:none／visibility:hidden ${hiding.length} 個${hiding.length ? '（' + hiding.map((r) => r.sel).join('・') + '）' : ''}`);
-  const html = readFileSync(join(PUB, 'index.html'), 'utf8');
-  const mainSrc = readFileSync(join(JS, 'main.js'), 'utf8');
+  // 母集団（層4 F4）: index.html と public/js の全 .js から、引用符の形を問わず（"file"・'file'・file・大文字）<input …type=file…> を数え、
+  // JS で作る形（.type = 'file'・setAttribute('type', 'file')）も数える。各入力の名前は次のどちらか（層4 F5・WCAG 2.5.3 Label in Name）:
+  //   ・包む label に見える文言がある（data-i18n の span）→ aria-label／data-i18n-aria を付けない（label の文言がそのまま名前＝見える文言と一致）
+  //   ・label がアイコンだけ（文字＝\p{L} を含まない・⬆ など）→ aria-label="${t('…')}" か data-i18n-aria でカタログの名前
+  const FILE_TAG = /<input\b[^>]*?(?<![\w-])type\s*=\s*(?:"file"|'file'|file)(?=[\s/>])[^>]*>/gi;
+  // コメントの中の記述（例: 「視覚的に隠した <input type=file>」）は数えない。JS は行頭か空白の後の // と /* … */、HTML は <!-- … -->
+  // （'https://…' のような文字列の中の // は : の後なので消さない）。行番号は保つ。
+  const noComments = (rel, t) => (rel.endsWith('.html')
+    ? t.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, ' '))
+    : t.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' ')).replace(/(^|\s)\/\/.*$/gm, '$1'));
+  const FILE_DYN = /\.type\s*=\s*['"]file['"]|setAttribute\(\s*['"]type['"]\s*,\s*['"]file['"]/gi;
+  const selfTags = '<input type="file"><input type=\'file\' id=a><INPUT TYPE=FILE><input type=file/><input type="filex"><input data-type="file">';
+  const selfDyn = "e.type = 'file'; e.setAttribute('type', \"file\"); e.type = 'text';";
+  ok((selfTags.match(FILE_TAG) || []).length === 4 && (selfDyn.match(FILE_DYN) || []).length === 2,
+    `数え方の自己点検: "file"・'file'・FILE・file/ の 4 形を数え、"filex"・data-type は数えない（${(selfTags.match(FILE_TAG) || []).length}）・JS で作る形 2（${(selfDyn.match(FILE_DYN) || []).length}）`);
   const { MESSAGES: MSG } = await import(pathToFileURL(join(JS, 'i18n/messages.js')).href);
-  const fileInputs = [
-    ...[...html.matchAll(/<input\b[^>]*\btype="file"[^>]*>/g)].map((m) => ({ at: 'index.html', tag: m[0], key: (/data-i18n-aria="([^"]+)"/.exec(m[0]) || [])[1] })),
-    ...[...mainSrc.matchAll(/<input\b[^>]*\btype="file"[^>]*>/g)].map((m) => ({ at: 'main.js', tag: m[0], key: (/aria-label="\$\{t\('([^']+)'\)\}"/.exec(m[0]) || [])[1] })),
-  ];
-  ok(fileInputs.length === 3, `<input type=file> は index.html ${fileInputs.filter((f) => f.at === 'index.html').length} 個・main.js ${fileInputs.filter((f) => f.at === 'main.js').length} 個（計 3）`);
+  const srcs = [{ rel: 'index.html', text: readFileSync(join(PUB, 'index.html'), 'utf8') }, ...jsFiles.map((f) => ({ rel: f.slice(PUB.length + 1), text: readFileSync(f, 'utf8') }))]
+    .map((x) => ({ rel: x.rel, text: noComments(x.rel, x.text) }));
+  const selfCm = noComments('a.js', "// 隠した <input type=file>\n/* <input type=\"file\"> */ const u = 'https://x/<input type=file>';") + noComments('a.html', '<!-- <input type="file"> --><input type="file">');
+  ok((selfCm.match(FILE_TAG) || []).length === 2, `数え方の自己点検: コメントの中は数えず文字列の中（'https://…' の後も）と本文は数える（${(selfCm.match(FILE_TAG) || []).length}＝2）`);
+  const fileInputs = [], dyn = [];
+  for (const { rel, text } of srcs) {
+    for (const m of text.matchAll(FILE_TAG)) {
+      const lo = text.lastIndexOf('<label', m.index), lc = text.lastIndexOf('</label>', m.index), hi = text.indexOf('</label>', m.index);
+      const lab = lo >= 0 && lc < lo && hi > 0 ? text.slice(lo, hi + 8) : null;
+      const visible = lab ? lab.replace(m[0], '').replace(/\$\{[^}]*\}/g, '').replace(/<[^>]*>/g, '').trim() : '';
+      const spanKey = lab ? (/<span\b[^>]*\bdata-i18n="([^"]+)"/.exec(lab) || [])[1] : undefined;
+      const ariaKey = (/data-i18n-aria="([^"]+)"/.exec(m[0]) || /aria-label="\$\{t\('([^']+)'\)\}"/.exec(m[0]) || [])[1];
+      const ariaAny = /\baria-label(ledby)?\s*=|data-i18n-aria\s*=/i.test(m[0]);
+      fileInputs.push({ at: rel, tag: m[0], lab, visible, spanKey, ariaKey, ariaAny });
+    }
+    for (const m of text.matchAll(FILE_DYN)) dyn.push(`${rel}:${text.slice(0, m.index).split('\n').length}`);
+  }
+  const byFile = {}; for (const f of fileInputs) byFile[f.at] = (byFile[f.at] || 0) + 1;
+  ok(fileInputs.length === 3 && byFile['index.html'] === 2 && byFile['js/main.js'] === 1,
+    `<input type=file> は計 ${fileInputs.length} 個（${Object.entries(byFile).map(([k, v]) => k + ' ' + v).join('・')}）＝index.html 2・main.js 1`);
+  ok(dyn.length === 0, `JS で type を file にする形 ${dyn.length} 件${dyn.length ? '（' + dyn.join('・') + '）' : ''}（足すなら上の数と名前の検査に入れる）`);
   for (const f of fileInputs) {
-    const e = f.key && MSG[f.key];
-    ok(!!e && !!e.ja && !!e.en, `${f.at} ${(/id="([^"]+)"|class="([^"]+)"/.exec(f.tag) || [])[0] || f.tag}: aria の名前のキー ${f.key ? J(f.key) : '無し'}${e ? `（ja ${J(e.ja)}・en ${J(e.en)}）` : ''}`);
+    const who = `${f.at} ${(/id="([^"]+)"|class="([^"]+)"/.exec(f.tag) || [])[0] || f.tag}`;
+    const textLabel = /\p{L}/u.test(f.visible);
+    if (!f.lab) { ok(false, `${who}: 包む <label> が無い`); continue; }
+    if (textLabel) {
+      const e = f.spanKey && MSG[f.spanKey];
+      ok(!f.ariaAny && !!e && !!e.ja && !!e.en,
+        `${who}: label に見える文言（${J(f.visible)}・キー ${f.spanKey ? J(f.spanKey) : '無し'}${e ? `＝ja ${J(e.ja)}・en ${J(e.en)}` : ''}）があり aria の上書きなし（${f.ariaAny ? 'あり＝名前が見える文言と食い違う' : 'なし'}）`);
+    } else {
+      const e = f.ariaKey && MSG[f.ariaKey];
+      ok(!!e && !!e.ja && !!e.en, `${who}: label はアイコンだけ（${J(f.visible)}）→ aria の名前のキー ${f.ariaKey ? J(f.ariaKey) : '無し'}${e ? `（ja ${J(e.ja)}・en ${J(e.en)}）` : ''}`);
+    }
+  }
+
+  // H-4（層4 F1・回帰）: 矢印キーの手動運転の判定 arrowKeysForCar（main.js の本文を切り出して評価）。ファイル入力にフォーカスがあっても走る
+  // （マウスで ⬆ などの label を押すとフォーカスが視覚的に隠した入力へ移る＝95ef692 では矢印が無言で効かなくなった）。ほかの判定は BF1 のまま。
+  // 実ブラウザ（マウスで ⬆ → ArrowUp → ToF が変わる）は browser/check_bl5_a11y.mjs (d)。
+  console.log('\nH-4) 矢印キーの手動運転の判定（arrowKeysForCar）— ファイル入力にフォーカスがあっても走る・入力欄／select／ダイアログでは走らない');
+  const ms = readFileSync(join(JS, 'main.js'), 'utf8');
+  const fa = ms.indexOf('function arrowKeysForCar() {');
+  const fb = fa >= 0 ? ms.indexOf('\n}\n', fa) : -1;
+  if (fa < 0 || fb < 0) ok(false, 'main.js に function arrowKeysForCar() が無い');
+  else {
+    const body = ms.slice(fa, fb + 2);
+    const judge = (ae, dlg = false) => new Function('document', body + '\nreturn arrowKeysForCar();')({ activeElement: ae, querySelector: (q) => (q === 'dialog[open]' && dlg ? {} : null) });
+    const el = (tagName, type, extra = {}) => ({ tagName, type, isContentEditable: false, ...extra });
+    const CASES = [
+      ['<body>', el('BODY'), false, true], ['ボタン', el('BUTTON', 'submit'), false, true], ['activeElement 無し', null, false, true],
+      ['<input type=file>', el('INPUT', 'file'), false, true], ['<input type=FILE>（大文字）', el('INPUT', 'FILE'), false, true],
+      ['<input type=text>', el('INPUT', 'text'), false, false], ['<input type=range>', el('INPUT', 'range'), false, false],
+      ['<input type=checkbox>', el('INPUT', 'checkbox'), false, false], ['<textarea>', el('TEXTAREA'), false, false],
+      ['<select>', el('SELECT'), false, false], ['contentEditable', el('DIV', undefined, { isContentEditable: true }), false, false],
+      ['ダイアログが開いている＋<input type=file>', el('INPUT', 'file'), true, false], ['ダイアログが開いている＋<body>', el('BODY'), true, false],
+    ];
+    const bad = CASES.filter(([, ae, dlg, want]) => judge(ae, dlg) !== want);
+    for (const [name, ae, dlg, want] of CASES) if (name.includes('file')) ok(judge(ae, dlg) === want, `${name}: ${want ? '走る' : '走らない'}（実 ${judge(ae, dlg) ? '走る' : '走らない'}）`);
+    ok(bad.length === 0, `判定表 ${CASES.length} 行のうち期待と違う ${bad.length} 行${bad.length ? '（' + bad.map(([n]) => n).join('・') + '）' : ''}（BF1 の入力欄・select・contentEditable・ダイアログは走らないまま）`);
   }
 }
 
@@ -1622,12 +1698,15 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
       let k = j - 1; while (k >= 0 && /\s/.test(src[k])) k--;
       if (k < 0) return true;
       const c = src[k];
+      // 後置の ++／--（`k++ / 2`）の後の / は割り算（層4 F3・G-4 の写しと同じ）。
+      if ((c === '+' || c === '-') && src[k - 1] === c) { let m = k - 2; while (m >= 0 && /\s/.test(src[m])) m--; if (m >= 0 && /[\w$)\]]/.test(src[m])) return false; }
       if ('(,=:[!&|?{};+-*%<>~^'.includes(c)) return true;
       return /[\w$]/.test(c) ? KW.test(src.slice(Math.max(0, k - 10), k + 1)) : false;
     };
     const lineAt = (p) => src.slice(0, p).split('\n').length;
     const str = (q) => { const st = i; i++; let v = ''; while (i < src.length && src[i] !== q) { if (src[i] === '\\') { v += src.slice(i, i + 2); i += 2; continue; } v += src[i]; i++; } i++; out.push({ text: v, line: lineAt(st) }); };
-    const regex = () => { i++; let cls = false; while (i < src.length) { const c = src[i]; if (c === '\\') { i += 2; continue; } if (c === '[') cls = true; else if (c === ']') cls = false; else if (c === '/' && !cls) break; i++; } i++; while (/[a-z]/.test(src[i] || '')) i++; };
+    // 正規表現の途中で改行が来たら読み違い（割り算を正規表現と取った）＝黙って先を飲み込まず投げる（層4 F3・G-4 の写しと同じ）。
+    const regex = () => { i++; let cls = false; while (i < src.length) { const c = src[i]; if (c === '\\') { i += 2; continue; } if (c === '[') cls = true; else if (c === ']') cls = false; else if (c === '/' && !cls) break; else if (c === '\n') throw new Error('正規表現の途中で改行 @' + i); i++; } i++; while (/[a-z]/.test(src[i] || '')) i++; };
     function code(inSub) {
       let depth = 0;
       while (i < src.length) {
@@ -1660,7 +1739,8 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
   const ELEV = join(JS, 'elev3d.js');
   const esrc = readFileSync(ELEV, 'utf8');
   console.log('\nI-1) elev3d.js の文字列リテラルに日本語が無い（コメントは数えない）— 是正前: :66・:67・:71 の 3 件');
-  const lits = stringLiterals(esrc);
+  let lits = [];
+  try { lits = stringLiterals(esrc); } catch (e) { ok(false, `elev3d.js の字句解析が通らない（${e.message}）`); }
   const jaLits = lits.filter((l) => JA.test(l.text));
   ok(lits.length >= 5, `文字列リテラル ${lits.length} 件を取り出した（字句解析の自己点検: 色の '#…' などを含む）`);
   ok(jaLits.length === 0, `日本語を含む文字列リテラル ${jaLits.length} 件${jaLits.length ? '（' + jaLits.map((l) => `:${l.line} ${J(l.text)}`).join('・') + '）' : ''}`);
@@ -1668,6 +1748,11 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
   const probeSrc = "// 頂上 コメント\nconst a = `頂上 +${e}m`; const b = '麓 0m'; /* 麓 */ const c = x / 2 / 3; f(`立体 ${g(`内側 ${h}`)}`);";
   const pr = stringLiterals(probeSrc).filter((l) => JA.test(l.text)).map((l) => l.text);
   ok(J(pr) === J(['頂上 +${…}m', '麓 0m', '内側 ${…}', '立体 ${…}']), `字句解析の検出力（コメントの日本語は数えず・入れ子のテンプレートも拾う）: ${J(pr)}`);
+  // 層4 F3: 後置 ++ の後の割り算を正規表現と取り違えて次の行の文字列を飲み込まない・正規表現の途中の改行は投げる（黙って 0 件にしない）
+  const pp = (src) => { try { return stringLiterals(src).filter((l) => JA.test(l.text)).map((l) => l.text); } catch (e) { return 'throw'; } };
+  const p1 = pp("k++ / 2;\nconst s = '頂上';\nconst q = W / 3;"), p2 = pp("k-- / 2;\nconst s = '麓';\nconst q = W / 3;"), p3 = pp("a = (x) / 2;\nconst s = '頂上';"), p4 = pp("x = /ab\nc/ + '頂上';");
+  ok(J(p1) === J(['頂上']) && J(p2) === J(['麓']) && J(p3) === J(['頂上']) && p4 === 'throw',
+    `字句解析の検出力（後置 ++／-- と ) の後の / は割り算・正規表現の途中の改行は投げる）: ${J(p1)}・${J(p2)}・${J(p3)}・${J(p4)}`);
 
   console.log('\nI-2) カタログ elev3d.*（ja/en 非空・en に日本語なし・{m} の差し込み）');
   const KEYS = ['elev3d.top', 'elev3d.foot', 'elev3d.title'];

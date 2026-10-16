@@ -235,7 +235,7 @@
       <p data-i18n="sys.backup.hint">上記のブラウザ保存データをまとめて 1 つの JSON に書き出し / 読み戻せます (端末の移行・誤消去への備え。サーバーには送信されません)。読み込み時、現在の値と異なるキーがあるときは件数を確認してから上書きします。</p>
       <div class="lsbackup">
         <button id="dataExport" data-i18n="sys.backup.export" data-i18n-title="sys.backup.export.title" title="このブラウザの rumicar.* 保存データをまとめて JSON ファイルに書き出します">💾 バックアップを書き出す</button>
-        <label class="filebtn" data-i18n-title="sys.backup.import.title" title="バックアップ JSON を読み込み、rumicar.* 保存データを復元します (衝突は確認後に上書き)"><span data-i18n="sys.backup.import">📥 バックアップを読み込む</span><input id="dataImport" type="file" accept=".json" data-i18n-aria="aria.file.backup"></label>
+        <label class="filebtn" data-i18n-title="sys.backup.import.title" title="バックアップ JSON を読み込み、rumicar.* 保存データを復元します (衝突は確認後に上書き)"><span data-i18n="sys.backup.import">📥 バックアップを読み込む</span><input id="dataImport" type="file" accept=".json"></label>
       </div>
     </div>
   </dialog>
@@ -750,7 +750,7 @@
           </div>
           <div class="row">
             <button id="edExport" data-i18n="ed.export">JSON 書出</button>
-            <label class="filebtn"><span data-i18n="ed.import">JSON 読込</span><input id="edImport" type="file" accept=".json" data-i18n-aria="aria.file.course"></label>
+            <label class="filebtn"><span data-i18n="ed.import">JSON 読込</span><input id="edImport" type="file" accept=".json"></label>
             <button id="edShare" data-i18n="ed.share" data-i18n-title="ed.share.title" title="このコースを JSON ファイルとしてダウンロードし、GitHub の投稿ページを開きます。そのページにファイルを置いてコミットすると投稿されます (書込権限が無い場合は GitHub 側で fork を作る案内が出ます)。承認されると全利用者が選べます">🌐 GitHubで共有</button>
             <button id="edDelete" data-i18n="ed.delete">保存コース削除</button>
             <button id="edApply" class="primary" data-i18n="ed.apply">適用して走行へ</button>
