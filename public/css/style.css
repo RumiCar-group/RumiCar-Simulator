@@ -329,12 +329,20 @@ input#ghurl { flex: 1; min-width: 180px; }
 input::placeholder { color: var(--text-faint); }
 
 .filebtn {
+  position: relative;   /* BL5: 中の input (視覚的に隠す) の位置の基準 */
   background: var(--surface-2); border: 1px solid var(--border);
   border-radius: var(--radius-xs); padding: 7px 12px; font-size: 13px; cursor: pointer;
   transition: background .15s ease, border-color .15s ease;
 }
 .filebtn:hover { background: var(--surface-3); border-color: var(--border-strong); }
-.filebtn input { display: none; }
+/* BL5: input は display:none にしない (タブ順とアクセシビリティツリーから消え、キーボードでファイルを選べなかった)。
+   見た目だけ隠し (1px・clip)、フォーカスは input が受け、リングは label に出す (キーボードのフォーカスだけ＝:focus-visible。
+   マウスで押したときは出さない)。名前は aria-label (i18n)。 */
+.filebtn input {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; border: 0;
+  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; opacity: 0;
+}
+.filebtn:has(input:focus-visible) { outline: none; box-shadow: var(--ring); }   /* button:focus-visible と同じ */
 
 /* AP24: データ保全 (バックアップ書出/読込) ボタン列 */
 .lsbackup { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
@@ -552,7 +560,8 @@ input.cc-ghurl { flex: 1; min-width: 0; background: var(--bg-1); color: var(--te
 .cc-expand { padding: 1px 7px; font-size: 10.5px; font-weight: 600; margin-left: 6px; vertical-align: middle; text-transform: none; }
 
 /* 大きなプログラムエディタ (モーダル・行番号つき) */
-.dlg-editor { width: min(960px, 92vw); max-width: 92vw; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-1); color: var(--text); box-shadow: 0 18px 60px rgba(0,0,0,.5); }
+/* BL5: 背景は他のダイアログ (.docdlg) と同じ --surface。旧 var(--surface-1) は :root にも 11 テーマにも無く、計算値の時点で無効＝透明だった。 */
+.dlg-editor { width: min(960px, 92vw); max-width: 92vw; padding: 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); color: var(--text); box-shadow: 0 18px 60px rgba(0,0,0,.5); }
 .dlg-editor::backdrop { background: rgba(0,0,0,.5); }
 .le-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
 .le-head b { font-size: 14px; }

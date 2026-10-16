@@ -1261,7 +1261,7 @@ function buildFleetColumns() {
         '<input class="cc-ghurl" type="text" placeholder="GitHub URL">' +
         `<button class="cc-ghload" title="${t('cc.ghload.title')}">${t('cc.ghload')}</button>` +
         `<button class="cc-repo" title="${t('cc.repo.title')}">${t('cc.repo')}</button>` +
-        `<label class="cc-up filebtn" title="${t('cc.up.title')}">⬆<input type="file" class="cc-file" accept=".ino,.cpp,.c,.cc,.h,.py,.js"></label>` +
+        `<label class="cc-up filebtn" title="${t('cc.up.title')}">⬆<input type="file" class="cc-file" accept=".ino,.cpp,.c,.cc,.h,.py,.js" aria-label="${t('aria.file.program')}"></label>` +
         `<button class="cc-share" title="${t('cc.share.title')}">${t('cc.share')}</button>` +
       '</div>' +
       `<div class="cc-label">${t('cc.progLabel')} <button class="cc-expand" title="${t('cc.expand.title')}">${t('cc.expand')}</button></div>` +
@@ -2626,6 +2626,9 @@ fleetCols.addEventListener('change', (e) => {
     // 高低差バッジ (峠コース) は applyCourse 時のみ設定されるので言語に追従させる。
     const badge = $('elevBadge');
     if (badge && !badge.hidden && course.touge && course.elev) badge.textContent = t('course.elevBadge', { m: course.elev });
+    // 立体プレビュー (峠コース) の canvas の文言も同じ理由で描き直す (BL5)。
+    const elevC = $('elev3d');
+    if (elevC && !elevC.hidden && course.touge && course.elev) drawTougeElevation(elevC, course);
     // 大きなプログラムエディタが開いていればラベルを更新。
     const dlg = $('dlgEditor');
     if (dlg && dlg.open) applyBigEditorLabels();

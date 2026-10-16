@@ -1,5 +1,8 @@
 // 峠(高低差あり)コースの立体プレビュー。中心線と総高低差(course.elev)から、
 // 「左(頂上)→右(麓)へ下っていく3Dリボン」を斜め投影で描く。崖の面と下りで高低差を表現する。
+// 文言はカタログ elev3d.* (現在言語・BL5)。言語切替では main.js の setOnLangChange が描き直す。
+import { t } from './i18n.js';
+
 export function drawTougeElevation(canvas, course) {
   if (!canvas || !course || !course.centerline || course.centerline.length < 2) return;
   const ctx = canvas.getContext('2d');
@@ -63,10 +66,10 @@ export function drawTougeElevation(canvas, course) {
     ctx.fillStyle = '#fff'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center';
     ctx.fillText(label, x, y - 9);
   };
-  flag(sx, sy, '#7fe08a', `頂上 +${elev}m`);
-  flag(ex, ey, '#ff7a6a', '麓 0m');
+  flag(sx, sy, '#7fe08a', t('elev3d.top', { m: elev }));
+  flag(ex, ey, '#ff7a6a', t('elev3d.foot'));
 
   // タイトル
   ctx.fillStyle = 'rgba(255,255,255,0.92)'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'left';
-  ctx.fillText(`立体プレビュー — 高低差 ${elev}m を下る ▼`, 10, 16);
+  ctx.fillText(t('elev3d.title', { m: elev }), 10, 16);
 }

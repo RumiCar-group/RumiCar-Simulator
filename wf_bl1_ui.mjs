@@ -1,4 +1,4 @@
-// wf_bl1_ui.mjs — Stage BL（UI 不具合）の常設ゲート。BL1 が新設し、BL2〜BL7 が章を足す（A＝BL1・B＝BL2・C〜F＝BL3・G＝BL4）。
+// wf_bl1_ui.mjs — Stage BL（UI 不具合）の常設ゲート。BL1 が新設し、BL2〜BL7 が章を足す（A＝BL1・B＝BL2・C〜F＝BL3・G＝BL4・H/I＝BL5）。
 // ════════════════════════════════════════════════════════════════════════════
 // 本番モジュールを import して答えさせる（再実装しない・CI-9）。実ブラウザでしか測れない部分は
 // browser/check_bl<n>_*.mjs（run_all.sh が glob で拾う）。
@@ -73,6 +73,20 @@
 //    rankingsHtml に分けた 2 行）・G-6 の表（regime・タイの name／bestLapMs・programRef・🍴 の言語 の 16 行）・F4・F2 の 4 行・
 //    G-6e の 7 行。実ブラウザは browser/check_bl4_escape.mjs
 //    （自作車の車種表と編集フォームを実画面で開き、img 要素 0・alert 0）。
+//
+// H) BL5 ① CSS 変数の未定義と ③ ファイル入力の a11y の配線 — H-1 style.css・index.html・public/js の全 .js で var(--x) が参照する
+//    変数は全部どこかで定義（docs/stage_bl/probe/cssvars.mjs の型。`var(--warn, …)` のようなフォールバック付きは対象外＝一覧に出す）。
+//    H-2 style.css のフォールバックの無い参照は :root で定義（テーマは :root の上書き＝:root にあれば 11 テーマ全部で値が決まる）・
+//    .dlg-editor の background。H-3 `.filebtn input` を display:none／visibility:hidden にしない・3 つの <input type=file>
+//    （index.html #dataImport・#edImport＝data-i18n-aria／main.js .cc-file＝aria-label="${t('…')}"）にカタログの名前のキー。
+//    是正前は `.dlg-editor { background: var(--surface-1) }`（全テーマで未定義＝透明）・`.filebtn input { display: none; }`。
+// I) BL5 ② elev3d.js（峠コースの立体プレビュー）の canvas 文言の i18n — I-1 文字列リテラルに日本語 0（字句解析・コメントは数えない・
+//    検出力の自己点検つき）・I-2 カタログ elev3d.top／foot／title（ja/en 非空・en に日本語なし・{m}）・I-3 courses.json の峠全部を
+//    buildFromSpec で作り drawTougeElevation を mock の canvas で ja／en の両方で呼び、fillText が t() の値と一致・ja は是正前の
+//    固定文言と同一・I-4 elev3d.js が t を import・main.js の言語切替（setOnLangChange）が drawTougeElevation を呼ぶ。
+//    赤になる章（2026-10-16 の実測・--root 81e44bf＝BL4 後・BL5 前）: H-1・H-2（2 行）・H-3（4 行）・I-1・I-2（4 行）・I-3・I-4（2 行）の
+//    15 件。実ブラウザは browser/check_bl5_a11y.mjs（全 11 テーマのエディタの背景の計算値・Tab で到達して Space でファイル選択・
+//    言語切替後の立体プレビューの fillText）。
 //
 // 使い方: node wf_bl1_ui.mjs              … 検査
 //         node wf_bl1_ui.mjs --root <dir>  … <dir>/public/js の product で回す（是正前の木で赤になることの確認用）
@@ -1525,6 +1539,192 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
   try { r3 = ctn(cfg6.CAR_TYPE_BY_KEY.bl4_cc); } catch (e) { th3 = e; }
   ok(th3 === null && r3 === '🌐 ?', `取り込んだ投稿車種（name が {"toString":1}）の車種名 → ${th3 ? th3.message : J(r3)}`);
   cfg6.unregisterCarType('bl4_ca'); cfg6.unregisterCarType('bl4_cc');
+}
+
+// ── H) BL5 ① style.css の CSS 変数の未定義（.dlg-editor の --surface-1）──────────────────────────
+// 是正前（81e44bf まで）: `.dlg-editor { background: var(--surface-1) }` の --surface-1 は :root にも 11 テーマのどれにも無い
+// ＝計算値の時点で無効＝背景が透明（実ブラウザの計算値は browser/check_bl5_a11y.mjs (a)）。
+// 定義の集め方は docs/stage_bl/probe/cssvars.mjs の型（style.css・index.html・public/js の全 .js の `--x:` と setProperty('--x')）。
+// フォールバック付きの参照（`var(--warn, …)`）は未定義でも値が決まるので対象外（一覧には出す）。
+{
+  const { readdirSync } = await import('node:fs');
+  const PUB = join(ROOT, 'public');
+  const jsFiles = [];
+  const walk = (d) => { for (const e of readdirSync(d, { withFileTypes: true })) { const p = join(d, e.name); if (e.isDirectory()) walk(p); else if (e.name.endsWith('.js')) jsFiles.push(p); } };
+  walk(JS);
+  const files = [join(PUB, 'css/style.css'), join(PUB, 'index.html'), ...jsFiles];
+  const strip = (s) => s.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));   // CSS のコメント（行番号は保つ）
+  const defs = new Map(), uses = [];
+  for (const f of files) {
+    const raw = readFileSync(f, 'utf8');
+    const s = f.endsWith('.css') ? strip(raw) : raw;
+    const rel = f.slice(PUB.length + 1);
+    for (const m of s.matchAll(/(--[a-zA-Z0-9_-]+)\s*:/g)) if (!defs.has(m[1])) defs.set(m[1], rel);
+    for (const m of s.matchAll(/setProperty\(\s*['"](--[a-zA-Z0-9_-]+)/g)) if (!defs.has(m[1])) defs.set(m[1], rel + '（setProperty）');
+    s.split('\n').forEach((ln, i) => { for (const m of ln.matchAll(/var\(\s*(--[a-zA-Z0-9_-]+)\s*(,)?/g)) uses.push({ v: m[1], at: `${rel}:${i + 1}`, fb: !!m[2] }); });
+  }
+  console.log('\nH-1) CSS 変数の参照 var(--x) は全部どこかで定義されている（フォールバック付きは対象外）— 是正前: --surface-1（style.css .dlg-editor）');
+  const undef = uses.filter((u) => !defs.has(u.v));
+  const hard = undef.filter((u) => !u.fb), soft = undef.filter((u) => u.fb);
+  ok(uses.length > 100 && defs.size > 30, `走査 ${files.length} ファイル・参照 ${uses.length} 箇所（変数 ${new Set(uses.map((u) => u.v)).size} 種）・定義 ${defs.size} 種`);
+  ok(hard.length === 0, `フォールバックの無い参照で未定義の変数 ${hard.length} 件${hard.length ? '（' + hard.map((u) => u.v + ' ' + u.at).join('・') + '）' : ''}`);
+  console.log(`  （対象外＝フォールバック付きで未定義: ${soft.length ? soft.map((u) => u.v + ' ' + u.at).join('・') : 'なし'}）`);
+
+  // H-2: style.css の中でフォールバックの無い参照は :root に定義がある（テーマは :root の上書き＝:root にあれば全 11 テーマで値が決まる）。
+  console.log('\nH-2) style.css のフォールバックの無い参照は :root で定義（全テーマで値が決まる）');
+  const css = strip(readFileSync(join(PUB, 'css/style.css'), 'utf8'));
+  const rootDefs = new Set();
+  let nRoot = 0;
+  for (const m of css.matchAll(/(^|[}\s])(:root)\s*\{([^{}]*)\}/g)) { nRoot++; for (const d of m[3].matchAll(/(--[\w-]+)\s*:/g)) rootDefs.add(d[1]); }
+  const themes = [...css.matchAll(/html\[data-theme="([\w-]+)"\]\s*\{[^{}]*--[\w-]+\s*:/g)].map((m) => m[1]);
+  const cssUses = uses.filter((u) => u.at.startsWith('css/style.css:') && !u.fb);
+  const notRoot = cssUses.filter((u) => !rootDefs.has(u.v));
+  ok(nRoot >= 1 && rootDefs.size > 30, `:root のブロック ${nRoot} 個・定義 ${rootDefs.size} 種・変数を上書きするテーマ ${themes.length} 個（${themes.join(',')}）＋既定（:root）`);
+  ok(new Set(themes).size === 10, `テーマのブロックは 10 個（既定の :root と合わせて 11 テーマ）`);
+  ok(notRoot.length === 0, `style.css のフォールバックの無い参照 ${cssUses.length} 箇所のうち :root に定義の無いもの ${notRoot.length} 件${notRoot.length ? '（' + notRoot.map((u) => u.v + ' ' + u.at).join('・') + '）' : ''}`);
+  const dlgRule = /\.dlg-editor\s*\{([^{}]*)\}/.exec(css);
+  const bg = dlgRule && /background\s*:\s*([^;]+);/.exec(dlgRule[1]);
+  const bgVars = bg ? [...bg[1].matchAll(/var\(\s*(--[\w-]+)/g)].map((m) => m[1]) : [];
+  ok(!!bg && bgVars.length >= 1 && bgVars.every((v) => rootDefs.has(v)), `.dlg-editor の background（${bg ? bg[1].trim() : '無し'}）の変数が :root で定義済み`);
+  // H-3: ファイル入力の a11y の配線（実ブラウザの到達・ファイル選択・名前は browser/check_bl5_a11y.mjs (b)）。
+  // 是正前: `.filebtn input { display: none; }` で 3 つの <input type=file> がタブ順とアクセシビリティツリーから消え、名前の属性も無かった。
+  console.log('\nH-3) ファイル入力の a11y の配線 — .filebtn input を display:none／visibility:hidden にしない・全 <input type=file> にカタログの aria 名');
+  const fileRules = [...css.matchAll(/([^{}]*\.filebtn[^{}]*\binput\b[^{}]*)\{([^{}]*)\}/g)].map((m) => ({ sel: m[1].trim(), body: m[2] }));
+  const hiding = fileRules.filter((r) => /display\s*:\s*none|visibility\s*:\s*hidden/.test(r.body));
+  ok(fileRules.length >= 1 && hiding.length === 0, `.filebtn の input の規則 ${fileRules.length} 個のうち display:none／visibility:hidden ${hiding.length} 個${hiding.length ? '（' + hiding.map((r) => r.sel).join('・') + '）' : ''}`);
+  const html = readFileSync(join(PUB, 'index.html'), 'utf8');
+  const mainSrc = readFileSync(join(JS, 'main.js'), 'utf8');
+  const { MESSAGES: MSG } = await import(pathToFileURL(join(JS, 'i18n/messages.js')).href);
+  const fileInputs = [
+    ...[...html.matchAll(/<input\b[^>]*\btype="file"[^>]*>/g)].map((m) => ({ at: 'index.html', tag: m[0], key: (/data-i18n-aria="([^"]+)"/.exec(m[0]) || [])[1] })),
+    ...[...mainSrc.matchAll(/<input\b[^>]*\btype="file"[^>]*>/g)].map((m) => ({ at: 'main.js', tag: m[0], key: (/aria-label="\$\{t\('([^']+)'\)\}"/.exec(m[0]) || [])[1] })),
+  ];
+  ok(fileInputs.length === 3, `<input type=file> は index.html ${fileInputs.filter((f) => f.at === 'index.html').length} 個・main.js ${fileInputs.filter((f) => f.at === 'main.js').length} 個（計 3）`);
+  for (const f of fileInputs) {
+    const e = f.key && MSG[f.key];
+    ok(!!e && !!e.ja && !!e.en, `${f.at} ${(/id="([^"]+)"|class="([^"]+)"/.exec(f.tag) || [])[0] || f.tag}: aria の名前のキー ${f.key ? J(f.key) : '無し'}${e ? `（ja ${J(e.ja)}・en ${J(e.en)}）` : ''}`);
+  }
+}
+
+// ── I) BL5 ② elev3d.js（峠コースの立体プレビュー）の canvas 文言の i18n ──────────────────────────
+// 是正前（81e44bf まで）: elev3d.js は i18n を import せず「頂上 +…m」「麓 0m」「立体プレビュー — 高低差 …m を下る ▼」を固定で描き、
+// main.js の言語切替（setOnLangChange）でも描き直さなかった。I-1 文字列リテラルに日本語 0（字句解析・コメントは数えない）・
+// I-2 カタログ elev3d.* の ja/en（en に日本語なし）・I-3 drawTougeElevation を mock の canvas で ja／en の両方で呼び、
+// fillText の文言が t() の値と一致・en に日本語なし・I-4 配線（elev3d.js が i18n.js の t を import・main.js の言語切替で描き直す）。
+{
+  const JA = /[぀-ヿ㐀-鿿ｦ-ﾟ]/;
+  // 文字列リテラル（'…'・"…"・テンプレートの字面）を全部取り出す（コメント・正規表現は読み飛ばす・${…} の中も読む）。
+  function stringLiterals(src) {
+    const out = [];
+    let i = 0;
+    const KW = /(?:^|[^\w$])(return|typeof|case|do|else|in|of|new|delete|void|throw|yield|await)$/;
+    const regexAllowed = (j) => {
+      let k = j - 1; while (k >= 0 && /\s/.test(src[k])) k--;
+      if (k < 0) return true;
+      const c = src[k];
+      if ('(,=:[!&|?{};+-*%<>~^'.includes(c)) return true;
+      return /[\w$]/.test(c) ? KW.test(src.slice(Math.max(0, k - 10), k + 1)) : false;
+    };
+    const lineAt = (p) => src.slice(0, p).split('\n').length;
+    const str = (q) => { const st = i; i++; let v = ''; while (i < src.length && src[i] !== q) { if (src[i] === '\\') { v += src.slice(i, i + 2); i += 2; continue; } v += src[i]; i++; } i++; out.push({ text: v, line: lineAt(st) }); };
+    const regex = () => { i++; let cls = false; while (i < src.length) { const c = src[i]; if (c === '\\') { i += 2; continue; } if (c === '[') cls = true; else if (c === ']') cls = false; else if (c === '/' && !cls) break; i++; } i++; while (/[a-z]/.test(src[i] || '')) i++; };
+    function code(inSub) {
+      let depth = 0;
+      while (i < src.length) {
+        const c = src[i], d = src[i + 1];
+        if (c === '/' && d === '/') { while (i < src.length && src[i] !== '\n') i++; continue; }
+        if (c === '/' && d === '*') { const e = src.indexOf('*/', i + 2); if (e < 0) throw new Error('コメント未終端'); i = e + 2; continue; }
+        if (c === "'" || c === '"') { str(c); continue; }
+        if (c === '`') { template(); continue; }
+        if (c === '/' && regexAllowed(i)) { regex(); continue; }
+        if (c === '{') depth++;
+        if (c === '}') { if (depth === 0 && inSub) return; depth--; }
+        i++;
+      }
+      if (inSub) throw new Error('${ が未終端');
+    }
+    function template() {
+      const st = i; i++; let v = '';
+      while (i < src.length) {
+        const c = src[i];
+        if (c === '\\') { v += src.slice(i, i + 2); i += 2; continue; }
+        if (c === '`') { i++; out.push({ text: v, line: lineAt(st) }); return; }
+        if (c === '$' && src[i + 1] === '{') { i += 2; code(true); i++; v += '${…}'; continue; }
+        v += c; i++;
+      }
+      throw new Error('テンプレート未終端');
+    }
+    code(false);
+    return out;
+  }
+  const ELEV = join(JS, 'elev3d.js');
+  const esrc = readFileSync(ELEV, 'utf8');
+  console.log('\nI-1) elev3d.js の文字列リテラルに日本語が無い（コメントは数えない）— 是正前: :66・:67・:71 の 3 件');
+  const lits = stringLiterals(esrc);
+  const jaLits = lits.filter((l) => JA.test(l.text));
+  ok(lits.length >= 5, `文字列リテラル ${lits.length} 件を取り出した（字句解析の自己点検: 色の '#…' などを含む）`);
+  ok(jaLits.length === 0, `日本語を含む文字列リテラル ${jaLits.length} 件${jaLits.length ? '（' + jaLits.map((l) => `:${l.line} ${J(l.text)}`).join('・') + '）' : ''}`);
+  // 字句解析の検出力: 是正前の 3 行と同じ形（テンプレート・'…'）を入れた写しで 3 件拾えること
+  const probeSrc = "// 頂上 コメント\nconst a = `頂上 +${e}m`; const b = '麓 0m'; /* 麓 */ const c = x / 2 / 3; f(`立体 ${g(`内側 ${h}`)}`);";
+  const pr = stringLiterals(probeSrc).filter((l) => JA.test(l.text)).map((l) => l.text);
+  ok(J(pr) === J(['頂上 +${…}m', '麓 0m', '内側 ${…}', '立体 ${…}']), `字句解析の検出力（コメントの日本語は数えず・入れ子のテンプレートも拾う）: ${J(pr)}`);
+
+  console.log('\nI-2) カタログ elev3d.*（ja/en 非空・en に日本語なし・{m} の差し込み）');
+  const KEYS = ['elev3d.top', 'elev3d.foot', 'elev3d.title'];
+  const { MESSAGES } = await import(pathToFileURL(join(JS, 'i18n/messages.js')).href);
+  for (const k of KEYS) {
+    const e = MESSAGES[k];
+    ok(!!e && typeof e.ja === 'string' && e.ja !== '' && typeof e.en === 'string' && e.en !== '' && !JA.test(e.en),
+      `${k}: ${e ? `ja ${J(e.ja)}・en ${J(e.en)}` : '未登録'}`);
+  }
+  ok(!!MESSAGES['elev3d.top'] && MESSAGES['elev3d.top'].ja.includes('{m}') && MESSAGES['elev3d.top'].en.includes('{m}')
+    && !!MESSAGES['elev3d.title'] && MESSAGES['elev3d.title'].ja.includes('{m}') && MESSAGES['elev3d.title'].en.includes('{m}'),
+    'elev3d.top・elev3d.title の ja/en に高低差の差し込み {m} がある');
+
+  console.log('\nI-3) drawTougeElevation（実コースの峠・mock の canvas）の fillText — ja／en とも t() の値・en に日本語なし');
+  const elevM = await import(pathToFileURL(ELEV).href);
+  const { buildFromSpec: bfs } = await import(pathToFileURL(join(JS, 'course.js')).href);
+  const specs = JSON.parse(readFileSync(join(ROOT, 'public/data/courses.json'), 'utf8'));
+  const tougeSpecs = specs.filter((s) => { try { const c = bfs(s); return !!(c && c.touge && c.elev); } catch (e) { return false; } });
+  ok(tougeSpecs.length >= 3, `courses.json の峠コース（buildFromSpec の touge かつ elev）${tougeSpecs.length} 本`);
+  const mockCanvas = (texts) => {
+    const ctx = new Proxy({}, { get(t, k) {
+      if (k === 'fillText') return (s) => texts.push(String(s));
+      if (k in t) return t[k];
+      return () => ({ addColorStop() {} });
+    }, set(t, k, v) { t[k] = v; return true; } });
+    return { width: 560, height: 150, getContext: () => ctx };
+  };
+  const lang0 = i18n.getLang();
+  let drawn = 0, bad = [], jaDiff = [];
+  for (const lg of ['ja', 'en']) {
+    i18n.setLang(lg);
+    for (const s of tougeSpecs) {
+      const c = bfs(s);
+      const texts = [];
+      let th = null;
+      try { elevM.drawTougeElevation(mockCanvas(texts), c); } catch (e) { th = e; }
+      const want = [i18n.t('elev3d.top', { m: c.elev }), i18n.t('elev3d.foot'), i18n.t('elev3d.title', { m: c.elev })];
+      const good = th === null && i18n.getLang() === lg && J(texts) === J(want) && (lg !== 'en' || !texts.some((x) => JA.test(x)));
+      drawn++;
+      if (!good) bad.push(`${lg} ${s.name}: ${th ? '例外 ' + th.message : J(texts) + ' ≠ ' + J(want)}`);
+      // ja の描画は是正前の固定文言と 1 文字も変わらない（キー化は表示を変えない）
+      const old = [`頂上 +${c.elev}m`, '麓 0m', `立体プレビュー — 高低差 ${c.elev}m を下る ▼`];
+      if (lg === 'ja' && J(texts) !== J(old)) jaDiff.push(`${s.name}: ${J(texts)} ≠ 是正前 ${J(old)}`);
+    }
+  }
+  i18n.setLang(lang0);
+  ok(jaDiff.length === 0, `ja の描画 ${tougeSpecs.length} 本が是正前の固定文言と同一（違い ${jaDiff.length} 件${jaDiff.length ? '：' + jaDiff.slice(0, 2).join(' ／ ') : ''}）`);
+  ok(drawn === tougeSpecs.length * 2 && bad.length === 0, `${drawn} 回の描画（峠 ${tougeSpecs.length} 本 × ja/en）のうち t() の値と違う／en に日本語 ${bad.length} 件${bad.length ? '（' + bad.slice(0, 3).join(' ／ ') + (bad.length > 3 ? ' …' : '') + '）' : ''}`);
+  ok(i18n.getLang() === lang0, `言語を元に戻した（${lang0}）`);
+
+  console.log('\nI-4) 配線: elev3d.js が i18n.js の t を import・main.js の言語切替（setOnLangChange）で立体プレビューを描き直す');
+  ok(/^import\s*\{[^}]*\bt\b[^}]*\}\s*from\s*'\.\/i18n\.js';/m.test(esrc), 'elev3d.js が ./i18n.js から t を import');
+  const msrc = readFileSync(join(JS, 'main.js'), 'utf8');
+  const a = msrc.indexOf('setOnLangChange(() => {');
+  let lcBody = '';
+  if (a >= 0) { const b = msrc.indexOf('\n  });', a); lcBody = msrc.slice(a, b); }
+  ok(a >= 0 && /drawTougeElevation\(/.test(lcBody), `main.js の言語切替の本文（${lcBody.split('\n').length} 行）が drawTougeElevation を呼ぶ`);
 }
 
 const line = '─'.repeat(64);
