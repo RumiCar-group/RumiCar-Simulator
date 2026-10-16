@@ -942,6 +942,16 @@ export const MESSAGES = {
   'interp.err.noneIndex':   { ja: 'None に添字 [ ] は使えません (値を代入していない変数か、return で値を返さない関数の結果かもしれません)', en: 'None cannot be indexed with [ ] (it may be a variable that was never given a value, or the result of a function that does not return a value)' },
   // BK4 層4 F7: list／str の添字に None（python3 は TypeError: list indices must be integers or slices, not NoneType）。
   'interp.err.noneAsIndex': { ja: 'list と文字列の添字に None は使えません (添字は整数にしてください)', en: 'None cannot be used as a list or string index (indices must be integers)' },
+  // BL7: 組込関数の引数（api.js が行なしで投げ、evaluator の callHost が呼び出した文の行を付ける）。{type}＝typeName（None・int・float・bool・
+  //   dict・function など）。python3 は len が TypeError・random.choice が TypeError／IndexError。是正前の len は日本語固定の Error（行なし）・
+  //   choice(None) は JS の TypeError・choice([]) は値なし。
+  'interp.err.lenArg':      { ja: 'len() には list・tuple・str・dict を渡してください ({type} には長さがありません)', en: 'len() needs a list, tuple, str or dict ({type} has no length)' },
+  'interp.err.choiceArg':   { ja: 'random.choice() には list・tuple・str を渡してください ({type} からは選べません)', en: 'random.choice() needs a list, tuple or str (cannot choose from {type})' },
+  'interp.err.choiceEmpty': { ja: 'random.choice(): 空の list・tuple・str からは選べません', en: 'random.choice(): cannot choose from an empty list, tuple or str' },
+  // BL7 ⑤: 実行環境の呼び出しスタックが尽きた（上限 SIM.maxCallDepth に届く前）。種類（i18nKey）は interp.err.recursion のまま・文言だけ別。
+  //   段数を書かない（是正前は上の recursion の文言で、loop() の中の str(深い入れ子の list) が「1 段に達しました」と出た）。関数の外で
+  //   尽きたとき（Model B の while True: の本体・1 回だけ走るプログラム）も同じ文言（是正前は JS の RangeError が漏れた）。
+  'interp.err.recursionStack': { ja: '入れ子が深すぎます (実行環境の呼び出しスタックが尽きました)。再帰を止める条件が正しいか、深く入れ子にした list・dict を str() や print() で文字列にしていないか確かめてください', en: 'Nesting is too deep (the call stack of the runtime ran out). Check the condition that stops the recursion, and whether a deeply nested list or dict is being turned into a string with str() or print()' },
 
   // ---- BK1: 字句エラー（lexer.js）・構文エラー（parser_py.js／parser_c.js）。SourceError（lexer.js）が t('interp.' + phase + '.' + sub) で参照し、
   //   頭（head）＋文言＋行の接尾（interp.err.line）で組む。ja は是正前の日本語固定文と 1 文字も変えない（wf_bk1_interp2 A 章が是正前の文言で照合）。

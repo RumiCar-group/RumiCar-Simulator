@@ -13,6 +13,7 @@ class ContinueSignal { constructor(line) { this.line = line; } }
 //   ※ `t('interp.err.' + sub, …)` の動的キーは wf_i18n_check の接頭辞機構で参照済み扱いになる (孤児誤検知回避)。
 // BK1: kind＝エラーの種類 (i18nKey。既定は sub)。同じ種類で文言だけを状況で変えるとき、sub に文言のキー・kind に種類を渡す
 //   (breakOutside の Generic 版・stepLimit の millis() ヒント付き版)。i18nMsgKey＝実際に描画した文言のキー。
+const ERR_PREFIX = 'interp.err.';
 export class RuntimeError extends Error {
   constructor(sub, params, line, kind) {
     let msg = t('interp.err.' + sub, params || {});
@@ -96,7 +97,10 @@ export class Interp {
     try { this.execBlock(fn.body, scope); }
     catch (e) {
       if (e instanceof ReturnSignal) return e.v;
-      if (isStackOverflow(e)) throw new RuntimeError('recursion', { n: this.depth }, callLine || this.curLine);
+      // BL7 ⑤: スタック切れの変換は文言を recursionStack（「入れ子が深すぎます」・段数を書かない）にする。種類（i18nKey）は recursion のまま。
+      //   是正前は上限の文言「呼び出しの入れ子が {n} 段に達しました」で、loop() の中の str(深い入れ子の list) のように関数の呼び出しでなく
+      //   JS の内部の再帰で尽きたときも n＝1（loop() の 1 段）と出た。i18nParams.n（そのときの段数）は従来どおり持つ。上限の経路は不変。
+      if (isStackOverflow(e)) throw new RuntimeError('recursionStack', { n: this.depth }, callLine || this.curLine, 'recursion');
       throw this.outside(e, this.has('loop'));
     }
     finally { this.depth--; }
@@ -118,10 +122,14 @@ export class Interp {
   }
   // BJ3: 関数の外の文（トップレベル。Model A の setup 前の初期化・Model B の while True: より前・Model C の全体）を走らせる。
   //   ここまで届いた break／continue／return は、外側にループも関数も無い＝エラー（Python も SyntaxError）。
+  // BL7 ④: 関数の外（トップレベル）で実行環境のスタックが尽きたとき（Model B の `while True:` の本体や 1 回だけ走るプログラムの
+  //   `s = str(深い入れ子の list)`）も、callUser と同じ種類（recursion）・文言（recursionStack）・行（その文の行＝curLine）の実行時エラーに
+  //   する（stackErr）。是正前は JS の RangeError「Maximum call stack size exceeded」が行番号も i18n キーも無しで表示層へ漏れた。
   execTop(stmts) {
     try { this.execBlock(stmts, this.global); }
-    catch (e) { throw this.outside(e, false); }
+    catch (e) { throw this.stackErr(e) || this.outside(e, false); }
   }
+  stackErr(e) { return isStackOverflow(e) ? new RuntimeError('recursionStack', { n: this.depth }, this.curLine, 'recursion') : null; }
   // BJ3: Model B（トップレベルの while True:）の本体を 1 回走らせる。continue＝この回を終える（false）・break＝ループを
   //   抜ける（true を返す。runner が以降の tick を無動作にする＝人間判断②）。return は関数の外＝エラー。
   execLoopPass(stmts) {
@@ -129,7 +137,7 @@ export class Interp {
     catch (e) {
       if (e instanceof ContinueSignal) return false;
       if (e instanceof BreakSignal) return true;
-      throw this.outside(e, false);
+      throw this.stackErr(e) || this.outside(e, false);
     }
     return false;
   }
@@ -493,7 +501,7 @@ export class Interp {
       if (typeof fn !== 'function') throw this.rt('notMethod', { name: callee.name });
       // BK4 層4 F7: py の Serial.print／println も print と同じく pyStr（True／False／None）。是正前は "true"／""（None は null）。C は従来どおり。
       if (this.lang === 'py' && obj === this.host.Serial) return fn.apply(obj, args.map((v) => (v === undefined ? v : pyStr(v))));
-      return fn.apply(obj, args);
+      return this.callHost(fn, obj, args);
     }
     if (callee.t === 'var') {
       const name = callee.name;
@@ -525,13 +533,24 @@ export class Interp {
         if (this.lang !== 'py' && (name === 'int' || name === 'float' || name === 'bool') && typeof args[0] === 'string' && args[0].length === 1) {
           return this.host[name](args[0].charCodeAt(0), ...args.slice(1));
         }
-        return this.host[name](...args);
+        return this.callHost(this.host[name], this.host, args);
       }
       throw this.rt('undefFunc', { name });
     }
     const fn = this.evalExpr(callee, scope);
     if (typeof fn !== 'function') throw this.rt('notCallable');
-    return fn(...args);
+    return this.callHost(fn, undefined, args);
+  }
+
+  // BL7 ①②: ホスト（api.js）の組込関数を呼ぶ。組込関数は文の行を知らないので、行の無い RuntimeError（len(None)・random.choice([]) ほか）を
+  //   投げたら、ここで呼び出した文の行（curLine＝evalCall の時点の文の行）を付けて投げ直す（文言のキー・種類・引数は同じ）。
+  //   それ以外の例外と、行の付いた RuntimeError はそのまま。正常に戻る呼び出しの値と this は従来どおり（this.host[name](...) は this＝host）。
+  callHost(fn, self, args) {
+    try { return fn.apply(self, args); }
+    catch (e) {
+      if (e instanceof RuntimeError && !e.line) throw new RuntimeError(e.i18nMsgKey.slice(ERR_PREFIX.length), e.i18nParams, this.curLine, e.i18nKey.slice(ERR_PREFIX.length));
+      throw e;
+    }
   }
 }
 
@@ -541,9 +560,12 @@ function truthy(v) { return !(v === 0 || v === false || v === '' || v == null); 
 function pyTruthy(v) {
   if (!truthy(v)) return false;
   if (Array.isArray(v)) return v.length > 0;
-  if (typeof v === 'object' && Object.getPrototypeOf(v) === null) return Object.keys(v).length > 0;
+  if (typeof v === 'object' && Object.getPrototypeOf(v) === null) return dictNonEmpty(v);
   return true;
 }
+// BL7 ③: 素の辞書（プロトタイプ無し）に鍵が 1 つでもあるか。最初の鍵で抜ける＝O(1)（是正前は Object.keys(v).length＝判定のたびに
+//   鍵の数の配列を作った）。プロトタイプ無しなので for … in が数えるのは自前の列挙できる鍵だけ（Object.keys と同じ集合）。
+function dictNonEmpty(o) { for (const k in o) return true; return false; }
 
 // ===== AP9: Python 組込メソッド (str / list / dict) =====
 // 各テーブルは `(受け手) => (...引数) => 結果` のファクトリ。pyMethod が受け手を束縛して返す。
@@ -701,7 +723,8 @@ function pad(body, width, fill, align, head = '') {
   if (align === '=') return head + fill.repeat(n) + body;
   return fill.repeat(n) + head + body;
 }
-const typeName = (v) => (typeof v === 'boolean' ? 'bool' : typeof v === 'number' ? (Number.isInteger(v) ? 'int' : 'float')
+// BL7: api.js（len・random.choice の引数の型の文言）も使う＝export。
+export const typeName = (v) => (typeof v === 'boolean' ? 'bool' : typeof v === 'number' ? (Number.isInteger(v) ? 'int' : 'float')
   : typeof v === 'string' ? 'str' : Array.isArray(v) ? 'list' : v == null ? 'None' : typeof v === 'function' ? 'function' : 'dict');
 // 値 v を書式指定 spec で文字列にする。line＝実行時エラーの行。
 function formatValue(v, spec, line) {

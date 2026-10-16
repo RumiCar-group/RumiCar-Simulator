@@ -4,6 +4,7 @@ import { CONST, SENSOR_NOISE, SENSOR_HOLD, SIM } from './config.js';
 import { DYN } from './physics_dyn.js';
 import { readAll, readRear } from './sensors.js';
 import { t } from './i18n.js';
+import { RuntimeError, typeName } from './interp/evaluator.js';
 
 // World は { car, walls, log(msg), rear?, encoder? } を持つ実行コンテキスト。
 // world.rear=true のとき後方センサー(任意装備)が、world.encoder=true のとき車輪エンコーダ(任意装備)が有効になる。
@@ -114,11 +115,19 @@ export function buildApi(world) {
   };
 
   // AP9: Python 組込関数 (学習頻出)。既存プログラム未使用＝byte 不変 (f0〜f3 は C プログラムで interp/api 非参照)。
+  // BL7 ①: 長さの無い値（None・数・bool・関数）は実行時エラー interp.err.lenArg（python3 は TypeError: object of type '…' has no len()）。
+  //   ここでは行を付けない＝evaluator の callHost が呼び出した文の行を付ける（JS で書いたプログラムは行なし）。是正前は
+  //   JS の Error を日本語固定の文言（「len(): 対象がありません」／「len(): 対象は list/str/dict のみ」）で投げた＝英語モードでも日本語・行番号なし・i18n キーなし。
+  // BL7 ③: dict（object）の長さは鍵を数えるだけ（是正前の Object.keys(x).length は鍵の配列を作った）。数える鍵は Object.keys と同じ
+  //   自前の列挙できる鍵（py の dict はプロトタイプ無し・ホストのオブジェクトも自前の鍵だけを数える）。
   const pyLen = (x) => {
-    if (x == null) throw new Error('len(): 対象がありません');
     if (typeof x === 'string' || Array.isArray(x)) return x.length;
-    if (typeof x === 'object') return Object.keys(x).length;
-    throw new Error('len(): 対象は list/str/dict のみ');
+    if (x != null && typeof x === 'object') {
+      let n = 0;
+      for (const k in x) if (Object.prototype.hasOwnProperty.call(x, k)) n++;
+      return n;
+    }
+    throw new RuntimeError('lenArg', { type: typeName(x) });
   };
   const pyRange = (a, b, c) => {
     let start = 0, end, step = 1;
@@ -153,7 +162,15 @@ export function buildApi(world) {
     randint: (a, b) => a + Math.floor(_rand() * (b - a + 1)),
     randrange: (a, b) => (b === undefined ? Math.floor(_rand() * a) : a + Math.floor(_rand() * (b - a))),
     uniform: (a, b) => a + _rand() * (b - a),
-    choice: (arr) => arr[Math.floor(_rand() * arr.length)],
+    // BL7 ②: list・tuple・str 以外（None・数・dict ほか）は interp.err.choiceArg・空の列は interp.err.choiceEmpty（python3 は TypeError／
+    //   IndexError: Cannot choose from an empty sequence）。どちらも乱数を引く前に投げる。行は evaluator の callHost が付ける。是正前は
+    //   choice(None) が JS の TypeError「Cannot read properties of null (reading 'length')」・choice([]) は例外にならず値なし（print は空行）・
+    //   dict や数は黙って値なし。選べる列の選び方（乱数 1 回・同じ添字）は是正前と同じ＝出荷・既存の列は不変。
+    choice: (arr) => {
+      if (!(Array.isArray(arr) || typeof arr === 'string')) throw new RuntimeError('choiceArg', { type: typeName(arr) });
+      if (arr.length === 0) throw new RuntimeError('choiceEmpty', {});
+      return arr[Math.floor(_rand() * arr.length)];
+    },
   };
 
   const env = {
