@@ -101,6 +101,7 @@ import { safeSetItem, setStoreFailHandler } from './storage.js'; // AP4: data �
 import { course, setCourse } from './state.js';
 import { initRaceUI } from './race_ui.js';
 import { initCarCrud } from './car_crud.js';
+import { moderate } from './moderate.js';   // BL1: 質問・提案の投稿前チェック (純関数)
 
 const $ = (id) => document.getElementById(id);
 
@@ -2681,22 +2682,8 @@ function pruneSlotCarTypes() {
 }
 
 // ---- ⑤ コミュニティ Q&A 投稿 (技術・アイデア限定。猥褻/誹謗をクライアント側で防御) ----
+// 判定 (NG 語一覧・語境界の規則・URL 過多) は moderate.js (BL1 で分離・wf_bl1_ui.mjs A 章が同じ関数を呼ぶ)。
 // 注: クライアント側フィルタは回避可能。最終的な可視性は GitHub 上のレビュー(承認/削除)で担保する。
-const NG_WORDS = [
-  // 猥褻・性的 (日本語/ローマ字/英)
-  'セックス', 'エロ', 'av女優', 'ちんちん', 'まんこ', 'ペニス', 'ヴァギナ', 'パイズリ', 'オナニー',
-  'sex', 'porn', 'pussy', 'dick', 'cock', 'penis', 'vagina', 'boobs', 'nude', 'xxx', 'fuck',
-  // 誹謗中傷・差別・攻撃
-  '死ね', '殺す', 'しね', 'バカ', 'アホ', 'クズ', 'カス', 'キモい', 'ブス', 'デブ', 'きちがい', 'キチガイ',
-  '在日', '差別', 'idiot', 'stupid', 'retard', 'kill you', 'die ',
-];
-function moderate(text) {
-  const t = (text || '').toLowerCase();
-  for (const w of NG_WORDS) if (t.includes(w.toLowerCase())) return { ok: false, word: w };
-  // 連絡先/URLスパムの軽い抑止 (技術的議論に限定)
-  if ((t.match(/https?:\/\//g) || []).length > 3) return { ok: false, word: 'リンク過多' };
-  return { ok: true };
-}
 $('askSendBtn').addEventListener('click', () => {
   const title = ($('askTitle').value || '').trim();
   const body = ($('askBody').value || '').trim();

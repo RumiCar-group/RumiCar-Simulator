@@ -198,6 +198,11 @@ const GATES = [
   //   変換）D) (30) ループの外の break／continue の文言 E) H1 ステップ上限の millis() のヒント F) 出荷 23 本の不変（runRace と出力）を固定する。
   //   改修前の木（--root）では A〜E が赤。所要は本ホスト実測 約 4.4s（単独・2026-10-13）。
   'wf_bk1_interp2.mjs',
+  // BL1: Stage BL（UI 不具合）の常設ゲート（BL2〜BL7 が章を足す）。A) 質問・提案（💬）の NG ワード判定 moderate.js の
+  //   通過表（アプリ自身の語彙「カスタム車種」「cockpit」・地名・人名・語の前後の文字種）と拒否表（product の NG_WORDS の
+  //   全語から機械生成）・URL 過多・main.js の配線。改修前の木（--root）では A-1 と配線が赤。実ブラウザは browser/check_bl1_moderate.mjs。
+  //   所要は本ホスト実測 1 秒未満（単独・2026-10-16）。
+  'wf_bl1_ui.mjs',
 ].map((name) => ({ name, args: [] }));
 
 // official_result は決定論2回照合→result.json 再検証→Node pin 照合の複合ゲート (AP20)。
