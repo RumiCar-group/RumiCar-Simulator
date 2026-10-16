@@ -1,4 +1,4 @@
-// wf_bl1_ui.mjs — Stage BL（UI 不具合）の常設ゲート。BL1 が新設し、BL2〜BL7 が章を足す。
+// wf_bl1_ui.mjs — Stage BL（UI 不具合）の常設ゲート。BL1 が新設し、BL2〜BL7 が章を足す（A＝BL1・B＝BL2）。
 // ════════════════════════════════════════════════════════════════════════════
 // 本番モジュールを import して答えさせる（再実装しない・CI-9）。実ブラウザでしか測れない部分は
 // browser/check_bl<n>_*.mjs（run_all.sh が glob で拾う）。
@@ -17,6 +17,15 @@
 //    赤になる章（2026-10-16 の実測・件数は決定ログ BL1 結果）: ad5ddd1（v10.3.0）＝A-1（PLAN の 9 行のうち diesel・
 //    differential 以外の 7 行と規則の行）・A-4・A-5・A-6・A-7。9f5b4c2（BL1 初版）＝A-1 の 2 行・A-5・A-6・A-7。
 //    e2869c0（層4 往復 1）＝A-5・A-6・A-7（添え字の付いた短い語・数字の後の英字の語・sexual）。
+//
+// B) BL2 走行中の設定変更の停止処理 — main.js の配線（本文を読む・DOM 前提で import できないため）。
+//    是正前（ad5ddd1〜b649a95＝v10.3.0）は loadCourse と設定の change 8 経路（optTire/optGear/optSusp/optSteer/optBrake/
+//    optWear/optPhysMode/regimeSel）が `running = false; paused = false; syncButtons();` だけで止め、setRunView(false)・
+//    releaseDrive を通らなかった（走行中に変えるとコード表示のまま固定・■ が無効）。B-1 `running = false` の出現が stopAuto の
+//    中だけ（是正前 11 箇所＝stopAuto・loadCourse・change 8 本・startAuto の ok === 0）、B-2 stopAuto の本文、B-3 9 経路が
+//    stopAuto() を呼ぶ、B-4 発火元（courseSel → selectCourse → applyCourse → loadCourse・enforceFitRatio の fx.regime →
+//    regimeSel の change・startAuto の失敗経路）。見た目（■・.cc-editor・.cc-code）は browser/check_bl2_runview.mjs。
+//    赤になる章（2026-10-16 の実測）: ad5ddd1／b649a95（BL1 後・BL2 前）＝B-1・B-3・B-4（startAuto の行）。
 //
 // 使い方: node wf_bl1_ui.mjs              … 検査
 //         node wf_bl1_ui.mjs --root <dir>  … <dir>/public/js の product で回す（是正前の木で赤になることの確認用）
@@ -322,6 +331,79 @@ for (const [s, exp] of [['go die now', false], ['die in a fire now', false], ['y
   ok(r && r.ok === exp && oldRejects(s) && (!exp || PASS_PLAN.includes(s) || PASS_RULE.includes(s) || MSRC.includes(`「${s}」`)),
      `"die " の文「${s}」→ ${exp ? '通過' : '拒否'}（実 ${J(r)}・v10.3.0 は拒否）`);
 }
+
+// ── B) BL2 走行中の設定変更の停止処理（main.js の配線）────────────────────────────
+// main.js は DOM を前提にするので import できない＝本文を読んで配線だけを検査する（挙動は browser/check_bl2_runview.mjs）。
+// 行コメントを落としてから数える（コメントの中の `running = false` は配線ではない）。`//` の直前が行頭か空白のときだけ
+// コメントとみなす（'https://…' の // は落とさない）。
+console.log('\nB-1) `running = false`（全体の走行状態を落とす代入）は stopAuto の中だけ');
+const MAIN = readFileSync(join(JS, 'main.js'), 'utf8');
+const CODE = MAIN.split('\n').map((l) => l.replace(/(^|\s)\/\/.*$/, '$1')).join('\n');
+const lineOf = (i) => CODE.slice(0, i).split('\n').length;
+// i（`{` の位置）から対応する `}` までを返す（行コメントは落とし済み。文字列・テンプレートの中の括弧は数えない）。
+function blockAt(i) {
+  let d = 0, q = null;
+  for (let k = i; k < CODE.length; k++) {
+    const c = CODE[k];
+    if (q) { if (c === '\\') k++; else if (c === q) q = null; continue; }
+    if (c === "'" || c === '"' || c === '`') { q = c; continue; }
+    if (c === '{') d++;
+    else if (c === '}' && --d === 0) return { a: i, b: k, text: CODE.slice(i, k + 1) };
+  }
+  return null;
+}
+function fnBody(name) {
+  const m = new RegExp(`\\nfunction ${name}\\s*\\([^)]*\\)\\s*\\{`).exec(CODE);
+  return m ? blockAt(m.index + m[0].length - 1) : null;
+}
+// `$('<id>')` を受けた変数に繋いだ change ハンドラ（`const xEl = $('id'); if (xEl) xEl.addEventListener('change', (e) => {…})`）、
+// または `$('<id>').addEventListener('change', …)` の本文。
+function changeHandler(id) {
+  // 宣言と登録が隣り合う最上位の形だけを拾う（関数の中の `const sel = $('regimeSel')` などを取り違えない）。
+  const h = new RegExp(`\\nconst (\\w+) = \\$\\('${id}'\\);\\s*\\n(?:if \\(\\1\\) )?\\1\\.addEventListener\\('change',\\s*\\(e\\)\\s*=>\\s*\\{`).exec(CODE)
+         || new RegExp(`\\n\\$\\('${id}'\\)\\.addEventListener\\('change',\\s*\\(e\\)\\s*=>\\s*\\{`).exec(CODE);
+  return h ? blockAt(h.index + h[0].length - 1) : null;
+}
+const stopB = fnBody('stopAuto');
+const RUN_FALSE = /(?<![\w.$])running\s*=\s*false/g;
+const sites = [];
+for (let mm; (mm = RUN_FALSE.exec(CODE));) {
+  if (/let\s+$/.test(CODE.slice(Math.max(0, mm.index - 8), mm.index))) continue;   // 宣言 `let running = false;` は代入ではない
+  sites.push({ at: mm.index, line: lineOf(mm.index), inStop: !!stopB && mm.index > stopB.a && mm.index < stopB.b });
+}
+// 是正前（ad5ddd1〜b649a95）の実数は 11 箇所（stopAuto・loadCourse・change ハンドラ 8 本・startAuto の ok === 0）。
+// PLAN の「10 箇所」は startAuto の 1 箇所を数えていなかった（先頭で stopAuto を呼んだ後の重ね書き＝同じ姿）。
+console.log(`  出現 ${sites.length} 箇所（main.js:${sites.map((x) => x.line + (x.inStop ? '〔stopAuto〕' : '')).join(', ')}）`);
+ok(!!stopB, 'stopAuto() の定義がある');
+const outside = sites.filter((x) => !x.inStop);
+ok(sites.length >= 1 && outside.length === 0,
+   `running = false は stopAuto の中だけ（外 ${outside.length} 箇所${outside.length ? ': main.js:' + outside.map((x) => x.line).join(', ') : ''}）`);
+
+console.log('\nB-2) stopAuto が停止の姿を全部つくる（駆動解除・編集表示・ボタン）');
+for (const want of [/(?<![\w.$])running\s*=\s*false/, /(?<![\w.$])paused\s*=\s*false/, /releaseDrive\(slots\)/, /setRunView\(false\)/, /syncButtons\(\)/]) {
+  ok(!!stopB && want.test(stopB.text), `stopAuto の本文に ${want.source.replace(/\(\?<!\[\\w\.\$\]\)/, '').replace(/\\s\*/g, ' ').replace(/\\/g, '')}`);
+}
+
+console.log('\nB-3) 走行中の設定変更 9 経路が stopAuto を呼ぶ（是正前は 9 経路とも running = false の直書き）');
+const PATHS9 = [
+  ['loadCourse（コース選択・投稿コースの復元・エディタ適用）', fnBody('loadCourse')],
+  ...['optTire', 'optGear', 'optSusp', 'optSteer', 'optBrake', 'optWear', 'optPhysMode', 'regimeSel'].map((id) => [`${id} の change`, changeHandler(id)]),
+];
+for (const [label, b] of PATHS9) {
+  const calls = b ? (b.text.match(/(?<![\w.$])stopAuto\(\)/g) || []).length : 0;
+  const direct = b ? (b.text.match(RUN_FALSE) || []).length : 0;
+  ok(!!b && calls >= 1 && direct === 0, `${label}${b ? `（main.js:${lineOf(b.a)}）` : '（本文が見つからない）'}: stopAuto() ${calls} 回・running = false の直書き ${direct}`);
+}
+
+console.log('\nB-4) 9 経路へ繋がる発火元（コース選択 → loadCourse・enforceFitRatio の領域切替 → regimeSel の change）');
+const selB = fnBody('selectCourse'), appB = fnBody('applyCourse'), fitB = fnBody('enforceFitRatio');
+ok(/\$\('courseSel'\)\.addEventListener\('change',[^\n]*selectCourse\(/.test(CODE), 'courseSel の change → selectCourse');
+ok(!!selB && /(?<![\w.$])applyCourse\(/.test(selB.text), 'selectCourse → applyCourse');
+ok(!!appB && /(?<![\w.$])loadCourse\(/.test(appB.text), 'applyCourse → loadCourse');
+ok(!!fitB && /const sel = \$\('regimeSel'\)/.test(fitB.text) && /sel\.dispatchEvent\(new Event\('change'/.test(fitB.text),
+   'enforceFitRatio の fx.regime は regimeSel の change を発火する（＝B-3 の regimeSel の経路を通る）');
+const startB = fnBody('startAuto');
+ok(!!startB && /if \(ok === 0\) \{ stopAuto\(\); return; \}/.test(startB.text), 'startAuto の「全車の setup 失敗」も stopAuto で止める');
 
 const line = '─'.repeat(64);
 console.log('\n' + line);

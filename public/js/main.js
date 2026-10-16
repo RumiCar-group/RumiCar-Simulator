@@ -369,7 +369,7 @@ function loadCourse(c) {
   setCourse(c);
   setView(c);
   rebuildSpawns(slots, course);
-  running = false; paused = false;
+  stopAuto();   // BL2: 停止は stopAuto の 1 箇所だけ (走行中のコース変更でもコード表示・■ を停止の姿へ戻す)
   for (const s of slots) s.controller = null;
 }
 
@@ -431,7 +431,7 @@ function startAuto() {
       slot.controller = null; slot.running = false;
     }
   }
-  if (ok === 0) { running = false; syncButtons(); return; }
+  if (ok === 0) { stopAuto(); return; }   // BL2: 停止は stopAuto の 1 箇所だけ (先頭の stopAuto で既に停止済み＝同じ姿)
   running = true; paused = false;
   setRunView(true); // 走行中は各列を実行行ハイライト表示に切替
   logLine(t('log.runStart', { n: ok }) + (interact ? t('log.runStart.detect') : t('log.runStart.pass')));
@@ -440,6 +440,13 @@ function startAuto() {
   syncButtons();
 }
 
+// 【BL2・2026-10-16】**走行を止める処理はここ 1 箇所だけ**（`running = false` を書くのはこの関数の中だけ＝
+//   wf_bl1_ui.mjs B 章が配線を検査する）。是正前 (v10.3.0) はコース読込 (loadCourse) と設定の change 8 経路
+//   (optTire/optGear/optSusp/optSteer/optBrake/optWear/optPhysMode/regimeSel。enforceFitRatio の fx.regime も
+//   regimeSel の change を発火する) が `running = false; paused = false; syncButtons();` だけで止めていたため、
+//   setRunView(false) と releaseDrive を通らず、走行中に設定を変えるとコード表示のまま固定・エディタが隠れたまま・
+//   ■ が無効になった。停止中に呼んでも見た目は変わらない (setRunView(false) は既に編集表示・releaseDrive は
+//   直前の rebuildSpawns→car.reset と同じ値を書く)。
 function stopAuto() {
   running = false; paused = false;
   releaseDrive(slots);
@@ -2265,8 +2272,7 @@ if (optTireEl) optTireEl.addEventListener('change', (e) => {
   tireSet = normTire(e.target.value);
   slots.forEach(s => { s.world.tire = tireSet; if (s.car.engine === 'v2') s.car.tireSet = tireSet; });
   rebuildSpawns(slots, course);   // reset は tireSet を保持する (装備は reset で不変)。位置/ラップのみ戻す。
-  running = false; paused = false;
-  syncButtons();
+  stopAuto();   // BL2: 走行中に変えてもコード表示・■ を停止の姿へ戻す (停止は stopAuto の 1 箇所だけ)
   const v2 = (PHYSICS.mode === 'v2');
   logLine(t('log.tire.' + tireSet, { note: v2 ? '' : t('log.tire.v2only') }));
 });
@@ -2277,8 +2283,7 @@ if (optGearEl) optGearEl.addEventListener('change', (e) => {
   gearSet = normGear(e.target.value);
   slots.forEach(s => { s.world.gear = gearSet; if (s.car.engine === 'v2') s.car.gearSet = gearSet; });
   rebuildSpawns(slots, course);
-  running = false; paused = false;
-  syncButtons();
+  stopAuto();   // BL2: 走行中に変えてもコード表示・■ を停止の姿へ戻す (停止は stopAuto の 1 箇所だけ)
   const v2 = (PHYSICS.mode === 'v2');
   logLine(t('log.gear.' + gearSet, { note: v2 ? '' : t('log.tire.v2only') }));
 });
@@ -2289,8 +2294,7 @@ if (optSuspEl) optSuspEl.addEventListener('change', (e) => {
   suspSet = normSusp(e.target.value);
   slots.forEach(s => { s.world.susp = suspSet; if (s.car.engine === 'v2') s.car.suspSet = suspSet; });
   rebuildSpawns(slots, course);
-  running = false; paused = false;
-  syncButtons();
+  stopAuto();   // BL2: 走行中に変えてもコード表示・■ を停止の姿へ戻す (停止は stopAuto の 1 箇所だけ)
   const v2 = (PHYSICS.mode === 'v2');
   logLine(t('log.susp.' + suspSet, { note: v2 ? '' : t('log.tire.v2only') }));
 });
@@ -2302,8 +2306,7 @@ if (optSteerEl) optSteerEl.addEventListener('change', (e) => {
   steerSet = normSteer(e.target.value);
   slots.forEach(s => { s.world.steerSet = steerSet; s.car.steerSet = steerSet; });
   rebuildSpawns(slots, course);
-  running = false; paused = false;
-  syncButtons();
+  stopAuto();   // BL2: 走行中に変えてもコード表示・■ を停止の姿へ戻す (停止は stopAuto の 1 箇所だけ)
   logLine(t('log.steer.' + steerSet));
 });
 // 制動装置 切替 (Stage AV2・任意装備)。既定 motor=駆動軸のモーターブレーキ=従来と完全一致。v2 エンジンのみ
@@ -2314,8 +2317,7 @@ if (optBrakeEl) optBrakeEl.addEventListener('change', (e) => {
   brakeSet = normBrake(e.target.value);
   slots.forEach(s => { s.world.brake = brakeSet; if (s.car.engine === 'v2') s.car.brakeSet = brakeSet; });
   rebuildSpawns(slots, course);
-  running = false; paused = false;
-  syncButtons();
+  stopAuto();   // BL2: 走行中に変えてもコード表示・■ を停止の姿へ戻す (停止は stopAuto の 1 箇所だけ)
   const v2 = (PHYSICS.mode === 'v2');
   logLine(t('log.brake.' + brakeSet, { note: v2 ? '' : t('log.tire.v2only') }));
 });
@@ -2327,8 +2329,7 @@ if (optWearEl) optWearEl.addEventListener('change', (e) => {
   wearOn = !!e.target.checked;
   slots.forEach(s => { s.world.wear = wearOn; if (s.car.engine === 'v2') s.car.wear = wearOn; });
   rebuildSpawns(slots, course);   // reset で温度=冷間・摩耗=0 の新品タイヤへ (位置/ラップも初期化)。
-  running = false; paused = false;
-  syncButtons();
+  stopAuto();   // BL2: 走行中に変えてもコード表示・■ を停止の姿へ戻す (停止は stopAuto の 1 箇所だけ)
   const v2 = (PHYSICS.mode === 'v2');
   logLine(t(wearOn ? 'log.wear.on' : 'log.wear.off', { note: v2 ? '' : t('log.tire.v2only') }));
 });
@@ -2374,8 +2375,7 @@ if (optPhysEl) optPhysEl.addEventListener('change', (e) => {
   const m = setPhysicsMode(e.target.value);
   swapPhysics(slots);
   rebuildSpawns(slots, course);
-  running = false; paused = false;
-  syncButtons();
+  stopAuto();   // BL2: 走行中に変えてもコード表示・■ を停止の姿へ戻す (停止は stopAuto の 1 箇所だけ)
   logLine(t(m === 'v2' ? 'log.physics.v2' : m === 'dynamic' ? 'log.physics.dynamic' : 'log.physics.classic'));
 });
 // 領域(regime)切替: 物理スケール (長さ/速度/μ/重力) のプリセットを適用する。車体スケールと
@@ -2395,8 +2395,7 @@ if (regimeEl) regimeEl.addEventListener('change', (e) => {
   }
   swapPhysics(slots);
   rebuildSpawns(slots, course);
-  running = false; paused = false;
-  syncButtons();
+  stopAuto();   // BL2: 走行中に変えてもコード表示・■ を停止の姿へ戻す (停止は stopAuto の 1 箇所だけ)
   // 車体スケール表示はユーザー倍率 (slider) のまま。実効サイズは領域倍率×ユーザー倍率。
   logLine(t('log.regime', { name: r.name, desc: r.desc || '', size: (r.L / 0.13).toFixed(1), mm: r.sensorMaxMm }));
   // カリキュラム案内: 各領域に合うサンプルへ誘導する。

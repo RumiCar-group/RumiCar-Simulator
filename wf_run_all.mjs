@@ -203,7 +203,9 @@ const GATES = [
   //   全語から機械生成）・URL 過多・main.js の配線（A-1〜A-4）、A-5 取りこぼし側の表（是正した行・既知の取りこぼし・既知の誤検出）、
   //   A-6／A-7 語の前後の文字の機械列挙（v10.3.0 は拒否・現在は通る行を型ごとに表で出す）。改修前の木（--root）で赤になる章:
   //   ad5ddd1＝A-1・A-4・A-5・A-6・A-7／9f5b4c2＝A-1・A-5・A-6・A-7／e2869c0＝A-5・A-6・A-7（wf_bl1_ui.mjs 冒頭と同じ）。
-  //   実ブラウザは browser/check_bl1_moderate.mjs。所要は本ホスト実測 1 秒未満（単独・2026-10-16）。
+  //   B) BL2 走行中の設定変更の停止処理の配線（main.js の `running = false` が stopAuto の中だけ・9 経路が stopAuto() を呼ぶ・
+  //   発火元）。改修前の木で赤＝ad5ddd1／b649a95 の B-1・B-3・B-4。
+  //   実ブラウザは browser/check_bl1_moderate.mjs・check_bl2_runview.mjs。所要は本ホスト実測 1 秒未満（単独・2026-10-16）。
   'wf_bl1_ui.mjs',
 ].map((name) => ({ name, args: [] }));
 
