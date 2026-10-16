@@ -451,8 +451,9 @@ function checkG1(ui, off) {
   const uiCode = stripComments(ui), offCode = stripComments(off);
   const need = [
     [uiCode, /typeof eventNS\.resolveEventSpec === 'function' \? eventNS\.resolveEventSpec\(event, course\) : null/g, 1, 'race_ui.js の eventSpecOf が resolveEventSpec を名前空間から呼ぶ'],
-    [uiCode, /const es = eventSpecOf\(event, rcourse\);/g, 1, 'verifyOfficialLocally が eventSpecOf(event, rcourse) を呼ぶ'],
-    [uiCode, /const es = eventSpecOf\(race\.event, rcourse\);/g, 1, 'ghostVsWorld が eventSpecOf(race.event, rcourse) を呼ぶ'],
+    // BL4（層4 往復 1）: 2 経路とも resolveEventSpec の例外を受ける形（`let es; try { es = eventSpecOf(…); } catch …`）になった
+    [uiCode, /try \{ es = eventSpecOf\(event, rcourse\); \}/g, 1, 'verifyOfficialLocally が eventSpecOf(event, rcourse) を呼ぶ'],
+    [uiCode, /try \{ es = eventSpecOf\(race\.event, rcourse\); \}/g, 1, 'ghostVsWorld が eventSpecOf(race.event, rcourse) を呼ぶ'],
     [uiCode, /maxSec: es\.maxSec/g, 2, 'race_ui.js の 2 経路が maxSec を es から渡す'],
     [offCode, /const spec = resolveEventSpec\(event, course\);/g, 1, 'wf_official_result.mjs の runOfficial が resolveEventSpec を呼ぶ'],
     [offCode, /regime: spec\.regime, laps: spec\.laps, field, crashRule: spec\.crashRule, interact: spec\.interact, maxSec: spec\.maxSec/g, 1, 'runOfficial が spec の値で runRace を呼ぶ'],
@@ -524,7 +525,7 @@ report('G3) 既定を落とした束の生成と再検証', checkG3());
     ['検証再走を旧固定 180 秒に戻す', (s) => s.replace('maxSec: es.maxSec, grid,', 'maxSec: event.maxSec != null ? event.maxSec : 180, grid,')],
     ['👻 の regime を旧 `|| null` に戻す', (s) => s.replace('res = runRace({ course: rcourse, regime: es.regime,', 'res = runRace({ course: rcourse, regime: race.event.regime || null,')],
     ['resolveEventSpec を名前付き import する', (s) => s.replace("import { frozenField } from './race_event.js';", "import { frozenField, resolveEventSpec } from './race_event.js';")],
-    ['検証再走が関数を通らない', (s) => s.replace('const es = eventSpecOf(event, rcourse);', 'const es = { ...event };')],
+    ['検証再走が関数を通らない', (s) => s.replace('try { es = eventSpecOf(event, rcourse); }', 'try { es = { ...event }; }')],
   ];
   const OFF_MUT = [
     ['生成側の regime を旧 `|| null` に戻す', (s) => s.replace('course, regime: spec.regime,', 'course, regime: event.regime || null,')],

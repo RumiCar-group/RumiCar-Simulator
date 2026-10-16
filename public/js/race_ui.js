@@ -56,6 +56,13 @@ function fieldCarLabeler(field) {
   };
 }
 
+// BL4 (層 4 往復 1): 大会の値 (event.json・他人が書いた entries・result.json) は文字列・数にできない値でも届く ({"toString":1}
+//   は JSON から作れる)。esc より先に文字列の連結・数の割り算をする箇所は、旧実装ではそこで TypeError を投げ 🏆 の詳細・
+//   再実行検証が止まった。表示のためだけの変換なので、escape.js の escapeHtml と同じ規則 (文字列にできなければ '?')・
+//   数にできなければ NaN (fmtTime は --:--.--) にする。投げない値は従来の式と同じ結果 (String(v)・+v)。wf_bl1_ui.mjs G-6 が測る。
+function asText(v) { try { return String(v); } catch (e) { return '?'; } }
+function asNum(v) { try { return +v; } catch (e) { return NaN; } }
+
 function renderRaceResult(res, meta) {
   const carLabel = meta.carLabel || carTypeLabel;   // BE3: 持ち込み車種のあるレースは field 由来のラベル
   // 色は field(=結果)のインデックスで割当 (FLEET.colors)。W3 は field=slots 順なので live 列色と一致、
@@ -105,7 +112,10 @@ function renderRaceResult(res, meta) {
     let recordHtml = '';
     if (fastest) {
       // BF3: 同梱コースの大会で、出荷コースと同じ走りになると確かめられたときは出荷コースの記録で引く (meta.recordCourse)。
-      const prevRec = loadBestRec(meta.recordCourse || rc, fastest.carType);   // 既存 lap best (読み取り専用・BE2: 名前でなく形で引く)
+      // BL4: carType は field の値 (他人が書いた entries)。lap.js の鍵は文字列の連結で、文字列にできない値で投げる (lap.js は
+      //   走行側の不変ファイルなのでここで受ける)。引けなければ記録なし＝「新記録」の扱い (表示のみ・書き込みはしない)。
+      let prevRec = null;
+      try { prevRec = loadBestRec(meta.recordCourse || rc, fastest.carType); } catch (e) { prevRec = null; }   // 既存 lap best (読み取り専用・BE2: 名前でなく形で引く)
       const prev = prevRec ? prevRec.t : null;                 // 記録タイム t (単位=秒。無ければ null)
       const fSec = fastest.bestLapMs / 1000;                   // レース best を秒へ (bestLapMs=ミリ秒)
       const fTime = fmtTime(fSec);
@@ -326,8 +336,8 @@ function raceStatus(event, hasResult) {
   if (hasResult) return 'closed';
   const w = (event && event.entryWindow) || {};
   const now = Date.now();
-  const open = w.open ? Date.parse(w.open) : NaN;
-  const close = w.close ? Date.parse(w.close) : NaN;
+  const open = w.open ? Date.parse(asText(w.open)) : NaN;      // BL4: Date.parse は値を文字列にする (asText と同じ結果・投げない)
+  const close = w.close ? Date.parse(asText(w.close)) : NaN;
   if (!Number.isNaN(close) && now > close) return 'closed';
   if (!Number.isNaN(open) && now < open) return 'upcoming';
   return 'open';
@@ -413,18 +423,24 @@ async function selectOfficialRace(id) {
 
 // 1 大会の詳細 (メタ・エントリー・公式結果・再実行検証ボタン) を描画。
 function renderOfficialDetail(race) {
-  const { event, entries, result } = race;
+  const { event, result } = race;
+  // BL4: loader.js fetchRace の entries は常に配列 (呼び出し元が別の形を渡しても描画を止めない)
+  const entries = Array.isArray(race.entries) ? race.entries : [];
   const esc = escapeHtml;
   const status = raceStatus(event, !!result);
   const cls = event.class || 'open';
   const courseName = (event.course && typeof event.course === 'object') ? (event.course.name || '(courseDef)') : event.course;
   const win = event.entryWindow || {};
-  const winTxt = (win.open || '—') + '  →  ' + (win.close || '—');
+  const winTxt = asText(win.open || '—') + '  →  ' + asText(win.close || '—');   // BL4: 連結の前に文字列へ
+  // BL4: 周回数の既定は resolveEventSpec が決める。event.laps 等が数にできない値だとそこで投げるので、表示は '?' にする
+  //   (再実行検証は verifyOfficialLocally の中で同じ関数を呼び、投げれば 1 行の注記にする)。
+  let specLaps = '?';
+  try { specLaps = (eventSpecOf(event, null) || { laps: '?' }).laps; } catch (e) { specLaps = '?'; }
   const metaRows = [
     [t('official.meta.title'), esc(event.title || event.id || '')],
     [t('official.meta.course'), esc(courseDisplayName(event.course) || courseName || '')],
-    [t('official.meta.class'), esc(t('event.class.' + cls))],
-    [t('official.meta.laps'), esc((eventSpecOf(event, null) || { laps: '?' }).laps)],
+    [t('official.meta.class'), esc(t('event.class.' + asText(cls)))],
+    [t('official.meta.laps'), esc(specLaps)],
     [t('official.meta.window'), esc(winTxt)],
     [t('official.meta.engine'), esc(event.engineVer || '?')],
     [t('official.meta.status'), esc(t('official.status.' + status))],
@@ -462,11 +478,13 @@ function renderOfficialDetail(race) {
       [t('race.col.rank'), t('race.col.name'), t('official.col.author'), t('race.col.car'), t('race.col.time'), t('race.col.best'), t('race.col.pen')]
         .map((h) => `<th>${esc(h)}</th>`).join('') + '</tr></thead><tbody>';
     // BL4: 順位・ペナルティは result.json の値がそのまま届く (renderRaceResult の runRace の数値とは違う)。esc で包む。
-    for (const f of result.finishers) {
+    //   時間は割り算の前に数へ (asNum)。null の 1 件は空の行にする (順位表の並びと 📖 の優勝者＝先頭を変えない)。
+    for (const f0 of result.finishers) {
+      const f = f0 == null ? {} : f0;
       const carLabel = entryCarLabel(f.carType, f.carDef);
       html += `<tr><td>${esc(f.rank)}</td><td>${esc(f.name || '')}</td><td>${esc(f.author || '')}</td><td>${esc(carLabel)}</td>` +
-        `<td>${f.totalTimeMs != null ? fmtTime(f.totalTimeMs / 1000) : '—'}</td>` +
-        `<td>${f.bestLapMs != null ? fmtTime(f.bestLapMs / 1000) : '—'}</td>` +
+        `<td>${f.totalTimeMs != null ? fmtTime(asNum(f.totalTimeMs) / 1000) : '—'}</td>` +
+        `<td>${f.bestLapMs != null ? fmtTime(asNum(f.bestLapMs) / 1000) : '—'}</td>` +
         `<td>${f.penaltiesSec ? '+' + esc(f.penaltiesSec) + 's' : '—'}</td></tr>`;
     }
     html += '</tbody></table>';
@@ -477,7 +495,7 @@ function renderOfficialDetail(race) {
   // 📖 ロジック・ショーケース (W_spec §8): 締切後、優勝ロジックを「義務」でなく栄誉として讃える。
   // 原作者クレジットは公開＋fork に永続 (晒すのでなく名が刻まれ続ける)。作者は intro で自ら発表できる。
   if (status === 'closed' && result && Array.isArray(result.finishers) && result.finishers.length) {
-    const w = result.finishers[0];
+    const w = result.finishers[0] == null ? {} : result.finishers[0];   // BL4: null の 1 件で止めない
     // BL3: 同じ作者の 2 件目が優勝したら、その 2 件目の intro を出す (旧実装は作者の 1 件目を引いた)。
     const wEntry = (w.author || '') ? findEntry(entries, w.author, w.name) : null;
     const wIntro = wEntry && wEntry.intro ? wEntry.intro : '';
@@ -520,7 +538,13 @@ function verifyOfficialLocally(race) {
   //   maxSec が無ければ computeRaceTimeout (生成側と同じ値・旧実装は固定の秒数で生成側と食い違った)、regime が無ければ
   //   'tabletop' (旧実装は null＝利用者がいま選んでいる領域で走った)。physicsMode・recon・wear も同じ関数から得る
   //   (AO5/AO9/AO12: 記録のエンジン・試走周回数・タイヤ摩耗設定で再走)。
-  const es = eventSpecOf(event, rcourse);
+  // BL4: event の欄 (laps 等) が数・文字列にできない値だと resolveEventSpec が投げる。旧実装は例外が click の外へ漏れ、
+  //   ボタンを押しても何も出なかった。runRace の失敗と同じ 1 行 (log.race.err) にする。
+  let es;
+  try { es = eventSpecOf(event, rcourse); } catch (e) {
+    if (note) note.innerHTML = `<p class="official-verify-note warn">${escapeHtml(t('log.race.err', { e: (e && e.message) || e }))}</p>`;
+    return;
+  }
   if (!es) { if (note) note.innerHTML = `<p class="official-verify-note warn">${escapeHtml(t('official.verify.stale'))}</p>`; return; }
   // BL3: 確定エントリー列 (frozenField) は他人が書いた entries を読む。読めない欄 (carDef.key が文字列にできない値 等) で
   //   投げると、旧実装は try の外で例外が漏れ、ボタンを押しても何も出なかった。ここで受けて利用者向けの 1 行にする。
@@ -578,7 +602,7 @@ function verifyOfficialLocally(race) {
     carLabel: fieldCarLabeler(field),   // BE3: 持ち込み車種はレース後に車種表に無い
     replay: { kind: 'rerun', recVer: event.engineVer || '' },   // AK6: 公式記録の再実行=最新エンジン再走 (記録とは別物になり得る)
     eventInfo: {
-      classLabel: t('event.class.' + (event.class || 'open')),
+      classLabel: t('event.class.' + asText(event.class || 'open')),   // BL4: 連結の前に文字列へ
       budget: (event.class === 'budget' && event.budget) ? event.budget.total : null,
       fillerCount: field.filter((f) => f.filler).length,
     },
@@ -701,8 +725,20 @@ const progLangOf = (key) => (PROGRAM_BY_KEY[key] || {}).lang || null;
 // 限界: 古い race_ui.js/race_season.js がキャッシュに残り新しい race_ladder.js と混ざると、古い側は参照の文字列で
 // worldBest/langRecordsAt を引くので 👻 と言語別の帯が当たらない (落ちはしない)。BC1 で JS は no-cache＝配信の途中で
 // 版が変わったときだけ起き、再読込で直る。
+// BL4 (層 4 往復 1): 1 つの大会の値 (他人が書いた entries の program.lang・result.json の author／rank／時間・event の
+//   class／points 等) が文字列・数にできない値 ({"toString":1}) だと、集計 (race_ladder.js) や 🏅 の選手権・言語別の表
+//   (race_season.js) が投げ、🏅 の全大会・打破通知・👻 が出なかった (BH1 は object でない行を飛ばしたが、値の型は見ていない)。
+//   集計と、renderRankings が同じ集計から作る表 (seasonProbe) が投げたら、単独で通らない大会だけを外して集計し直す
+//   (外した大会は 🏆 の詳細では見える)。投げない限り集計の結果は従来と同じ (race_ladder.js・race_season.js は不変)。
+const seasonProbe = (a) => { championships(a.records, a.dnfs || []); langBoards(a.records); langProfiles(a.records); return a; };
 function aggregateNow() {
-  ladder = aggregate(officialData, { progLang: progLangOf, courseUnit: raceCourseUnit });
+  const opts = { progLang: progLangOf, courseUnit: raceCourseUnit };
+  try {
+    ladder = seasonProbe(aggregate(officialData, opts));
+  } catch (e) {
+    const usable = (officialData || []).filter((r) => { try { seasonProbe(aggregate([r], opts)); return true; } catch (e2) { return false; } });
+    ladder = aggregate(usable, opts);
+  }
   return ladder;
 }
 // 枠の鍵・見出し。古い race_ladder.js がキャッシュに残るブラウザ (BA1) では枠が courseKey/courseLabel を持たないので、
@@ -768,7 +804,7 @@ function checkBeaten() {
   if (!beaten.length) return;
   const top = beaten.slice(0, 3);
   for (const b of top) {
-    logLine(t('log.w6.beaten', { course: boardLabel(b), cls: t('event.class.' + b.cls), who: b.world.author, gap: (b.gapMs / 1000).toFixed(2) }));
+    logLine(t('log.w6.beaten', { course: boardLabel(b), cls: t('event.class.' + asText(b.cls)), who: b.world.author, gap: (b.gapMs / 1000).toFixed(2) }));
   }
   if (beaten.length > top.length) logLine(t('log.w6.beatenMore', { n: beaten.length - top.length }));
 }
@@ -808,7 +844,7 @@ function forkOfficialEntry(i) {
   const who = e.author || e.name || '?';
   const evTitle = (officialCurrent.event && (officialCurrent.event.title || officialCurrent.event.id)) || '';
   const credit = '// ' + t('official.creditHead', { who, event: evTitle }) + '\n';
-  setActiveProgram(credit + src, lang);
+  setActiveProgram(credit + asText(src), lang);   // BL4: src は他人が書いた entries の値 (文字列にできなければ '?')
   logLine(t('official.forked', { who }));
   $('dlgOfficial').close();   // エディタ (車カード) が見えるよう公式ダイアログを閉じる
 }
@@ -892,7 +928,7 @@ function renderRankings() {
     if (beaten.length) {
       html += `<h3>${esc(t('rank.beaten.h'))}</h3><ul class="rank-beaten">`;
       for (const b of beaten) {
-        html += `<li>${esc(t('rank.beaten.row', { course: boardLabel(b), cls: t('event.class.' + b.cls), who: b.world.author, mine: fmtTime(b.mine.classifiedMs / 1000), gap: (b.gapMs / 1000).toFixed(2) }))}</li>`;
+        html += `<li>${esc(t('rank.beaten.row', { course: boardLabel(b), cls: t('event.class.' + asText(b.cls)), who: b.world.author, mine: fmtTime(b.mine.classifiedMs / 1000), gap: (b.gapMs / 1000).toFixed(2) }))}</li>`;
       }
       html += '</ul>';
     }
@@ -907,7 +943,7 @@ function renderRankings() {
     html += `<p class="hint">${esc(t('season.note', { pts: POINTS_LABEL }))}</p>`;
     for (const c of champs) {
       const title = c.season ? c.season : t('season.unnamed');
-      html += `<div class="rank-board"><div class="rank-board-head">🏆 <b>${esc(title)}</b> — ${esc(t('event.class.' + c.cls))} ` +
+      html += `<div class="rank-board"><div class="rank-board-head">🏆 <b>${esc(title)}</b> — ${esc(t('event.class.' + asText(c.cls)))} ` +
         `<span class="hint">${esc(t('season.events', { n: c.events }))}</span></div>`;
       if (c.champion) {
         // キーは静的リテラルで渡す (t(cond ? 'a' : 'b') にすると i18n 孤児検査③ の走査から消える)。
@@ -937,7 +973,7 @@ function renderRankings() {
   html += `<h3>${esc(t('rank.boards.h'))}</h3>`;
   for (const b of boards) {
     // BF4: 見出しは枠の見出し (コースの表示名)、👻 のボタンは枠の鍵を持つ (参照の文字列は同一性ではない)。
-    html += `<div class="rank-board"><div class="rank-board-head"><b>${esc(t('event.class.' + b.cls))}</b> — ${esc(boardLabel(b))} ` +
+    html += `<div class="rank-board"><div class="rank-board-head"><b>${esc(t('event.class.' + asText(b.cls)))}</b> — ${esc(boardLabel(b))} ` +
       `<button class="rank-vsworld" data-cls="${esc(b.cls)}" data-course="${esc(boardKey(b))}" title="${esc(t('ghost.vsWorld.title'))}">${esc(t('ghost.vsWorld'))}</button></div>`;
     // 言語別のコースレコード帯 (同じコース・同じクラスの中で「その言語での最速」を並べる)
     const lrec = langRecordsAt(lb.boards, b.cls, boardKey(b));
@@ -956,7 +992,7 @@ function renderRankings() {
       html += `<tr${i === 0 ? ' class="rank-record"' : ''}><td>${medal}${crown}</td>` +
         `<td>${esc(r.name)}${meMark}</td><td>${esc(r.author || '—')}</td>` +
         `<td>${esc(carTypeLabel(r.carType))}</td><td>${fmtTime(r.classifiedMs / 1000)}</td>` +
-        `<td>${r.bestLapMs != null ? fmtTime(r.bestLapMs / 1000) : '—'}</td><td class="hint">${esc(r.eventTitle)}</td></tr>`;
+        `<td>${r.bestLapMs != null ? fmtTime(asNum(r.bestLapMs) / 1000) : '—'}</td><td class="hint">${esc(r.eventTitle)}</td></tr>`;
     });
     html += '</tbody></table></div>';
   }
@@ -972,7 +1008,7 @@ function renderRankings() {
         .map((x) => `<th>${esc(x)}</th>`).join('') + '</tr></thead><tbody>';
     for (const p of lprof) {
       html += `<tr><td><b>${esc(langLabel(p.lang))}</b></td><td>${p.entries}</td><td>${p.authors}</td>` +
-        `<td>${p.wins}</td><td>${p.bestMs != null ? fmtTime(p.bestMs / 1000) : '—'}</td></tr>`;
+        `<td>${p.wins}</td><td>${p.bestMs != null ? fmtTime(asNum(p.bestMs) / 1000) : '—'}</td></tr>`;
     }
     html += '</tbody></table>';
   }
@@ -1043,7 +1079,8 @@ function ghostVsWorld(cls, course) {
   }
   const s = activeSlot(); if (!s) return;
   // BI2: 記録の大会の周回・領域・クラッシュ規則・凍結 timeout は resolveEventSpec から得る (検証再走・生成側と同じ既定)。
-  const es = eventSpecOf(race.event, rcourse);
+  let es;   // BL4: event の欄が数・文字列にできない値だと resolveEventSpec が投げる (再実行検証と同じく 1 行で知らせる)
+  try { es = eventSpecOf(race.event, rcourse); } catch (e) { logLine(t('log.race.err', { e: (e && e.message) || e })); return; }
   if (!es) { logLine(t('official.verify.stale')); return; }
   const field = [
     { name: t('ghost.you'), lang: s.lang, src: s.src, carType: s.carType },

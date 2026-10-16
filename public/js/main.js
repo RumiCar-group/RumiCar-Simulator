@@ -81,7 +81,8 @@ import * as SFX from './sfx.js';
 // GitHub 投稿車種 (community・V4) は出所が分かるよう「🌐 」を前置する (fleet セレクタ/車種表で共通)。
 const carTypeName = (ct) => {
   const base = hasKey('car.' + ct.key) ? t('car.' + ct.key) : ct.name;
-  return ct.community ? '🌐 ' + base : base;
+  if (!ct.community) return base;   // BL4: 下の連結は投稿の name が文字列にできない値 ({"toString":1}) で投げ、車種表・セレクタが止まった
+  try { return '🌐 ' + base; } catch (e) { try { return '🌐 ' + String(base); } catch (e2) { return '🌐 ?'; } }   // escape.js と同じ規則
 };
 import { drawTrail, drawReferenceLine, drawSensors, drawCar, drawMeters, drawFleetHud, updatePanel, drawTireHud, layoutHud, hudNeedH, drawCarMarkers, MARKER, layoutMinimap, drawMinimap } from './hud.js';
 import { drawDepthView } from './depth.js';
@@ -765,7 +766,8 @@ function render(edges) {
 // ============================================================================
 
 // 車種キー → 表示名 (言語追従)。CAR_TYPE_BY_KEY に無い key はそのまま表示。
-function carTypeLabel(key) { const ct = CAR_TYPE_BY_KEY[key]; return ct ? carTypeName(ct) : key; }
+// BL4: key は result.json・他人が書いた entries の値。文字列にできない値は CAR_TYPE_BY_KEY[key] のキー変換で投げ、🏅 の表が止まった。
+function carTypeLabel(key) { let ct; try { ct = CAR_TYPE_BY_KEY[key]; } catch (e) { ct = null; } return ct ? carTypeName(ct) : key; }
 
 // 公式レースのエントリー/結果の車種表示 (W5)。登録済み (組込/独自/community) の key は言語追従で
 // 表示し、未登録の持ち込み車種は同梱 carDef.name をそのまま表示する (custom 車のポータビリティ)。
@@ -1995,6 +1997,9 @@ async function loadCommunityCars() {
     const label = (list[di] && list[di].name) || (def && def.key) || '?';
     if (def == null) continue;                       // 1 件失敗はスキップ
     if (!def || !def.key || !def.name) { badCars.push({ label, why: 'key/name' }); continue; }   // 不正 JSON はスキップ
+    // BL4: key が文字列にできない値 ({"toString":1}) だと下の検査 (String(key)・hasOwnProperty) が投げ、ループごと止まって
+    //   後続の投稿車種も読まれなかった (fleet セレクタ・車種表にも反映されない)。不正な key/name として数える。
+    try { String(def.key); } catch (e) { badCars.push({ label: (list[di] && typeof list[di].name === 'string') ? list[di].name : '?', why: 'key/name' }); continue; }
     // BF1: '__proto__' 等は車種表の原型を壊す。isReservedCarKey は car_crud.js が BF1 で足した名前なので、古い car_crud.js が
     //   キャッシュに残るブラウザでは無い＝そのときは registerCarType (新しい config.js なら拒む) に任せる (BA1 の規則)。
     if (typeof isReservedCarKey === 'function' && isReservedCarKey(def.key)) { badCars.push({ label, why: 'reserved' }); continue; }

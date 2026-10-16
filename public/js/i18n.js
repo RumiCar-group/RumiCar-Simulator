@@ -28,7 +28,7 @@ export function t(key, vars) {
   const e = MESSAGES[key];
   let s = key;
   if (e) s = (e[curLang] != null && e[curLang] !== '') ? e[curLang] : (e.ja != null ? e.ja : key);
-  if (vars) for (const k in vars) s = s.split('{' + k + '}').join(vars[k]);
+  if (vars) for (const k in vars) s = joinVar(s.split('{' + k + '}'), vars[k]);   // BL4: 文字列にできない値でも投げない (末尾の joinVar)
   return s;
 }
 
@@ -78,4 +78,17 @@ export function warnMissing() {
     });
   } catch (e) { /* 非DOM環境 */ }
   if (miss.length) console.warn('[i18n] 未翻訳/欠落キー: ' + miss.join(', '));
+}
+
+// BL4 (層 4 往復 1): t() の {var} の値は他人が書いた entries・result.json・投稿車種から届く。旧実装の `.join(vars[k])` は
+//   値を文字列にするところで {"toString":1}・Object.create(null)・Symbol などに TypeError を投げ、t() を esc より先に呼ぶ経路
+//   (再実行検証の結果ダイアログの勝者・🏆 の詳細の公式記録の 1 行 等) が止まった。{var} の差し込みは t() の 1 か所だけなので
+//   ここで守る: join が投げたときだけ String(v) (Symbol は "Symbol()")、それも投げれば '?' (escape.js の escapeHtml と同じ規則)。
+//   投げない値は従来の join のまま (undefined が "," になるのも従来どおり＝表示を 1 文字も変えない)。wf_bl1_ui.mjs G-6 が測る。
+//   (行番号を動かさないため末尾に置く: wf_i18n_check.mjs が applyI18n の行を `i18n.js:43-49` で引いている)
+function joinVar(parts, v) {
+  try { return parts.join(v); } catch (e) { /* 下で文字列にする */ }
+  let str;
+  try { str = String(v); } catch (e) { str = '?'; }
+  return parts.join(str);
 }

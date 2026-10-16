@@ -55,8 +55,15 @@
 //    編集フォーム（自作車〔localStorage〕・投稿車種〔registerCarType〕・組込の上書き〔applyCarOverride〕・JSON → フォーム）で
 //    `<img`・onerror を持つタグが 0・`&lt;img` があり、value 属性が元の文字列のまま。出荷 6 車種の行は是正前の書き方と同一。
 //    「onerror= を含まない」は**タグの中に**含まないことで測る（エスケープした本文は onerror= の綴りを文字として残す）。
-//    赤になる章（2026-10-16 の実測・--root 8248a58＝BL3 後・BL4 前）: 件数は決定ログ BL4 結果。実ブラウザは
-//    browser/check_bl4_escape.mjs（自作車の車種表と編集フォームを実画面で開き、img 要素 0・alert 0）。
+//    G-4c 属性の値に入る ${…} は " 囲み（escape.js は ' をエスケープしない＝' 囲み・引用符なしは赤）。
+//    G-6（層4 往復 1）文字列・数にできない値の同族: t() の {var} の差し込み（i18n.js の 1 か所＝join が投げたら String(v)／'?'）・
+//    大会（event／entries／result）の値の欄を 1 つずつ {"toString":1}・Object.create(null)・Symbol() に替えて 🏆 詳細・🍴 fork・
+//    再実行検証・🏅 の集計・打破通知・👻 の 6 入口で例外が漏れない表（race_ui.js の asText／asNum・aggregateNow の
+//    「単独で通らない大会を外す」）・結果ダイアログの t()（:115 新記録・:123 最速ラップ・:127 勝者）・🏆 の公式記録の 1 行／
+//    旧版の注記・main.js carTypeName（投稿車種の name）・carTypeLabel・loadCommunityCars（key が文字列にできない投稿）。
+//    赤になる章（2026-10-16 の実測・--root 8248a58＝BL3 後・BL4 前）: 件数は決定ログ BL4 結果。--root 8a4bd2e（BL4 初版）＝
+//    G-4（renderOfficialDetail の fmtTime(asNum(…)) の 2 行）・G-6。実ブラウザは browser/check_bl4_escape.mjs
+//    （自作車の車種表と編集フォームを実画面で開き、img 要素 0・alert 0）。
 //
 // 使い方: node wf_bl1_ui.mjs              … 検査
 //         node wf_bl1_ui.mjs --root <dir>  … <dir>/public/js の product で回す（是正前の木で赤になることの確認用）
@@ -593,11 +600,12 @@ const OVAL = buildFromSpec(COURSE_SPECS.find((x) => x.name === 'オーバル'));
 const logs = [];
 // 車種の表示名の依存注入。C〜F 章は従来どおり key の文字列、G 章は main.js の entryCarLabel（product の本文）に差し替える。
 let ECL = (k) => String(k || '');
+let CTL = (k) => String(k);   // G-6 は main.js の carTypeLabel（product の本文）に差し替える
 const ui = (await import(UI_URL)).initRaceUI({
   $: el, escapeHtml: escH, logLine: (x) => logs.push(String(x)),
   activeSlot: () => ({ name: 'ME', lang: 'c', src: PROGRAM_BY_KEY.normal_fr.code, carType: 'normal_fr' }),
   exitEdit() {}, courseDisplayName: (c) => (c && typeof c === 'object' ? c.name : String(c || '')),
-  carTypeLabel: (k) => String(k), entryCarLabel: (k, d) => ECL(k, d), setActiveProgram() {}, playCountdown() {},
+  carTypeLabel: (k) => CTL(k), entryCarLabel: (k, d) => ECL(k, d), setActiveProgram() {}, playCountdown() {},
   resolveRaceCourse: (ref) => (ref === 'オーバル' ? OVAL : null), submitToGithub() {}, raceCourseUnit: undefined,
 });
 const SRC_C = PROGRAM_BY_KEY.normal_fr.code, SRC_PY = PROGRAM_BY_KEY.py_normal_fr.code;
@@ -768,12 +776,16 @@ console.log('\nG-2) race_ui.js 🏆 の詳細（順位・ペナルティ）と�
   ok(th === null && inertOk(r1), `ofDetail（順位・ペナルティ）: <img ${r1.img}・onerror を持つタグ ${r1.onTag}・&lt;img ${r1.lt}${th ? '・例外 ' + th.message : ''}`);
   const rows = [...d.matchAll(/<tr><td>([^<]*)<\/td><td>e[12]<\/td>[^]*?<td>([^<]*)<\/td><\/tr>/g)].map((m) => [unescH(m[1]), unescH(m[2])]);
   ok(J(rows) === J([[XT, '+' + XT + 's'], [XA, '+' + XA + 's']]), `順位・ペナルティのセルは文字列のまま見える（実 ${J(rows)}）`);
-  const v = await clickVerify('bl4-x', RX);
-  const m = el('raceMeta').innerHTML;
-  const r2 = inert(m);
-  ok(v.thrown === null && v.calls.length === 1 && inertOk(r2), `raceMeta（予算）: <img ${r2.img}・onerror を持つタグ ${r2.onTag}・&lt;img ${r2.lt}（runRace ${v.calls.length} 回${v.thrown ? '・例外 ' + v.thrown.message : ''}）`);
-  const bud = /<tr><th>([^<]*)<\/th><td>([^<]*&lt;img[^<]*)<\/td><\/tr>/.exec(m);
-  ok(!!bud && unescH(bud[2]) === XT && bud[1] === escH(i18n.t('event.meta.budget')), `予算の行は文字列のまま見える（${bud ? `${bud[1]} = ${J(unescH(bud[2]))}` : '無し'}）`);
+  // 予算は本文に入る形（XT）と属性から抜け出す形（XA）の両方を与える（層4 往復 1 の F5）
+  for (const [lb, X] of [['XT', XT], ['XA', XA]]) {
+    const RB = () => { const r = RX(); r.event.budget.total = X; return r; };
+    const v = await clickVerify('bl4-x', RB);
+    const m = el('raceMeta').innerHTML;
+    const r2 = inert(m);
+    ok(v.thrown === null && v.calls.length === 1 && inertOk(r2), `raceMeta（予算 ${lb}）: <img ${r2.img}・onerror を持つタグ ${r2.onTag}・&lt;img ${r2.lt}（runRace ${v.calls.length} 回${v.thrown ? '・例外 ' + v.thrown.message : ''}）`);
+    const bud = /<tr><th>([^<]*)<\/th><td>([^<]*&lt;img[^<]*)<\/td><\/tr>/.exec(m);
+    ok(!!bud && unescH(bud[2]) === X && bud[1] === escH(i18n.t('event.meta.budget')), `予算の行（${lb}）は文字列のまま見える（${bud ? `${bud[1]} = ${J(unescH(bud[2]))}` : '無し'}）`);
+  }
 }
 
 console.log('\nG-3) 🏆 の詳細は名前・車種 key が文字列にできないエントリーでも描ける（BL-3 の申し送り）— 是正前: esc(e.name)・entryCarLabel が TypeError');
@@ -867,16 +879,19 @@ function templateSubs(src) {
   }
   function template() {
     i++;
+    let lit = '';   // このテンプレートの ${ より前の字面（前の ${…} は \u0001 に置く）＝G-4c が属性の引用符を読む
     while (i < src.length) {
       const c = src[i];
-      if (c === '\\') { i += 2; continue; }
+      if (c === '\\') { lit += src.slice(i, i + 2); i += 2; continue; }
       if (c === '`') { i++; return; }
       if (c === '$' && src[i + 1] === '{') {
-        const rec = { start: i + 2 }; out.push(rec); i += 2;
+        const rec = { start: i + 2, before: lit }; out.push(rec); i += 2;
         code(true);
         rec.expr = src.slice(rec.start, i).trim(); i++;
+        lit += '\u0001';
         continue;
       }
+      lit += c;
       i++;
     }
     throw new Error('テンプレート未終端');
@@ -930,16 +945,16 @@ const ALLOW = {
       "r.muPeakPct != null ? r.muPeakPct + '%' : '—'": NUM_RACE, "r.betaPeakDeg != null ? r.betaPeakDeg + '°' : '—'": NUM_RACE,
       crashCell: NUM_RACE + '＋esc 済みの内訳' },
     renderOfficialDetail: { v: 'metaRows の値（G-4b で全部 esc を確認）',
-      "f.totalTimeMs != null ? fmtTime(f.totalTimeMs / 1000) : '—'": 'fmtTime（数でなければ --:--.--）',
-      "f.bestLapMs != null ? fmtTime(f.bestLapMs / 1000) : '—'": 'fmtTime（数でなければ --:--.--）',
+      "f.totalTimeMs != null ? fmtTime(asNum(f.totalTimeMs) / 1000) : '—'": 'fmtTime（数でなければ --:--.--・割り算の前に asNum＝G-6）',
+      "f.bestLapMs != null ? fmtTime(asNum(f.bestLapMs) / 1000) : '—'": 'fmtTime（数でなければ --:--.--・割り算の前に asNum＝G-6）',
       "f.penaltiesSec ? '+' + esc(f.penaltiesSec) + 's' : '—'": 'esc 済み（result.json の値）' },
     officialProgPanels: { i: 'forEach のインデックス' },
     toggleProgSrc: { i: 'HTML ではない（querySelector の数）' },
     renderRankings: { "i === 0 && r.points > 0 ? ' class=\"rank-record\"' : ''": CONST, 'i + 1': CONST, meMark: PIECE,
       'r.points': NUM_AGG + '（pointsFor の +t[i]）', 'r.wins': NUM_AGG, 'r.podiums': NUM_AGG, 'r.finishes': NUM_AGG, 'r.dnfs': NUM_AGG,
       'r.starts': NUM_AGG, 'x.n': NUM_AGG, "i === 0 ? ' class=\"rank-record\"' : ''": CONST, medal: CONST, crown: PIECE,
-      "r.bestLapMs != null ? fmtTime(r.bestLapMs / 1000) : '—'": 'fmtTime', 'p.entries': NUM_AGG, 'p.authors': NUM_AGG, 'p.wins': NUM_AGG,
-      "p.bestMs != null ? fmtTime(p.bestMs / 1000) : '—'": 'fmtTime', "d.author === me ? ' class=\"rank-record\"' : ''": CONST,
+      "r.bestLapMs != null ? fmtTime(asNum(r.bestLapMs) / 1000) : '—'": 'fmtTime（割り算の前に asNum＝G-6）', 'p.entries': NUM_AGG, 'p.authors': NUM_AGG, 'p.wins': NUM_AGG,
+      "p.bestMs != null ? fmtTime(asNum(p.bestMs) / 1000) : '—'": 'fmtTime（割り算の前に asNum＝G-6）', "d.author === me ? ' class=\"rank-record\"' : ''": CONST,
       'd.recordsHeld': NUM_AGG, 'd.wins': NUM_AGG, 'd.podiums': NUM_AGG, 'd.events': NUM_AGG, titles: PIECE },
     renderGhostStandings: { "passing ? ' passing' : ''": CONST, 'r.rank': 'ghost_gap の順位（数値）', 'a.colorOf(r.ci)': 'FLEET.colors',
       "passing ? ' <span class=\"ghost-st-up\">▲</span>' : ''": CONST, rowsHtml: PIECE },
@@ -966,6 +981,34 @@ for (const file of ['car_crud.js', 'race_ui.js']) {
   ok(bad.length === 0, `${file}: 一覧に無い \${…} が 0 個（実 ${bad.length}${bad.length ? ': ' + bad.join(' / ') : ''}）`);
   ok(stale.length === 0, `${file}: 一覧の式がすべてソースにある（古い行 ${stale.length}${stale.length ? ': ' + stale.join(' / ') : ''}）`);
 }
+// G-4c（層4 往復 1 の F2）: 属性の値に入る ${…} は " で囲む（escape.js は ' をエスケープしない＝' 囲み・引用符なしの属性に
+//   入れると esc を通しても抜け出せる）。テンプレートの字面で ${ の直前がタグの中（最後の < が最後の > より後）なら、
+//   直前の `=` からの字面を読み、`="…` の中なら可・`='…` の中と `=` の直後（引用符なし）は赤。
+console.log('\nG-4c) 配線: car_crud.js・race_ui.js のテンプレート文字列で属性の値に入る ${…} は " で囲む（\' 囲み・引用符なしは赤）');
+const attrCtx = (before) => {
+  const lt = before.lastIndexOf('<'), gt = before.lastIndexOf('>');
+  if (lt < 0 || lt < gt) return 'text';
+  const tag = before.slice(lt);
+  if (/=\s*"[^"]*$/.test(tag)) return 'dq';
+  if (/=\s*'[^']*$/.test(tag)) return 'sq';
+  if (/=\s*$/.test(tag)) return 'bare';
+  return 'tag';   // タグの中だが属性の値ではない（例: <tr${cls}>）
+};
+{
+  // 判定の自己検査（検査が「' 囲みを赤にする」ことを、合成したソースで確かめる）
+  const synth = "function f(x) { return `<b title='${esc(x)}'>a</b><i title=${esc(x)}>b</i><u title=\"${esc(x)}\">c</u><s data-i=\"${x} ${esc(x)}\">d</s><p>${esc(x)}</p>`; }";
+  const got = templateSubs(synth).map((r) => attrCtx(r.before));
+  ok(J(got) === J(['sq', 'bare', 'dq', 'dq', 'dq', 'text']), `判定の自己検査: ' 囲み・引用符なし・" 囲み×3・本文 → ${J(got)}`);
+  for (const file of ['car_crud.js', 'race_ui.js']) {
+    const subs = templateSubs(readFileSync(join(JS, file), 'utf8'));
+    const tally = { text: 0, tag: 0, dq: 0, sq: 0, bare: 0 };
+    const bad = [];
+    for (const r of subs) { const c = attrCtx(r.before); tally[c]++; if (c === 'sq' || c === 'bare') bad.push(`${file}:${r.line} ${r.fn} \${${r.expr}}（${c}）`); }
+    console.log(`  ${file}: 本文 ${tally.text}・属性の値（" 囲み）${tally.dq}・タグの中（値でない）${tally.tag}・' 囲み ${tally.sq}・引用符なし ${tally.bare}`);
+    ok(bad.length === 0 && tally.dq > 0, `${file}: 属性の値の \${…} は全部 " 囲み（' 囲み・引用符なし ${bad.length}${bad.length ? ': ' + bad.join(' / ') : ''}）`);
+  }
+}
+
 console.log('\nG-4b) 配線: race_ui.js の metaRows（renderRaceResult・renderOfficialDetail の表の値）は全部 esc');
 {
   const src = readFileSync(join(JS, 'race_ui.js'), 'utf8');
@@ -1067,6 +1110,251 @@ console.log('\nG-5) car_crud.js 車種表と編集フォーム（自作車・投
   }
   ok(builtin.length === 6 && same === 6, `出荷車種 6 種の行の表示は是正前の書き方と同一（${same}/${builtin.length}${diff.length ? '・' + diff.join(' ; ') : ''}）`);
   cfg.unregisterCarType('bl4_evil'); cfg.unregisterCarType('bl4_comm');
+}
+
+console.log('\nG-6) 層4 往復 1（F1／F3／F4）: 文字列にできない値の同族 — t() の差し込み・🏆 詳細／🍴／再実行検証／🏅／打破通知／👻 を値の欄ごとに・車種名');
+// 是正前（8a4bd2e）: i18n.js t() の `s.split('{k}').join(vars[k])` は join が値を文字列にするところで TypeError を投げ、
+// t() を esc の前に呼ぶ全部の経路（race_ui の勝者・最速ラップ・公式結果の 1 行・旧版の注記 等）が止まった。
+// 設計: 差し込みの 1 か所（i18n.js t()）で守る。join が投げたときだけ String(v)（Symbol は "Symbol()"）、それも投げれば '?'
+// （escape.js と同じ規則）。投げない値は従来の join と 1 文字も変わらない（undefined は従来どおり join の既定の ","）。
+// 車種名の依存注入は main.js の product の本文（carTypeName・carTypeLabel・entryCarLabel）を取り出して評価する（mock だと
+// mock 自身の String() が投げて product と違う答えになる）。
+const MAIN6 = readFileSync(join(JS, 'main.js'), 'utf8');
+const cut6 = (from, to) => { const a = MAIN6.indexOf(from); const b = MAIN6.indexOf(to, a); if (a < 0 || b < 0) throw new Error('main.js に ' + from + ' が無い'); return MAIN6.slice(a, b + to.length); };
+const cfg6 = await import(pathToFileURL(join(JS, 'config.js')).href);
+const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
+  `${cut6('const carTypeName = (ct) => {', '\n};')}\n${cut6('function carTypeLabel(key) {', '}\n')}\n${cut6('function entryCarLabel(', '\n}\n')}\nreturn { carTypeName, carTypeLabel, entryCarLabel };`)(cfg6.CAR_TYPE_BY_KEY, i18n.hasKey, i18n.t);
+{
+  const BADS = [
+    ['JSON の {"toString":1}', () => JSON.parse('{"toString":1}'), '?'], ['{toString:1}', () => ({ toString: 1 }), '?'],
+    ['Object.create(null)', () => Object.create(null), '?'], ['Symbol()', () => Symbol(), 'Symbol()'],
+    ["Symbol('<b>')", () => Symbol('<b>'), 'Symbol(<b>)'], ['Proxy（どの読み出しも投げる）', () => new Proxy({}, { get() { throw new Error('trap'); } }), '?'],
+    ['配列 [{"toString":1}]', () => JSON.parse('[{"toString":1}]'), '?'],
+  ];
+  const tmpl = (key) => i18n.t(key);   // 差し込み前の文言（{name} 等が残る）
+  for (const key of ['race.winner', 'official.result.verified']) {
+    const toks = (tmpl(key).match(/\{(\w+)\}/g) || []).map((x) => x.slice(1, -1));
+    for (const [label, mk, want] of BADS) {
+      const vars = Object.fromEntries(toks.map((k) => [k, mk()]));
+      let r, th = null;
+      try { r = i18n.t(key, vars); } catch (e) { th = e; }
+      const exp = toks.reduce((s, k) => s.split('{' + k + '}').join(want), tmpl(key));
+      ok(th === null && r === exp, `t('${key}', {${toks.join(',')}: ${label}}) → ${th ? th.constructor.name + ': ' + th.message : J(r)}（期待 ${J(exp)}）`);
+    }
+  }
+  // 投げない値は是正前の式（join）と同じ文字列
+  const NORMAL = [['文字列', 'x<y'], ['空文字', ''], ['数値 5', 5], ['0', 0], ['1.5', 1.5], ['NaN', NaN], ['null', null], ['undefined', undefined],
+    ['true', true], ['配列 ["a","b"]', ['a', 'b']], ["{toString(){return 'z'}}", { toString() { return 'z'; } }], ['{}', {}]];
+  let same = 0; const diff = [];
+  for (const [label, v] of NORMAL) {
+    const want = tmpl('race.winner').split('{name}').join(v);
+    const got = i18n.t('race.winner', { name: v });
+    if (got === want) same++; else diff.push(`${label}: ${J(got)} / ${J(want)}`);
+  }
+  ok(same === NORMAL.length, `t() の差し込みは投げない値で是正前の join と同一（${same}/${NORMAL.length}${diff.length ? '・' + diff.join(' ; ') : ''}）`);
+  // 差し込みの実装は i18n.js の 1 か所だけ（写しがあればそこは守られない）。呼び出しの数は表に出す（全部この 1 か所を通る）。
+  const interp = [];
+  const { readdirSync } = await import('node:fs');
+  const all = readdirSync(JS).filter((f) => f.endsWith('.js'));
+  for (const f of all) {
+    const s = readFileSync(join(JS, f), 'utf8');
+    for (const m of s.matchAll(/split\(\s*'\{'/g)) interp.push(`${f}:${s.slice(0, m.index).split('\n').length}`);
+  }
+  ok(interp.length === 1 && interp[0].startsWith('i18n.js:'), `{…} の差し込みは i18n.js t() の 1 か所だけ（${interp.join(' / ')}）`);
+  const counts = all.map((f) => [f, (readFileSync(join(JS, f), 'utf8').match(/\bt\(\s*(?:'[^']*'|[\w.$]+(?:\s*\+\s*[^,()]+)?)\s*,\s*\{/g) || []).length]).filter(([, n]) => n);
+  console.log(`  t(…, {…}) の呼び出し（差し込みのある t・ファイル別）: ${counts.map(([f, n]) => `${f} ${n}`).join('・')}＝計 ${counts.reduce((a, [, n]) => a + n, 0)}`);
+}
+
+// G-6b: 🏆 詳細（selectOfficialRace → renderOfficialDetail）・「再実行検証」（ofVerify の click → verifyOfficialLocally →
+//   renderRaceResult）・🏅 の集計（loadAllOfficialData → renderRankings）・👻（ghostVsWorld）を、大会（event／entries／result）の
+//   値の欄を 1 つずつ文字列にできない値に替えて呼び、例外が利用者の操作の外へ漏れないこと（欄 × 入口の表）。
+//   JSON で届く値（上流の取得は JSON）＝{"toString":1}。Object.create(null)・Symbol() は JSON から作れないが、同じ表で試す（複製しない）。
+{
+  ECL = L6.entryCarLabel; CTL = L6.carTypeLabel;
+  const RICH = () => ({
+    event: { id: 'bl4-f', title: 'T', course: 'オーバル', laps: 1, class: 'open', engineVer: 'v0.0.1', season: 'S1', points: [10, 8],
+      entryWindow: { open: '2026-01-01T00:00:00Z', close: '2026-01-02T00:00:00Z' } },
+    entries: [ent('e1', 'a1', 'c', { k: 0, intro: 'I1' }), ent('e2', 'b2', 'py', { k: 1 })],
+    result: { eventId: 'bl4-f', verifyHash: 'h', engineVer: 'v0.0.1', exec: 'x', finishers: [
+      { rank: 1, name: 'e1', author: 'a1', carType: 'normal_fr', totalTimeMs: 1000, bestLapMs: 900, penaltiesSec: 2 },
+      { rank: 2, name: 'e2', author: 'b2', carType: 'normal_fr', totalTimeMs: 2000, bestLapMs: 1000, penaltiesSec: 0 }],
+      dnf: [{ name: 'e3', author: 'c3', carType: 'normal_fr', lapsCompleted: 0, reason: 'crash' }] },
+  });
+  // 打破通知（checkBeaten・🏅 の「抜かれた記録」の行）も通す: 自分＝a1（ペナルティ 2 秒で換算 3.0 秒＞b2 の 2.0 秒＝b2 が世界ベスト）
+  localStorage.setItem('rumicar.author', 'a1');
+  const leaves = [];
+  const walk = (o, p) => {
+    for (const k of Object.keys(o)) {
+      const v = o[k], q = [...p, k];
+      if (k === 'src') { leaves.push(q); continue; }
+      if (v && typeof v === 'object') { leaves.push(q); walk(v, q); } else leaves.push(q);
+    }
+  };
+  walk(RICH(), []);
+  const setAt = (o, p, v) => { let x = o; for (const k of p.slice(0, -1)) x = x[k]; x[p[p.length - 1]] = v; return o; };
+  // 予算クラスの欄（class: 'budget' のときだけ読む）・エントリー／完走の 1 件そのものが object でない（loader.js fetchRace は
+  // null 以外の JSON をそのまま entries に積む・result.json の finishers は上流の値のまま）
+  const extra = [[['event', 'budget', 'total'], (r) => { r.event.class = 'budget'; r.event.budget = { total: 1e9 }; }],
+    // 結果の無い大会は受付期間で状態を決める（race_ui.js raceStatus の Date.parse。結果があれば読まない）
+    [['event', 'entryWindow', 'open'], (r) => { r.result = null; }], [['event', 'entryWindow', 'close'], (r) => { r.result = null; }]];
+  const whole = [[['entries', 0], 5], [['entries', 1], 'x'], [['entries', 1], true], [['entries', 0], []],
+    [['result', 'finishers', 0], null], [['result', 'finishers', 1], 5], [['result'], 5], [['result', 'finishers'], 'x']];
+  const VALS = [['{"toString":1}', () => JSON.parse('{"toString":1}'), true], ['Object.create(null)', () => Object.create(null), false], ['Symbol()', () => Symbol(), false]];
+  const rows = [];
+  let cases = 0;
+  BL3.list = ['bl4-f'];
+  for (const [vl, mk, viaJson] of VALS) {
+    for (const [p, pre] of [...leaves.map((p) => [p, null]), ...extra]) {
+      cases++;
+      const make = () => { const r = RICH(); if (pre) pre(r); return setAt(r, p, mk()); };
+      BL3.races['bl4-f'] = viaJson ? () => JSON.parse(JSON.stringify(make())) : make;
+      const st = {};
+      try { await ui.selectOfficialRace('bl4-f'); st.detail = el('ofDetail').innerHTML.includes('id="ofVerify"') ? 'ok' : 'ボタン無し'; } catch (e) { st.detail = `${e.constructor.name}: ${e.message}`; }
+      // 🍴 fork（締切後のプログラム公開の各エントリー・forkOfficialEntry）
+      try { for (let i = 0; i < 2; i++) ui.forkOfficialEntry(i); st.fork = 'ok'; } catch (e) { st.fork = `${e.constructor.name}: ${e.message}`; }
+      el('ofVerify')._l = {}; el('ofVerifyNote').innerHTML = '';
+      try { await ui.selectOfficialRace('bl4-f'); el('ofVerify').fire('click'); st.verify = 'ok'; } catch (e) { st.verify = `${e.constructor.name}: ${e.message}`; }
+      let rk = '';
+      try { await ui.loadOfficialRaces(true); await ui.loadAllOfficialData(true); ui.renderRankings(); rk = el('rankBody').innerHTML; st.rank = rk.includes('rank-board') ? 'ok' : '表が空'; } catch (e) { st.rank = `${e.constructor.name}: ${e.message}`; }
+      const m = /class="rank-vsworld" data-cls="([^"]*)" data-course="([^"]*)"/.exec(rk);
+      try { ui.checkBeaten(); st.beaten = 'ok'; } catch (e) { st.beaten = `${e.constructor.name}: ${e.message}`; }
+      if (m) { try { ui.ghostVsWorld(unescH(m[1]), unescH(m[2])); st.ghost = 'ok'; } catch (e) { st.ghost = `${e.constructor.name}: ${e.message}`; } } else st.ghost = '—';
+      // 「表が空」は例外ではない（結果の無い・検証の無い大会は 🏅 に入らない＝正しい）。漏れは例外だけを数える。
+      const bad = Object.entries(st).filter(([, v]) => v !== 'ok' && v !== '—' && v !== '表が空');
+      rows.push({ v: vl, path: p.join('.'), st, bad });
+    }
+  }
+  for (const [p, v] of whole) {
+    cases++;
+    const make = () => setAt(RICH(), p, v);
+    BL3.races['bl4-f'] = () => JSON.parse(JSON.stringify(make()));
+    const st = {};
+    try { await ui.selectOfficialRace('bl4-f'); st.detail = el('ofDetail').innerHTML.includes('id="ofVerify"') ? 'ok' : 'ボタン無し'; } catch (e) { st.detail = `${e.constructor.name}: ${e.message}`; }
+    el('ofVerify')._l = {}; el('ofVerifyNote').innerHTML = '';
+    try { await ui.selectOfficialRace('bl4-f'); el('ofVerify').fire('click'); st.verify = 'ok'; } catch (e) { st.verify = `${e.constructor.name}: ${e.message}`; }
+    try { await ui.loadOfficialRaces(true); await ui.loadAllOfficialData(true); ui.renderRankings(); st.rank = 'ok'; } catch (e) { st.rank = `${e.constructor.name}: ${e.message}`; }
+    rows.push({ v: J(v), path: p.join('.'), st, bad: Object.entries(st).filter(([, x]) => x !== 'ok') });
+  }
+  // 表が空振りしていない: 元の大会は 4 つの入口を全部通る（👻 のボタンが出て runRace を呼ぶ・再実行検証は「一致／不一致」の行）
+  {
+    BL3.races['bl4-f'] = () => JSON.parse(JSON.stringify(RICH()));
+    el('ofVerify')._l = {}; el('ofVerifyNote').innerHTML = '';
+    await ui.selectOfficialRace('bl4-f'); BL3.calls.length = 0; el('ofVerify').fire('click');
+    const vn = el('ofVerifyNote').innerHTML, rr = el('raceResults').innerHTML;
+    await ui.loadOfficialRaces(true); await ui.loadAllOfficialData(true); ui.renderRankings();
+    const rb = el('rankBody').innerHTML;
+    const m = /class="rank-vsworld" data-cls="([^"]*)" data-course="([^"]*)"/.exec(rb);
+    const n0 = BL3.calls.length;
+    if (m) ui.ghostVsWorld(unescH(m[1]), unescH(m[2]));
+    logs.length = 0; ui.checkBeaten();
+    const beatenLog = logs.some((x) => x.includes('b2')), beatenRow = rb.includes('<ul class="rank-beaten"><li>');
+    ok(n0 === 1 && /official-verify-note/.test(vn) && rr.includes('race-tab') && !!m && BL3.calls.length === 2 && beatenLog && beatenRow,
+       `元の大会で 5 つの入口を通る（再実行の runRace ${n0} 回・結果表 ${rr.includes('race-tab')}・🏅 の 👻 ボタン ${!!m}・👻 の runRace ${BL3.calls.length - n0} 回・打破通知 ${beatenLog}・🏅 の抜かれた記録の行 ${beatenRow}）`);
+  }
+  const badRows = rows.filter((r) => r.bad.length);
+  for (const r of badRows) console.log(`    ✗ ${r.v} ${r.path}: ${r.bad.map(([k, v]) => `${k}=${v}`).join(' ; ')}`);
+  ok(badRows.length === 0, `大会の値の欄 × 値 ${cases} 通り × 入口（🏆 詳細・🍴 fork・再実行検証・🏅 の集計・打破通知・👻）で例外が漏れない（漏れた行 ${badRows.length}）`);
+  // 🏅: 読めない大会が 1 つあっても、ほかの大会の集計は出る（外すのは単独で通らない大会だけ）。
+  {
+    const G = () => { const r = RICH(); r.event.id = r.result.eventId = 'bl4-g'; r.event.title = 'G';
+      r.entries = [ent('g1n', 'g1', 'c', { k: 0, program: { lang: JSON.parse('{"toString":1}'), src: SRC_C } })];
+      r.result.finishers = [{ rank: 1, name: 'g1n', author: 'g1', carType: 'normal_fr', totalTimeMs: 500, bestLapMs: 500, penaltiesSec: 0 }];
+      r.result.dnf = []; return r; };
+    BL3.races['bl4-f'] = () => JSON.parse(JSON.stringify(RICH()));
+    BL3.races['bl4-g'] = () => JSON.parse(JSON.stringify(G()));
+    BL3.list = ['bl4-f', 'bl4-g'];
+    let th = null, rb = '';
+    try { await ui.loadOfficialRaces(true); await ui.loadAllOfficialData(true); ui.renderRankings(); rb = el('rankBody').innerHTML; } catch (e) { th = e; }
+    const hasF = rb.includes('rank-board') && rb.includes('b2'), hasG = rb.includes('g1');
+    ok(th === null && hasF && !hasG, `🏅 は読めない大会（entries の program.lang が {"toString":1}）だけを外し、ほかの大会の表を出す（例外 ${th ? th.message : 'なし'}・bl4-f の行 ${hasF}・bl4-g の行 ${hasG}）`);
+    BL3.list = ['bl4-f'];
+  }
+  localStorage.removeItem('rumicar.author');
+  ECL = (k) => String(k || ''); CTL = (k) => String(k);
+}
+
+// G-6c: 層4 が名指しした t() の呼び出し（race_ui.js の結果ダイアログ :115 新記録・:123 最速ラップ・:127 勝者／🏆 の詳細の
+//   公式記録の 1 行・旧版の注記）を、本番の入口から文字列にできない名前・result.json の値で通す。是正前は全部 TypeError。
+{
+  ECL = L6.entryCarLabel; CTL = L6.carTypeLabel;
+  const { practiceCourseId } = await import(pathToFileURL(join(JS, 'lap.js')).href);
+  const recKey = 'rumicar.practiceShape.' + practiceCourseId(OVAL) + '::normal_fr';
+  const BADN = JSON.parse('{"toString":1}');
+  const R1 = () => ({
+    event: { id: 'bl4-t', course: 'オーバル', laps: 1, class: 'open' },
+    entries: [ent(BADN, 'a1', 'c', { k: 0 }), ent(BADN, 'b2', 'c', { k: 1 })],   // どちらが勝っても勝者・最速ラップの名前が {"toString":1}
+    result: { eventId: 'bl4-t', verifyHash: BADN, engineVer: BADN, exec: BADN, finishers: [
+      { rank: 1, name: BADN, author: 'a1', carType: 'normal_fr', totalTimeMs: 1000, bestLapMs: 900 }] },
+  });
+  for (const [label, rec, wantKey] of [['記録なし（:115 新記録）', null, 'race.record.new'], ['自分の記録の方が速い（:123 最速ラップ）', JSON.stringify({ t: 0.001 }), 'race.fastestLap']]) {
+    if (rec) localStorage.setItem(recKey, rec); else localStorage.removeItem(recKey);
+    el('raceResults').innerHTML = '';
+    let d = '', th = null;
+    try { d = await openRace('bl4-t', R1); } catch (e) { th = e; }
+    const v = th === null ? await clickVerify('bl4-t', R1) : { thrown: th, calls: [] };
+    const rr = el('raceResults').innerHTML;
+    const winner = escH(i18n.t('race.winner', { name: '?' }));
+    const sub = escH(i18n.t(wantKey, { name: '?', time: '\u0000', gap: '' }).split('\u0000')[0]);   // 名前 '?' までの文言
+    ok(th === null && v.thrown === null && v.calls.length === 1 && rr.includes(winner) && rr.includes(sub),
+       `再実行検証の結果ダイアログ（${label}）: 勝者 ${rr.includes(winner)}・${wantKey} ${rr.includes(sub)}${v.thrown ? '・例外 ' + v.thrown.constructor.name + ': ' + v.thrown.message : ''}`);
+    if (!rec) {
+      const vf = escH(i18n.t('official.result.verified', { hash: '?', ver: '?', exec: '?' }));
+      const ar = escH(i18n.t('official.result.archived', { rec: '?', app: '\u0000' }).split('\u0000')[0]);   // engineVer ? までの文言
+      ok(d.includes(vf) && d.includes(ar), `🏆 の詳細の公式記録の 1 行（official.result.verified）${d.includes(vf)}・旧版の注記（official.result.archived）${d.includes(ar)}`);
+    }
+  }
+  localStorage.removeItem(recKey);
+  ECL = (k) => String(k || ''); CTL = (k) => String(k);
+}
+
+// G-6d（F3）: 車種名 main.js carTypeName — 投稿車種（community）の name が文字列にできない値でも投げない。是正前は '🌐 ' + base の
+//   連結が escapeHtml より先に投げ、車種表（car_crud.js renderCarParamTable）と fleet の車種セレクタ（main.js）が止まった。
+//   併せて main.js loadCommunityCars: key が文字列にできない投稿は「key/name」の不正として数え、後続の投稿を読み続ける
+//   （是正前は isReservedCarKey の String(key) がループごと投げた）。
+{
+  const ctn = L6.carTypeName;
+  const CASES = [['JSON の {"toString":1}', JSON.parse('{"toString":1}'), '🌐 ?'], ['Object.create(null)', Object.create(null), '🌐 ?'],
+    ['Symbol()', Symbol(), '🌐 Symbol()'], ['Proxy（どの読み出しも投げる）', new Proxy({}, { get() { throw new Error('trap'); } }), '🌐 ?']];
+  for (const [label, v, want] of CASES) {
+    let r, th = null;
+    try { r = ctn({ key: 'bl4_x', name: v, community: true }); } catch (e) { th = e; }
+    ok(th === null && r === want, `carTypeName(投稿車種・name=${label}) → ${th ? th.constructor.name + ': ' + th.message : J(r)}（期待 ${J(want)}）`);
+  }
+  const norm = [ctn(cfg6.CAR_TYPE_BY_KEY.normal_fr), ctn({ key: 'bl4_m', name: 'Mine', custom: true }), ctn({ key: 'bl4_c', name: 'Comm', community: true }),
+    ctn({ key: 'bl4_n', name: 5, community: true }), ctn({ key: 'bl4_o', name: { valueOf() { return 1; }, toString() { return 'a'; } }, community: true })];
+  ok(J(norm) === J([i18n.t('car.normal_fr'), 'Mine', '🌐 Comm', '🌐 5', '🌐 1']), `carTypeName の正常値は従来どおり（${J(norm)}）`);
+  // 車種表: product の carTypeName を注入して投稿車種（name が {"toString":1}）の行を描く
+  const BADN = JSON.parse('{"toString":1}');
+  const comm = cfg6.registerCarType({ key: 'bl4_cn', name: BADN }); comm.community = true;
+  const { initCarCrud } = await import(pathToFileURL(join(JS, 'car_crud.js')).href);
+  const CC2 = initCarCrud({ $: el, escapeHtml: ESC, carTypeName: ctn, logLine() {}, buildFleetColumns() {}, pruneSlotCarTypes() {}, submitToGithub() {} });
+  let th = null;
+  try { CC2.renderCarParamTable(); } catch (e) { th = e; }
+  const h = el('carParamTable').innerHTML;
+  ok(th === null && h.includes('<td class="pname">🌐 ?'), `車種表は投稿車種の name が {"toString":1} でも描く（${th ? th.constructor.name + ': ' + th.message : '行 ' + h.includes('<td class="pname">🌐 ?')}）`);
+  cfg6.unregisterCarType('bl4_cn');
+  for (const ct of cfg6.CAR_TYPES.filter((c) => c.custom)) cfg6.unregisterCarType(ct.key);   // initCarCrud が localStorage の自作車を登録し直した分
+  // loadCommunityCars（本文を取り出して、取得・登録・描画の依存を注入して呼ぶ）
+  const body = cut6('async function loadCommunityCars() {', '\n}\n');
+  const logs6 = []; let fleetN = 0, tableN = 0;
+  const DEFS = { A: { key: 'bl4_ca', name: 'CA' }, B: { key: JSON.parse('{"toString":1}'), name: 'CB' }, C: { key: 'bl4_cc', name: JSON.parse('{"toString":1}') } };
+  const f = new Function('listCommunityCars', 'fetchCommunityCar', 'logLine', 't', 'hasKey', 'loadCustomCars', 'isReservedCarKey', 'isBuiltinKey', 'registerCarType',
+    'buildFleetColumns', 'renderCarParamTable', `let communityCars = [];\n${body}\nreturn loadCommunityCars;`)(
+    async () => [{ name: 'a.json', download_url: 'A' }, { name: 'b.json', download_url: 'B' }, { name: 'c.json', download_url: 'C' }],
+    async (u) => JSON.parse(JSON.stringify(DEFS[u], (k, v) => v)), (x) => logs6.push(String(x)), i18n.t, i18n.hasKey, () => [],
+    (k) => String(k) in Object.prototype, (k) => Object.prototype.hasOwnProperty.call(cfg6.CAR_TYPE_BY_KEY, k) && !cfg6.CAR_TYPE_BY_KEY[k].custom && !cfg6.CAR_TYPE_BY_KEY[k].community,
+    cfg6.registerCarType, () => { fleetN++; }, () => { tableN++; });
+  // DEFS.B の key は JSON 経由で {"toString":1}（JSON.stringify は toString:1 を数のまま書く）
+  let th2 = null;
+  try { await f(); } catch (e) { th2 = e; }
+  const reg = ['bl4_ca', 'bl4_cc'].map((k) => !!cfg6.CAR_TYPE_BY_KEY[k] && cfg6.CAR_TYPE_BY_KEY[k].community === true);
+  const badLine = logs6.find((x) => x.includes('b.json (key/name)'));
+  ok(th2 === null && reg.every(Boolean) && !!badLine && fleetN === 1 && tableN === 1,
+     `投稿車種の取り込みは key が {"toString":1} の 1 件を不正として数え、後続を読む（${th2 ? '例外 ' + th2.constructor.name + ': ' + th2.message : `登録 ${J(reg)}・不正の行 ${!!badLine}・セレクタ/車種表の描き直し ${fleetN}/${tableN}`}）`);
+  let r3, th3 = null;
+  try { r3 = ctn(cfg6.CAR_TYPE_BY_KEY.bl4_cc); } catch (e) { th3 = e; }
+  ok(th3 === null && r3 === '🌐 ?', `取り込んだ投稿車種（name が {"toString":1}）の車種名 → ${th3 ? th3.message : J(r3)}`);
+  cfg6.unregisterCarType('bl4_ca'); cfg6.unregisterCarType('bl4_cc');
 }
 
 const line = '─'.repeat(64);

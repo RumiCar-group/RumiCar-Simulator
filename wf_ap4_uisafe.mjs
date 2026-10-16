@@ -9,8 +9,9 @@
 //                           (生 `${carTypeName(` 出現数 = 0)。version drift しても機械検出する。
 //   G2 [XSS 封鎖・runtime]  registerCarType 相当の悪性名を sink 式へ通すと生 `<` 残存数 = 0。
 //                           escapeHtml は本物 (BL4 で main.js から public/js/escape.js へ分離) を import し、
-//                           main.js がそれを import して自前の定義を持たないことを確認する。carTypeName の写しは
-//                           source PIN で本物と一致を機械確認 (CI-9 バイパス防止=コピーが陳腐化したら PIN 不一致で exit 1)。
+//                           main.js がそれを import して自前の定義を持たないことを確認する。carTypeName は写しと PIN を
+//                           やめ、main.js の本文を取り出して本物の i18n (t/hasKey) で評価する (BL4 層4 往復 1: 投稿の name が
+//                           文字列にできない値でも投げないよう本文を変えたため PIN は必ず赤になる＝写しを持たない形へ)。
 //   G3 [safeSetItem]        本物の storage.js を import し、QuotaExceededError スタブで
 //                           false + 通知 1 回・正常時 true + 通知 0 回。
 //   G4 [生 setItem 残存 0]  data 系 3 経路の関数本文に raw localStorage.setItem が残っていない
@@ -55,7 +56,7 @@ console.log('G1 sink ゲート: ${carTypeName(...)} は必ず escapeHtml で包�
 }
 
 // ---- G2: XSS 封鎖 (runtime) + source PIN ----
-console.log('G2 XSS 封鎖: 悪性車種名を sink へ通すと生 < 残存 0 / escapeHtml は本物・carTypeName の写しは source PIN 一致');
+console.log('G2 XSS 封鎖: 悪性車種名を sink へ通すと生 < 残存 0 / escapeHtml は本物・carTypeName は main.js の本文を評価');
 {
   // BL4: escapeHtml は public/js/escape.js の本物を import する (写しを持たない)。main.js はそれを import し、
   //   自前の定義を持たない (二重定義で片方だけ直る事故を防ぐ)。
@@ -63,13 +64,18 @@ console.log('G2 XSS 封鎖: 悪性車種名を sink へ通すと生 < 残存 0 /
   if (/^import \{ escapeHtml \} from '\.\/escape\.js';/m.test(mainSrc) && !/^function escapeHtml\(/m.test(mainSrc)) ok('main.js は escape.js の escapeHtml を import (自前の定義なし)');
   else bad('main.js が escape.js の escapeHtml を import していない・または自前の定義が残っている');
 
-  // 本物の carTypeName の要点 PIN: i18n キー無しなら base = ct.name (community は '🌐 ' 前置)。
-  const CTN_PIN = "return ct.community ? '🌐 ' + base : base;";
-  if (mainSrc.includes(CTN_PIN)) ok('carTypeName 要点 PIN 一致 (base=ct.name 経路が生存)');
-  else bad('carTypeName の要点が source と不一致 (PIN を更新し再検証せよ)');
+  // 本物の carTypeName: main.js の `const carTypeName = (ct) => {` … `\n};` を取り出し、本物の i18n で評価する
+  //   (main.js は DOM を前提にするので module として import できない。写しを持たない＝本文が変われば評価も変わる)。
+  const { t, hasKey } = await import('./public/js/i18n.js');
+  const a = mainSrc.indexOf('const carTypeName = (ct) => {'), b = mainSrc.indexOf('\n};', a);
+  let carTypeName = null;
+  if (a >= 0 && b > a) carTypeName = new Function('hasKey', 't', `${mainSrc.slice(a, b + 3)}\nreturn carTypeName;`)(hasKey, t);
+  if (carTypeName && carTypeName({ key: 'evil', name: 'N', community: true }) === '🌐 N' && carTypeName({ key: 'evil', name: 'N', custom: true }) === 'N')
+    ok("carTypeName は main.js の本文を評価 (i18n キー無しは base=ct.name・community は '🌐 ' 前置)");
+  else bad('main.js から carTypeName の本文を取り出せない・または答えが base=ct.name / 🌐 前置と違う');
+  if (!carTypeName) carTypeName = (ct) => ct.name;
 
-  // 本物の escapeHtml と carTypeName の写し (PIN 済) で sink 式を再現し、悪性名の生 < が 0 になることを実証。
-  const carTypeName = (ct) => { const base = ct.name; return ct.community ? '🌐 ' + base : base; };
+  // 本物の escapeHtml と carTypeName で sink 式を再現し、悪性名の生 < が 0 になることを実証。
   const PAYLOAD = '<img src=x onerror=alert(1)>';
   for (const ct of [{ key: 'evil', name: PAYLOAD, community: true }, { key: 'evil2', name: PAYLOAD, custom: true }]) {
     // sink 2 箇所と同じ式: ${escapeHtml(carTypeName(ct))}
