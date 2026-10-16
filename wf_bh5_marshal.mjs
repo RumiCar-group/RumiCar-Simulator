@@ -42,7 +42,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
-import { loadMods, liveSetup, liveFrame, fleetEdgesOf } from './wf_bg_live.mjs';
+import { loadMods, liveSetup, liveFrame, liveTicks, fleetEdgesOf } from './wf_bg_live.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const rootIdx = process.argv.indexOf('--root');
@@ -178,11 +178,12 @@ function liveCell(M, course, { regime = 'tabletop', n, mode, sec = 120, recover 
     const sdt = Lv.frames === 1 ? 0.15 : (1 / 60) * 3;
     if (recover) liveFrame(Lv, sdt);
     else {
-      const edges = fleetEdgesOf(M, Lv.slots);
-      Lv.slots.forEach((s, i) => { if (!s.running) return; s.loopTimer -= sdt; if (s.loopTimer <= 0) { fleet.tickSlot(s, fleet.othersFor(edges, i, true)); s.loopTimer += (1 / config.SIM.loopHz) + (s.world._pendingDelay || 0) / 1000; } });
-      fleet.applyStartGate(Lv.slots, true);
-      if (config.PHYSICS.mode === 'v2') fleet.integrateFleetV2(Lv.slots, sdt, course.walls, false, true);
-      else { const max = Lv.slots.length > 1 ? (1 / config.SIM.loopHz) : sdt; let rem = sdt; while (rem > 1e-6) { const step = Math.min(max, rem); const e = fleetEdgesOf(M, Lv.slots); Lv.slots.forEach((s, i) => fleet.integrateSlot(s, step, fleet.othersFor(e, i, true), course.walls, false)); rem -= step; } }
+      // loop() の段取りは wf_bg_live の liveTicks（BL6 後の木は product の runLiveFrame・前の木は是正前の式）。積分は自動復帰 OFF の写し。
+      liveTicks(M, Lv.slots, sdt, (dt) => {
+        fleet.applyStartGate(Lv.slots, true);
+        if (config.PHYSICS.mode === 'v2') fleet.integrateFleetV2(Lv.slots, dt, course.walls, false, true);
+        else { const max = Lv.slots.length > 1 ? (1 / config.SIM.loopHz) : dt; let rem = dt; while (rem > 1e-6) { const step = Math.min(max, rem); const e = fleetEdgesOf(M, Lv.slots); Lv.slots.forEach((s, i) => fleet.integrateSlot(s, step, fleet.othersFor(e, i, true), course.walls, false)); rem -= step; } }
+      });
       Lv.t += sdt; Lv.frames++;
     }
     for (const i of st.at) if (Lv.slots[i].lap.laps > lapsPrev[i]) st.lapInc++;
@@ -788,6 +789,16 @@ const FROZEN = {
   'モダン・レイアウト|ライブ 動力学 6 台 自動復帰 OFF': 'd31cd2aa',
   '四角の中の丸|ライブ 精密 v2 6 台 自動復帰 OFF': '788c6201',
 };
+// 【BL6・2026-10-17】ライブの 3 本は、ライブの loop() の段取り（product の loopsched.js・wf_bg_live.mjs の liveTicks）を変えた BL6 後の木では
+//   下の値で照合する（loopsched.js の無い木＝--root で BL6 前の木は上の値のまま）。liveCell の 2 フレーム目（sdt 0.15 s＝3 周期）だけが
+//   sdt > 1 周期で、是正後は 0.05 s ごとに loop() → 積分 を 3 回。実測（2026-10-17・internal docs/stage_bl/bl6/logs/evidence_bh5_*.txt）:
+//   --root fee6e7a（BL6 前）は上の 3 本と一致・2 フレーム目も 0.05 にした写しでは BL6 前と後の木で 3 本とも同じ値（bdf7a987・ff7f48fc・
+//   136d6c16）＝変わったのは sdt > 1 周期のフレームの段取りだけ。
+const FROZEN_LIVE_BL6 = {
+  '投稿コースの写し|ライブ 動力学 6 台': 'e994324a',
+  'モダン・レイアウト|ライブ 動力学 6 台 自動復帰 OFF': '2764fd44',
+  '四角の中の丸|ライブ 精密 v2 6 台 自動復帰 OFF': '76e54de8',
+};
 function checkC(M, say) {
   const v = [];
   const t = (cond, msg) => { if (say) ok(cond, msg); if (!cond) v.push(msg); };
@@ -817,7 +828,8 @@ function checkC(M, say) {
     t(a.st.bad.length === 0 && a.st.lapInc === 0 && Math.max(...a.marshal) <= 12, `C5 ライブ ${name} ${mode}: 向きを直した瞬間の姿勢 ${a.st.events} 回（違反 ${a.st.bad.length}${a.st.bad.length ? ' ' + a.st.bad.slice(0, 2).join(' / ') : ''}・周回が増えた ${a.st.lapInc}）`);
   }
   // C6 対象外は 1 ビットも変わらない（改修前の木の値）
-  const same = (key, got) => t(FROZEN[key] === got, `C6 ${key}: ${got}${FROZEN[key] === got ? '' : ' ≠ 改修前 ' + FROZEN[key]}`);
+  const want = (key) => (M.loopsched && FROZEN_LIVE_BL6[key]) || FROZEN[key];   // BL6 後の木のライブ 3 本は FROZEN_LIVE_BL6（上の注記）
+  const same = (key, got) => t(want(key) === got, `C6 ${key}: ${got}${want(key) === got ? '' : ' ≠ 改修前 ' + want(key)}`);
   { const r = raceCell(M, fig8Of(M), { n: 6, mode: 'dynamic', trace: true }); same('投稿コースの写し|公式レース 動力学 6 台 ペナルティ復帰', r.r.verifyHash + '/' + r.r.traceHash); t(r.marshal.every((x) => x === 0), 'C6 投稿コースの写し: 向き直し 0 回'); }
   { const r = raceCell(M, fig8Of(M), { n: 6, mode: 'v2', trace: true }); same('投稿コースの写し|公式レース 精密 v2 6 台 ペナルティ復帰', r.r.verifyHash + '/' + r.r.traceHash); }
   { const r = raceCell(M, M.course.buildFromSpec(specOf('モダン・レイアウト')), { n: 6, mode: 'dynamic', rejoin: false, trace: true }); same('モダン・レイアウト|公式レース 動力学 6 台 リタイア規則', r.r.verifyHash + '/' + r.r.traceHash); }

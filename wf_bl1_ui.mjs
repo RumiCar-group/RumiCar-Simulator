@@ -1,4 +1,4 @@
-// wf_bl1_ui.mjs — Stage BL（UI 不具合）の常設ゲート。BL1 が新設し、BL2〜BL7 が章を足す（A＝BL1・B＝BL2・C〜F＝BL3・G＝BL4・H/I＝BL5）。
+// wf_bl1_ui.mjs — Stage BL（UI 不具合）の常設ゲート。BL1 が新設し、BL2〜BL7 が章を足す（A＝BL1・B＝BL2・C〜F＝BL3・G＝BL4・H/I＝BL5・J＝BL6）。
 // ════════════════════════════════════════════════════════════════════════════
 // 本番モジュールを import して答えさせる（再実装しない・CI-9）。実ブラウザでしか測れない部分は
 // browser/check_bl<n>_*.mjs（run_all.sh が glob で拾う）。
@@ -94,6 +94,16 @@
 //    食い違う名前）・H-4（file・FILE の 2 行）の 4 件。--root 81e44bf＝H-1・H-2（2 行）・H-3（display:none・⬆ の名前）・H-4（2 行＝判定は
 //    BL5 前から同じ。81e44bf では入力が display:none でフォーカスが移らなかったので実害は無かった）・I-1・I-2（4 行）・I-3・I-4（2 行）の
 //    15 件。I-1／G-4 の字句解析は後置 ++／-- の後の / を割り算と読み、I-1 も正規表現の途中の改行で投げる（層4 F3）。
+//
+// J) BL6 live の loop() の段取り — main.js frame の走行中・非ポーズ分岐の本文（是正後は loopsched.js の runLiveFrame を呼ぶ形）を切り出し、
+//    tickSlot・integrateLive を記録だけする治具で評価する（是正前の木も同じ読み口で是正前の本文を評価）。J-1 条件表（60 fps×1×・60 fps×3×・
+//    30 fps×3×・20 fps×3×・10 fps×3×＋参考の行・probe/loopdebt.mjs の型）の 60 sim 秒で loop() の頻度が loopHz ±5 %・負債 ≤ 1 周期・
+//    60 fps×1× に戻した最初の 1 sim 秒が loopHz ± 1・負の delay でも負債 ≤ 1 周期。J-2 delay(100) で次の loop() が呼ばない双子より
+//    100 ms ± 1 周期 遅れる。J-3 上限 LIVE_MAX_TICKS_PER_FRAME ≥ UI で出せる最大の区間の数（index.html #speed の max × main.js の打ち切り）と
+//    上限に当たったときの挙動（UI の外・速度 5×）。J-4 sdt ≤ 1 周期のフレーム列で是正前の式と呼び出し・値が 1 ビットも違わない。J-5 配線。
+//    赤になる章（2026-10-17 の実測・--root fee6e7a＝BL5 後・BL6 前）: J-1（30・20・10 fps×3× と参考の 45・40 fps×3×・負の delay）・
+//    J-2（同じ 5 条件）・J-3（2 行）・J-5（4 行）の 17 件。J-4 は是正前の木では同じ本文どうしの比較で緑。実ブラウザは
+//    browser/check_bl6_loop.mjs（本物の rAF の間隔と速度で、loop() のたびに回数を print するプログラムのシリアル出力から頻度を測る）。
 //
 // 使い方: node wf_bl1_ui.mjs              … 検査
 //         node wf_bl1_ui.mjs --root <dir>  … <dir>/public/js の product で回す（是正前の木で赤になることの確認用）
@@ -1810,6 +1820,199 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
   let lcBody = '';
   if (a >= 0) { const b = msrc.indexOf('\n  });', a); lcBody = msrc.slice(a, b); }
   ok(a >= 0 && /drawTougeElevation\(/.test(lcBody), `main.js の言語切替の本文（${lcBody.split('\n').length} 行）が drawTougeElevation を呼ぶ`);
+}
+
+// ── J) BL6 live の loop() の段取り（main.js frame の走行中・非ポーズ分岐）──────────────────────────
+// 是正前（fee6e7a まで・v10.3.0）: frame は sdt = min(0.05, Δt)×速度 を物理に全部積分するのに、loop() は `if (s.loopTimer <= 0)` で
+// 1 フレーム 1 回まで。sdt > 1/loopHz で loop() がフレームの数に落ち、loopTimer は下限なく負へ溜まった（recheck §3・probe/loopdebt.mjs）。
+// 測り方: main.js の frame の `if (paused) {…} else {…}` の else の本文（＝本物の段取り）を切り出し、tickSlot・integrateLive・othersFor・
+// fleetEdgesOf を記録だけする治具に替えて評価する（是正後の木は loopsched.js の runLiveFrame を本物のまま渡す）。是正前の木も同じ読み口で
+// 是正前の本文を評価する（product の経路は変えない・BL-2 の作法）。sim 時間＝治具の integrateLive に渡った区間の合計。
+// J-1 条件表（60 fps×1×・60 fps×3×・30 fps×3×・20 fps×3×・10 fps×3×＋参考の 45・40 fps×3×・10 fps×1×）を 60 sim 秒: loop() の頻度が
+// loopHz の ±5 %・負債（−loopTimer の最大。loop() を呼ぶ直前の値と各区間の積分の後の値）≤ 1 周期・続けて 60 fps×1× に戻した最初の 1 sim 秒の
+// loop() が loopHz ± 1。負の delay(-1000) を毎回呼んでも負債 ≤ 1 周期。J-2 delay(100) を呼んだ回の次の loop() が、呼ばない双子の走りより
+// 100 ms ± 1 周期 遅れる（位相 4 通り）・その間隔 − 1 周期 も 100 ms ± 1 周期。J-3 上限: UI で出せる最大の sdt（main.js の 1 フレームの打ち切り
+// × index.html #speed の max）の区間の数 ≤ LIVE_MAX_TICKS_PER_FRAME・UI の外（速度 5×・10 fps）で上限に当たったときの挙動（1 フレーム ≤ 上限の
+// loop()・物理は sdt を全部積分・負債 ≤ 1 周期・60 fps×1× に戻した直後 loopHz ± 1）。J-4 sdt ≤ 1 周期のフレーム列（乱数 3 系列・4 台・
+// delay と running の切替あり）で tick と積分の呼び出しの並び・loopTimer の値が是正前の式と 1 ビットも違わない。J-5 配線。
+{
+  console.log('\nJ) BL6 live の loop() の段取り — main.js frame の走行中・非ポーズ分岐の本文を治具で評価');
+  const cfg = await import(pathToFileURL(join(JS, 'config.js')).href);
+  const loopHz = cfg.SIM.loopHz, P = 1 / loopHz;
+  const LS_PATH = join(JS, 'loopsched.js');
+  const LS = existsSync(LS_PATH) ? await import(pathToFileURL(LS_PATH).href) : null;
+  const fr = fnBody('frame');
+  let branch = '', capSec = NaN;
+  if (fr) {
+    const a = fr.text.indexOf('if (paused) {');
+    const b1 = a >= 0 ? blockAt(fr.a + a + 'if (paused) '.length) : null;
+    if (b1) {
+      const rest = CODE.slice(b1.b + 1);
+      const m = /^\s*else\s*\{/.exec(rest);
+      const b2 = m ? blockAt(b1.b + 1 + m[0].length - 1) : null;
+      if (b2) branch = b2.text.slice(1, -1);
+    }
+    const mc = /Math\.min\(([\d.]+), \(t - lastT\) \/ 1000\)/.exec(fr.text);
+    if (mc) capSec = Number(mc[1]);
+  }
+  ok(branch.length > 0, `main.js frame の走行中・非ポーズ分岐の本文を切り出せた（${branch.split('\n').length} 行）・1 フレームの実時間の打ち切り ${capSec} s・loopHz ${loopHz}・loopsched.js ${LS ? 'あり' : 'なし（是正前の木）'}`);
+  const PARAMS = ['slots', 'sdt', 'edges', 'interact', 'SIM', 'tickSlot', 'othersFor', 'integrateLive', 'fleetEdgesOf', 'runLiveFrame'];
+  let branchFn = null;
+  try { branchFn = new Function(...PARAMS, branch); } catch (e) { ok(false, `分岐の本文を評価できない（${e.message}）`); }
+  const runLive = LS ? LS.runLiveFrame : () => { throw new Error('runLiveFrame が無い（是正前の木）'); };
+
+  // 治具: 1 フレームを本物の分岐で回す。delayOf(slot, n) → その回の loop() が積む delay [ms]（n＝そのスロットの何回目の loop() か・0 始まり）。
+  function makeRig(nSlots, delayOf = () => 0) {
+    const R = { simT: 0, minTimer: 0, calls: [], slots: [], log: null };
+    for (let i = 0; i < nSlots; i++) R.slots.push({ running: true, loopTimer: 0, world: { _pendingDelay: 0 }, ticks: [] });
+    const watch = (v) => { if (v < R.minTimer) R.minTimer = v; };
+    const tickSlot = (s, others) => {
+      const i = R.slots.indexOf(s);
+      watch(s.loopTimer);
+      s.ticks.push(R.simT);
+      s.world._pendingDelay = 0;                                     // fleet.js tickSlot と同じ（loop() の前に 0 へ）
+      const d = delayOf(s, s.ticks.length - 1, i);
+      if (d) s.world._pendingDelay += d;                               // loop() の中の delay(ms)（api.js と同じ積み方）
+      if (R.log) R.log.push(`T${i}:${s.loopTimer}`);
+    };
+    const integrateLive = (dt) => {
+      R.simT += dt;
+      for (const s of R.slots) watch(s.loopTimer);
+      if (R.log) R.log.push(`I:${dt}`);
+    };
+    R.frame = (sdt) => {
+      branchFn(R.slots, sdt, [], false, { loopHz }, tickSlot, () => [], integrateLive, () => [], runLive);
+      for (const s of R.slots) { watch(s.loopTimer); if (R.log) R.log.push(`L:${s.loopTimer}`); }
+    };
+    return R;
+  }
+  const sdtOf = (fps, speed) => speed * Math.min(capSec, 1 / fps);
+  const runFor = (R, sdt, sec) => { const t0 = R.simT; let f = 0; while (R.simT < t0 + sec - 1e-9 && f < 1e6) { R.frame(sdt); f++; } return f; };
+
+  console.log('\nJ-1) 60 sim 秒の loop() の頻度・負債・60 fps×1× に戻した直後の 1 sim 秒（PLAN の条件表＋参考の行）');
+  const COND = [[60, 1, 'PLAN'], [60, 3, 'PLAN'], [30, 3, 'PLAN'], [20, 3, 'PLAN'], [10, 3, 'PLAN'], [45, 3, '参考'], [40, 3, '参考'], [10, 1, '参考']];
+  for (const [fps, speed, tag] of COND) {
+    if (!branchFn) break;
+    const R = makeRig(1);
+    let err = null, hz = NaN, debt = NaN, after = NaN, afterSpan = NaN;
+    try {
+      runFor(R, sdtOf(fps, speed), 60);
+      const n60 = R.slots[0].ticks.length, t60 = R.simT;
+      hz = n60 / t60; debt = -R.minTimer;
+      runFor(R, sdtOf(60, 1), 1);
+      after = R.slots[0].ticks.filter((t) => t >= t60 - 1e-9).length; afterSpan = R.simT - t60;
+    } catch (e) { err = e; }
+    const good = !err && hz >= loopHz * 0.95 && hz <= loopHz * 1.05 && debt <= P + 1e-12 && Math.abs(after - loopHz) <= 1;
+    ok(good, `${tag} ${fps} fps×${speed}×（sdt ${sdtOf(fps, speed).toFixed(4)} s）: ${err ? '例外 ' + err.message : `loop() ${hz.toFixed(3)} Hz（${(loopHz * 0.95).toFixed(1)}〜${(loopHz * 1.05).toFixed(1)}）・負債 ${debt.toFixed(4)} s（≤ ${P}）・60 fps×1× に戻した最初の ${afterSpan.toFixed(3)} sim 秒の loop() ${after} 回（${loopHz} ± 1）`}`);
+  }
+  if (branchFn) {
+    const R = makeRig(1, () => -1000);
+    let err = null;
+    try { runFor(R, sdtOf(60, 1), 10); } catch (e) { err = e; }
+    ok(!err && -R.minTimer <= P + 1e-12, `毎回 delay(-1000) を呼ぶ（負の delay）60 fps×1× 10 sim 秒: 負債 ${err ? '例外 ' + err.message : (-R.minTimer).toFixed(4)} s ≤ ${P}（是正前は負の delay が負債として溜まり毎フレーム返した）・loop() ${R.slots[0].ticks.length} 回`);
+  }
+
+  console.log('\nJ-2) delay(100) を呼んだ回の次の loop() — 呼ばない双子の走りより 100 ms ± 1 周期 遅れる・間隔 − 1 周期 も 100 ms ± 1 周期');
+  for (const [fps, speed, tag] of COND) {
+    if (!branchFn) break;
+    const rows = [];
+    let good = true;
+    for (const k of [200, 201, 202, 203]) {
+      let post = NaN, gap = NaN, err = null;
+      try {
+        const A = makeRig(1), B = makeRig(1, (s, n) => (n === k ? 100 : 0));
+        for (const R of [A, B]) { let f = 0; while (R.slots[0].ticks.length < k + 2 && f < 1e6) { R.frame(sdtOf(fps, speed)); f++; } }
+        post = B.slots[0].ticks[k + 1] - A.slots[0].ticks[k + 1];
+        gap = B.slots[0].ticks[k + 1] - B.slots[0].ticks[k] - P;
+      } catch (e) { err = e; }
+      const g = !err && Math.abs(post - 0.1) <= P + 1e-9 && Math.abs(gap - 0.1) <= P + 1e-9;
+      if (!g) good = false;
+      rows.push(err ? `${k} 回目: 例外 ${err.message}` : `${k} 回目 ${(post * 1000).toFixed(1)}／${(gap * 1000).toFixed(1)} ms`);
+    }
+    ok(good, `${tag} ${fps} fps×${speed}×: 遅れ／間隔−1 周期 ＝ ${rows.join('・')}（どちらも ${100 - P * 1000}〜${100 + P * 1000} ms）`);
+  }
+
+  console.log('\nJ-3) 1 フレームの loop() の回数の上限 LIVE_MAX_TICKS_PER_FRAME とその挙動');
+  const html = readFileSync(join(ROOT, 'public/index.html'), 'utf8');
+  const sm = /<input id="speed"[^>]*\bmax="([\d.]+)"/.exec(html);
+  const speedMax = sm ? Number(sm[1]) : NaN;
+  const MAXT = LS ? LS.LIVE_MAX_TICKS_PER_FRAME : NaN;
+  const uiSlices = LS ? LS.liveSlices(capSec * speedMax, loopHz, Infinity).length : NaN;
+  ok(Number.isInteger(MAXT) && MAXT >= 1 && uiSlices <= MAXT, `UI で出せる最大の sdt（打ち切り ${capSec} s × #speed の max ${speedMax}＝${(capSec * speedMax).toFixed(3)} s）の区間の数 ${uiSlices} ≤ 上限 ${MAXT}（UI で出せる条件では上限に当たらない）`);
+  if (branchFn && LS) {
+    const R = makeRig(2);
+    const sdt = capSec * 5;   // 速度 5×・1 フレーム 50 ms 超（UI の外）
+    const perFrame = [];
+    let err = null, sumSdt = 0;
+    try {
+      const t0 = R.simT;
+      while (R.simT < t0 + 60 - 1e-9) { const n0 = R.slots[0].ticks.length; R.frame(sdt); sumSdt += sdt; perFrame.push(R.slots[0].ticks.length - n0); }
+    } catch (e) { err = e; }
+    const hz = R.slots[0].ticks.length / R.simT, debt = -R.minTimer;
+    const t60 = R.simT;
+    if (!err) runFor(R, sdtOf(60, 1), 1);
+    const after = R.slots[0].ticks.filter((t) => t >= t60 - 1e-9).length;
+    ok(!err && Math.max(...perFrame) <= MAXT && Math.abs(t60 - sumSdt) < 1e-9 && debt <= P + 1e-12 && Math.abs(after - loopHz) <= 1,
+      `速度 5×・10 fps（sdt ${sdt.toFixed(3)} s・区間 ${LS.liveSlices(sdt, loopHz).map((x) => x.toFixed(3)).join('/')}）: 1 フレームの loop() 最大 ${err ? '例外 ' + err.message : Math.max(...perFrame)} 回（≤ ${MAXT}）・積分した sim 時間 ${t60.toFixed(6)} ＝ Σsdt ${sumSdt.toFixed(6)}・頻度 ${hz.toFixed(2)} Hz（上限で ${(MAXT / sdt).toFixed(1)} Hz に下がる）・負債 ${debt.toFixed(4)} s ≤ ${P}（取りこぼしは捨てる）・60 fps×1× に戻した直後 1 sim 秒の loop() ${after} 回（${loopHz} ± 1）`);
+  } else ok(false, 'UI の外で上限に当たったときの挙動を測れない（loopsched.js が無い）');
+
+  console.log('\nJ-4) sdt ≤ 1 周期のフレーム列で、tick と積分の呼び出しの並び・loopTimer の値が是正前の式と同じ（ビット単位）');
+  // 是正前の式（fee6e7a の main.js frame の分岐。比べるための参照＝ここだけの写し）。
+  const OLD = `slots.forEach((s, i) => {
+        if (!s.running) return;
+        s.loopTimer -= sdt;
+        if (s.loopTimer <= 0) {
+          tickSlot(s, othersFor(edges, i, interact));
+          s.loopTimer += (1 / SIM.loopHz) + (s.world._pendingDelay || 0) / 1000;
+        }
+      });
+      integrateLive(sdt);`;
+  const oldFn = new Function(...PARAMS, OLD);
+  if (branchFn) {
+    const diffs = [];
+    let frames = 0, ticksN = 0;
+    for (const seed of [1, 7, 42]) {
+      let x = seed >>> 0;
+      const rnd = () => { x = (x + 0x6D2B79F5) >>> 0; let t = x; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+      const seq = [];
+      for (let f = 0; f < 3000; f++) {
+        const r = rnd();
+        const fps = r < 0.4 ? 60 : r < 0.6 ? 59 + rnd() * 2 : r < 0.8 ? 61 + rnd() * 120 : 60;   // 60 fps 前後の揺れ（Δt ≤ 16.7 ms 側）
+        const speed = rnd() < 0.5 ? 1 : (rnd() < 0.5 ? 3 : 0.1 + rnd() * 2.9);
+        let sdt = speed * Math.min(capSec, 1 / fps);
+        if (sdt > P) sdt = P;                                         // sdt ≤ 1 周期だけ（ちょうど 1 周期を含む）
+        seq.push({ sdt, delay: rnd() < 0.05 ? Math.floor(rnd() * 300) : 0, flip: rnd() < 0.01 ? Math.floor(rnd() * 4) : -1 });
+      }
+      const logs = [];
+      for (const fn of [branchFn, oldFn]) {
+        const L = [];
+        const sl = [0, 1, 2, 3].map(() => ({ running: true, loopTimer: 0, world: { _pendingDelay: 0 }, n: 0 }));
+        const tickSlot = (s) => { const i = sl.indexOf(s); s.world._pendingDelay = 0; const d = seq[cur].delay * (i + 1) % 250; if (d && s.n % 3 === 0) s.world._pendingDelay += d; s.n++; L.push(`T${i}:${s.loopTimer}`); };
+        const integrateLive = (dt) => L.push(`I:${dt}`);
+        let cur = 0;
+        for (cur = 0; cur < seq.length; cur++) {
+          const q = seq[cur];
+          if (q.flip >= 0) sl[q.flip].running = !sl[q.flip].running;
+          fn(sl, q.sdt, [], false, { loopHz }, tickSlot, () => [], integrateLive, () => [], runLive);
+          L.push(`L:${sl.map((s) => s.loopTimer).join(',')}`);
+        }
+        logs.push(L);
+      }
+      frames += seq.length;
+      ticksN += logs[1].filter((l) => l[0] === 'T').length;
+      const n = Math.max(logs[0].length, logs[1].length);
+      for (let i = 0; i < n; i++) if (logs[0][i] !== logs[1][i]) { diffs.push(`seed ${seed} #${i}: ${logs[0][i]} ≠ 是正前 ${logs[1][i]}`); break; }
+    }
+    ok(diffs.length === 0, `乱数 3 系列 ${frames} フレーム（4 台・loop() ${ticksN} 回・delay と running の切替あり）で呼び出しの並びと loopTimer が是正前の式と一致${diffs.length ? '（' + diffs.join(' ／ ') + '）' : ''}`);
+  }
+
+  console.log('\nJ-5) 配線: main.js が loopsched.js の runLiveFrame で段取りする・loopTimer を main.js で直接いじらない');
+  const MAINJ = readFileSync(join(JS, 'main.js'), 'utf8');
+  ok(/^import \{ runLiveFrame \} from '\.\/loopsched\.js';/m.test(MAINJ), "main.js が './loopsched.js' から runLiveFrame を import");
+  ok(/runLiveFrame\(sdt, SIM\.loopHz, slots,/.test(branch), 'frame の走行中・非ポーズ分岐が runLiveFrame(sdt, SIM.loopHz, slots, …) を呼ぶ');
+  ok(!/loopTimer\s*(?:[-+]=|<=)/.test(fr ? fr.text : ''), 'frame の本文に loopTimer の引き算・足し算・比較が無い（段取りは loopsched.js の 1 か所）');
+  ok(/integrateLive\(dt\)/.test(branch) && /tickSlot\(s, othersFor\(e, i, interact\)\)/.test(branch) && /return s\.world\._pendingDelay \|\| 0;/.test(branch),
+    '分岐の tick は tickSlot(s, othersFor(e, i, interact)) の後に world._pendingDelay を返し、積分は integrateLive(dt)（区間ごと）');
 }
 
 const line = '─'.repeat(64);

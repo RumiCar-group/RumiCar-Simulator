@@ -10,8 +10,12 @@
 // ∴ ここを直したら、実ブラウザゲートで本物との一致を確かめ直す（本物の main.js を直したときも同じ）。
 //
 // product の木は呼び出し側が選ぶ（loadMods(<dir>/public/js)）。改修前の木（fleetEdges が無い）でも動く。
+// BL6（2026-10-17）: loop() の段取り（1 フレームの sdt を loop の周期で刻み、区間ごとに loop() → 積分）は product の
+//   loopsched.js の runLiveFrame をそのまま呼ぶ（main.js frame と同じ関数・写しを作らない）。loopsched.js が無い木（BL6 前）では
+//   その木の main.js と同じ是正前の式（1 フレーム 1 回の `if (s.loopTimer <= 0)`）で回す。
 // ════════════════════════════════════════════════════════════════════════════
 import path from 'path';
+import fs from 'fs';
 import { pathToFileURL } from 'url';
 
 // product のモジュール一式（jsDir = <木>/public/js）。
@@ -19,7 +23,10 @@ export async function loadMods(jsDir) {
   const u = (f) => pathToFileURL(path.join(jsDir, f)).href;
   const [fleet, physics, config, course, runner, api, programs, fitguard, race, dyn, fnv] = await Promise.all(
     ['fleet.js', 'physics.js', 'config.js', 'course.js', 'runner.js', 'api.js', 'programs.js', 'fitguard.js', 'race_engine.js', 'physics_dyn.js', 'fnv1a.js'].map((f) => import(u(f))));
-  return { fleet, physics, config, course, runner, api, programs, fitguard, race, dyn, fnv };
+  // BL6: loopsched.js は BL6 で足した module（無い木では null＝是正前の式で回す）。
+  const ls = path.join(jsDir, 'loopsched.js');
+  const loopsched = fs.existsSync(ls) ? await import(pathToFileURL(ls).href) : null;
+  return { fleet, physics, config, course, runner, api, programs, fitguard, race, dyn, fnv, loopsched };
 }
 
 // main.js の fleetEdgesOf と同じ（改修前の木には fleetEdges が無いので全車のエッジ）。
@@ -57,11 +64,19 @@ export function liveSetup(M, { course, regime, n, mode, userK = 0.8, progKey = '
   return { M, course, slots, nUse, t: 0, frames: 0 };
 }
 
-// 1 フレーム分（sdt = 速度倍率 × min(0.05, Δt)＝main.js frame() と同じ式で呼び出し側が作る）。
-export function liveFrame(L, sdt) {
-  const { M, slots, course } = L;
+// main.js frame の走行中・非ポーズ分岐の loop() の段取り（他車を障害物 ON）。integrate(dt) は main.js integrateLive の写し（呼び出し側）。
+// BL6 後の木: product の runLiveFrame（区間ごとに loop() → integrate(区間)。2 つ目以降の区間の loop() は前の区間を積分した後の車体エッジ）。
+// BL6 前の木: 是正前の式（1 フレーム 1 回・integrate(sdt) を 1 回）。wf_bh5_marshal の自動復帰 OFF の走りも同じ段取りを使う。
+export function liveTicks(M, slots, sdt, integrate) {
   const { fleet, config } = M;
   const edges = fleetEdgesOf(M, slots);
+  if (M.loopsched && typeof M.loopsched.runLiveFrame === 'function') {
+    let e = edges;
+    M.loopsched.runLiveFrame(sdt, config.SIM.loopHz, slots,
+      (s, i) => { if (!e) e = fleetEdgesOf(M, slots); fleet.tickSlot(s, fleet.othersFor(e, i, true)); return s.world._pendingDelay || 0; },
+      (dt) => { integrate(dt); e = null; });
+    return;
+  }
   slots.forEach((s, i) => {
     if (!s.running) return;
     s.loopTimer -= sdt;
@@ -70,17 +85,28 @@ export function liveFrame(L, sdt) {
       s.loopTimer += (1 / config.SIM.loopHz) + (s.world._pendingDelay || 0) / 1000;
     }
   });
-  fleet.applyStartGate(slots, true);
-  if (config.PHYSICS.mode === 'v2') fleet.integrateFleetV2(slots, sdt, course.walls, true, true);
-  else {
-    const max = slots.length > 1 ? (1 / config.SIM.loopHz) : sdt;
-    let rem = sdt;
-    while (rem > 1e-6) {
-      const step = Math.min(max, rem);
-      const e = fleetEdgesOf(M, slots);
-      slots.forEach((s, i) => fleet.integrateSlot(s, step, fleet.othersFor(e, i, true), course.walls, true, slots));
-      rem -= step;
+  integrate(sdt);
+}
+
+// 1 フレーム分（sdt = 速度倍率 × min(0.05, Δt)＝main.js frame() と同じ式で呼び出し側が作る）。
+export function liveFrame(L, sdt) {
+  const { M, slots, course } = L;
+  const { fleet, config } = M;
+  // main.js integrateLive の写し（自動復帰 ON・他車を障害物 ON）
+  const integrate = (dt) => {
+    fleet.applyStartGate(slots, true);
+    if (config.PHYSICS.mode === 'v2') fleet.integrateFleetV2(slots, dt, course.walls, true, true);
+    else {
+      const max = slots.length > 1 ? (1 / config.SIM.loopHz) : dt;
+      let rem = dt;
+      while (rem > 1e-6) {
+        const step = Math.min(max, rem);
+        const e = fleetEdgesOf(M, slots);
+        slots.forEach((s, i) => fleet.integrateSlot(s, step, fleet.othersFor(e, i, true), course.walls, true, slots));
+        rem -= step;
+      }
     }
-  }
+  };
+  liveTicks(M, slots, sdt, integrate);
   L.t += sdt; L.frames++;
 }

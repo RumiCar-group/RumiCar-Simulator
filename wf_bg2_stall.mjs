@@ -712,6 +712,28 @@ const SOLO_LIVE = {
   "舵角限界ベンチ R_out/R_min=0.95〔道幅 3.5 台分〕|dynamic": "7e692a4f",
   "舵角限界ベンチ R_out/R_min=0.95〔道幅 3.5 台分〕|v2": "1564a67c"
 };
+// 【BL6・2026-10-17】ライブの loop() の段取りを「1 フレームの sdt を loop の周期で刻み、区間ごとに loop() → 積分」に変えた（product の
+//   loopsched.js・wf_bg_live.mjs の liveTicks が呼ぶ）。V0 の 2 フレーム目（▶ 直後の長いフレーム＝sdt 0.15 s＝3 周期）だけが sdt > 1 周期で、
+//   是正前は loop() 1 回＋0.15 s の積分、是正後は 0.05 s ごとに loop() → 積分 を 3 回（2・3 回目は前の区間を進めた後のセンサー）。
+//   loopsched.js のある木（BL6 後）は下の SOLO_LIVE_BL6 の 12 本をその値で照合し、無い木（--root で BL6 前の木）は上の値のまま照合する。
+//   実測（2026-10-17・internal docs/stage_bl/bl6/logs/evidence_solo_live_repin.txt）: BL6 前の木 fee6e7a × V0 は上の 27 本と 27/27 一致・
+//   2 フレーム目も 0.05 にした列（全フレーム sdt ≤ 1 周期）では BL6 前と後の木の指紋が 27/27 一致・BL6 後 × V0 で変わるのは 12/27（残り
+//   15 本は追加の 2 回の loop() が同じ指令を出した）。∴ 変わったのは sdt > 1 周期のフレームの段取りだけ。
+const SOLO_LIVE_BL6 = {
+  "オーバル|v2": "2d10efbe",
+  "トライアングル|standard": "2dc26c53",
+  "トライアングル|v2": "21e4b017",
+  "ツイスティ・レイアウト|standard": "a3632d27",
+  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|standard": "241ee675",
+  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|dynamic": "9898780e",
+  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|v2": "8a5ad19b",
+  "架空峠 ロング・ワインディング(激坂)〔道幅 4.5 台分〕|standard": "31cebc1a",
+  "架空峠 ロング・ワインディング(激坂)〔道幅 4.5 台分〕|dynamic": "a6d03baf",
+  "架空峠 ロング・ワインディング(激坂)〔道幅 4.5 台分〕|v2": "08b3fa82",
+  "舵角限界ベンチ R_out/R_min=0.95〔道幅 3.5 台分〕|dynamic": "166930ab",
+  "舵角限界ベンチ R_out/R_min=0.95〔道幅 3.5 台分〕|v2": "f7fb5ef5"
+};
+
 console.log(`\nE) 1 台走行の不変（改修前ツリーの値と突き合わせ: レース ${Object.keys(SOLO_RACE).length} 本・ライブ ${Object.keys(SOLO_LIVE).length} 本）`);
 {
   const p = P.programs.PROGRAM_BY_KEY.py_normal_fr;
@@ -723,7 +745,8 @@ console.log(`\nE) 1 台走行の不変（改修前ツリーの値と突き合わ
   }
   ok(bad.length === 0, `レース 1 台の毎 tick 全状態 traceHash が改修前と一致${bad.length ? '（不一致 ' + bad.length + ': ' + bad.slice(0, 3).join(' / ') + '）' : ''}`);
   const bad2 = [];
-  for (const [k, want] of Object.entries(SOLO_LIVE)) {
+  for (const [k, want0] of Object.entries(SOLO_LIVE)) {
+    const want = (P.loopsched && SOLO_LIVE_BL6[k]) || want0;   // BL6 後の木は SOLO_LIVE_BL6 の値（上の注記）
     const [name, mode] = k.split('|');
     const L = liveSetup(P, { name, n: 1, mode });
     const parts = [];

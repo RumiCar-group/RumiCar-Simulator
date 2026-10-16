@@ -104,6 +104,7 @@ import { initRaceUI } from './race_ui.js';
 import { initCarCrud } from './car_crud.js';
 import { moderate } from './moderate.js';   // BL1: 質問・提案の投稿前チェック (純関数)
 import { escapeHtml } from './escape.js';   // BL4: innerHTML のエスケープ (文字列にできない値でも投げない・race_ui/car_crud へ注入)
+import { runLiveFrame } from './loopsched.js';   // BL6: ライブの loop() の段取り (1 フレームを loop の周期で刻む・純関数＋呼び出し口)
 
 const $ = (id) => document.getElementById(id);
 
@@ -535,15 +536,14 @@ function frame(t) {
         else slots.forEach((s, i) => integrateSlot(s, 1 / SIM.loopHz, othersFor(edges, i, interact), course.walls, recover, slots));
       }
     } else {
-      slots.forEach((s, i) => {
-        if (!s.running) return;
-        s.loopTimer -= sdt;
-        if (s.loopTimer <= 0) {
-          tickSlot(s, othersFor(edges, i, interact));
-          s.loopTimer += (1 / SIM.loopHz) + (s.world._pendingDelay || 0) / 1000;
-        }
-      });
-      integrateLive(sdt);
+      // BL6: 1 フレームの sdt を loop の周期 1/loopHz で刻み、区間ごとに「期限の来た車の loop() を 1 回 → その区間を積分」
+      //   (loopsched.js の冒頭。是正前は loop() が 1 フレーム 1 回までで、sdt > 1/loopHz の低 fps×高倍率で loop() が落ち負債が溜まった)。
+      //   sdt ≤ 1/loopHz のフレームは区間 1 つ＝是正前と同じ呼び出し。2 つ目以降の区間の loop() は、前の区間を積分した後の
+      //   車体エッジで他車を見る (1 つ目は上の edges＝是正前と同じ)。1 フレームの loop() は 1 台 LIVE_MAX_TICKS_PER_FRAME 回まで。
+      let e = edges;
+      runLiveFrame(sdt, SIM.loopHz, slots,
+        (s, i) => { if (!e) e = fleetEdgesOf(slots); tickSlot(s, othersFor(e, i, interact)); return s.world._pendingDelay || 0; },
+        (dt) => { integrateLive(dt); e = null; });
     }
   } else {
     // 手動運転 (選択車のみ動く)
