@@ -247,7 +247,7 @@ const EXPECTED_STALE = [
   'pm.s1.models', 'pm.s11.cant', 'pm.s7.similar', 'rg.design.body',
   'rg.feel.body', 'rg.gear.body', 'rg.howto.body', 'rg.intro',
   'rg.layers.body', 'rg.recon.body', 'rg.rules.body', 'spec.lang.subset',
-  'spec.misc.storage', 'spec.veh.speedDisp', 'sys.arch.body', 'sys.ls.body',
+  'spec.misc.storage', 'spec.veh.speedDisp', 'sys.arch.body',
   'usage.langNote',
 ];
 const normInline = (x) => x.replace(/\s+/g, ' ').replace(/\s+</g, '<').replace(/>\s+/g, '>').trim();

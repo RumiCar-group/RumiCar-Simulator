@@ -30,7 +30,7 @@ import { CAR, CONST, TRAIL, CAR_TYPE_BY_KEY, CAR_TYPE_DEFAULT, MASS_REF, MASS, R
 //              リアだけ明確に低いと a·fyF−b·fyR>0 が残って回頭が自走する。
 //              ノーマル車には適用しない (滑らない車まで滑り出すため)。
 //   steerK   : 実効舵角の一定トリム。kin 変調層シム (下記) で吸収しきれない動力学側の
-//              残差を test_dyn.mjs「calib fit」で較正する。
+//              残差を test_dyn.mjs「calib fit」で較正した (test_dyn.mjs は開発時の検証スクリプト（非公開）で、公開リポジトリには含まれない)。
 //
 // 較正の設計 (試行の記録):
 //   剛性比 CfK/CrK で速度依存を作る → 剛性が極端 (Cr 4.0 等) になり過渡がもっさりして
@@ -45,7 +45,7 @@ export const DYN_DRIVE = {
   awd: { aFrac: 0.50, split: [0.4, 0.6], CfK: 1.00, CrK: 1.10, muRK: 0.95, steerK: 1.040 },
 };
 
-// 共通チューニング定数 (test_dyn.mjs のシナリオ群で較正)。
+// 共通チューニング定数 (test_dyn.mjs＝開発時の検証スクリプト（非公開）のシナリオ群で較正)。
 // Phase F1: 領域(regime)依存のスカラーをここに集約し、applyRegime() が領域プリセットの値を
 // 書き込む。卓上(tabletop)プリセット = 下記の現値そのもの (f0_regime Part A の byte 再現契約)。
 export const DYN = {
