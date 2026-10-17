@@ -20,11 +20,11 @@
   "canonicalNode": {
     "node": "22.22.1",
     "v8": "12.4.254.21-node.35",
-    "resultSha256": "2f1dd5b26bbcdd32f883290415440bc0fb2f455b22577992600dbc6e12d46ea4",
+    "resultSha256": "33882c1d4091a0e4693fad6ad5edc82520b488ce1564ab86d4442aee1a02824d",
     "pinnedAt": "2026-10-17",
     "eventId": "official-sample-circuit",
-    "appVersion": "v10.4.0",
-    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=e9f1da0b 照合で検証済。理由: BL8 v10.4.0 版バンプ（APP_VERSION が engineFingerprint 経由で resultSha256 を変える・AQ-1。走行物理は無改変・verifyHash e9f1da0b 不変）"
+    "appVersion": "v10.5.0",
+    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=e9f1da0b 照合で検証済。理由: BM7 v10.5.0 版バンプ（APP_VERSION が engineFingerprint 経由で resultSha256 を変える・AQ-1。走行物理は無改変・verifyHash e9f1da0b 不変）"
   },
   "history": [
     {
