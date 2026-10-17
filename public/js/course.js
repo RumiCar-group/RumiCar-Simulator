@@ -4,6 +4,12 @@
 //   finish.fx/fy = 周回を計上する正方向ベクトル (省略時は start.theta から導出)。
 import { VIEW, GRID } from './config.js';
 
+// BM6: 名前の無いコースに付ける既定名 (kind ごと)。**データの識別子**であって表示文ではない — 保存 (rumicar.courses)・
+//   公式記録の course (race_engine.js の result)・練習記録の旧鍵がこの名前で引くので、言語で変えない (ja のまま・改修前と同値)。
+//   英語表示は main.js の courseDisplayName が name がこの値と一致するときだけ i18n の course.defaultName.<kind> に差し替える。
+//   normalizeCourse は kind を持たない任意データを raw と同じ既定名にする。
+export const DEFAULT_COURSE_NAME = Object.freeze({ raw: 'カスタム', track: 'トラック', annulus: 'アニュラス', touge: '峠' });
+
 function rect(x1, y1, x2, y2) {
   return [
     { x1, y1, x2: x2, y2: y1 },
@@ -181,7 +187,7 @@ function buildTrack(spec) {
   // AS10: 中心線をコースへ持たせる (カント gLat の道追従に使う。track は閉ループ)。fitAndPlace が
   // 平行移動して car.x/y と同一世界系に揃える。**追加のみ**で既存の参照は無し (elev3d の立体プレビューは
   // main.js が `c.touge && c.elev` で門番するので track では点かない)。
-  const c = fitAndPlace({ name: spec.name || 'トラック', walls, start, finish, centerline: cl });
+  const c = fitAndPlace({ name: spec.name || DEFAULT_COURSE_NAME.track, walls, start, finish, centerline: cl });
   c.bank = +(spec.bank || 0);          // 横勾配 (カント)[度]・未指定=0=完全 no-op (AS10)
   return c;
 }
@@ -217,7 +223,7 @@ function buildAnnulus(spec) {
   const c = Math.cos(a0), s = Math.sin(a0);
   const start = { x: midR * c, y: midR * s, theta: a0 + Math.PI / 2 };
   const finish = { x1: oR * c, y1: oR * s, x2: iR * c, y2: iR * s };
-  return fitAndPlace({ name: spec.name || 'アニュラス', walls, start, finish });
+  return fitAndPlace({ name: spec.name || DEFAULT_COURSE_NAME.annulus, walls, start, finish });
 }
 
 // ===== 峠 (touge) 型: スタート→ゴールの下り道 =====
@@ -283,7 +289,7 @@ function buildTouge(spec) {
   const thG = Math.atan2(cl[e][1] - q[1], cl[e][0] - q[0]);
   const gnx = -Math.sin(thG) * hw, gny = Math.cos(thG) * hw;
   const finish = { x1: q[0] + gnx, y1: q[1] + gny, x2: q[0] - gnx, y2: q[1] - gny, fx: Math.cos(thG), fy: Math.sin(thG) };
-  const c = fitAndPlace({ name: spec.name || '峠', walls, start, finish, centerline: cl });
+  const c = fitAndPlace({ name: spec.name || DEFAULT_COURSE_NAME.touge, walls, start, finish, centerline: cl });
   c.touge = true;
   c.downhill = +(spec.downhill || 0);
   c.bank = +(spec.bank || 0);          // 横勾配 (カント)[度]・未指定=0=完全 no-op (AS10)
@@ -311,7 +317,7 @@ export function buildFromSpec(spec) {
   else if (spec.kind === 'touge') c = buildTouge(spec);
   else if (spec.kind === 'raw') {
     c = withForward({
-      name: spec.name || 'カスタム',
+      name: spec.name || DEFAULT_COURSE_NAME.raw,
       walls: (spec.walls || []).map(w => ({ x1: +w.x1, y1: +w.y1, x2: +w.x2, y2: +w.y2 })),
       bounds: { w: +(spec.bounds?.w || 3.0), h: +(spec.bounds?.h || 2.0) },
       start: { x: +(spec.start?.x ?? 0.3), y: +(spec.start?.y ?? 0.3), theta: +(spec.start?.theta ?? 0) },
@@ -365,13 +371,15 @@ export function buildFromSpec(spec) {
 // JSON 読込失敗時の組込みフォールバック (中核 4 コース)。通常は courses.json が全コースを供給する。
 // RumiCar は左右の壁に追従して走るため、フォールバックも必ず内外2本の壁をもつ閉廊下にする
 // (外周だけの「オープン」コースは不適なので置かない)。
+// BM6: 英語表示のため name_en を持つ (courses.json の同名コースと同じ訳。リングは courses.json に無いので新しい訳)。
+//   name は識別子のまま (改修前と同じ ja)。name_en は表示専用のデータ透過 (buildFromSpec が c.name_en に写すだけ)。
 const FALLBACK_SPECS = [
-  { name: 'リング', kind: 'raw', bounds: { w: 3.0, h: 2.0 },
+  { name: 'リング', name_en: 'Ring', kind: 'raw', bounds: { w: 3.0, h: 2.0 },
     walls: [...rect(0, 0, 3.0, 2.0), ...rect(0.85, 0.65, 2.15, 1.35)],
     start: { x: 0.42, y: 0.32, theta: 0 }, finish: { x1: 0.42, y1: 0.04, x2: 0.42, y2: 0.61 } },
-  { name: 'オーバル', kind: 'track', shape: 'ellipse', rx: 1.20, ry: 0.75, width: 0.55, samples: 80 },
-  { name: 'ヘアピン', kind: 'track', shape: 'stadium', L: 1.7, rr: 0.55, width: 0.48 },
-  { name: '90度サーキット', kind: 'track', shape: 'superellipse', rx: 1.15, ry: 0.85, k: 0.5, width: 0.55, samples: 100 },
+  { name: 'オーバル', name_en: 'Oval', kind: 'track', shape: 'ellipse', rx: 1.20, ry: 0.75, width: 0.55, samples: 80 },
+  { name: 'ヘアピン', name_en: 'Hairpin', kind: 'track', shape: 'stadium', L: 1.7, rr: 0.55, width: 0.48 },
+  { name: '90度サーキット', name_en: '90° Circuit', kind: 'track', shape: 'superellipse', rx: 1.15, ry: 0.85, k: 0.5, width: 0.55, samples: 100 },
 ];
 
 // プリセット = 「呼ぶとコースを生成する関数」の配列。
@@ -602,7 +610,7 @@ export function acceptCourseData(data, opts) {
 // 任意データ (エディタ/JSON) をコースとして正規化
 export function normalizeCourse(data) {
   const c = {
-    name: data.name || 'カスタム',
+    name: data.name || DEFAULT_COURSE_NAME.raw,
     walls: (data.walls || []).map(w => ({ x1: +w.x1, y1: +w.y1, x2: +w.x2, y2: +w.y2 })),
     bounds: { w: +(data.bounds?.w || 3.0), h: +(data.bounds?.h || 2.0) },
     start: {

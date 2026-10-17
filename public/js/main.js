@@ -33,7 +33,9 @@ function acceptCourse(data, own) {
 }
 // 取り込みを断ったことを 1 行で知らせる文。古い messages.js がキャッシュに残ると t() はキー名だけを
 // 返すので、そのときは言語に依らない形で出す (名前と理由を消さない・loadCommunityCourses と同じ型)。
-function courseBadLine(name, why) {
+// BM6 fix1: 名前が既定名 (カスタム 等) なら英語表示で訳す (courseNameText・ja と既定名以外は受け取った値のまま)。
+function courseBadLine(name0, why) {
+  const name = courseNameText(name0);
   return hasKey('log.courseBad') ? t('log.courseBad', { name, why }) : `⚠ ${name} (${why})`;
 }
 // BE6 (⑥): 枠の外に端点がある壁を 1 行知らせる。枠を縮めても壁は動かさない (applyEditDims) ので、自分のコース
@@ -1063,8 +1065,8 @@ function hostOfficialEvent() {
   const cref = officialCourseRef(course);
   if (cref.ref == null) {
     const k = cref.unknown ? 'event.share.courseUnknown' : 'event.share.courseClash';
-    $('evMsg').textContent = hasKey(k) ? t(k, { name: cref.clash != null ? cref.clash : course.name })
-                                       : `⚠ ${cref.clash != null ? cref.clash : course.name}`;
+    $('evMsg').textContent = hasKey(k) ? t(k, { name: cref.clash != null ? cref.clash : courseDisplayName(course) })
+                                       : `⚠ ${cref.clash != null ? cref.clash : courseDisplayName(course)}`;
     return;
   }
   const event = {
@@ -1133,7 +1135,7 @@ function resolveRaceCourse(courseRef, opts) {
   const p = presetByName(courseRef);                                                    // 組込コース名
   if (p) return p;
   const { cc, n } = communityByRef(courseRef);                                          // 投稿コース (BE6: 1 件だけ)
-  if (n > 1 && !quiet && hasKey('log.courseAmbiguous')) logLine(t('log.courseAmbiguous', { name: courseRef, n }));
+  if (n > 1 && !quiet && hasKey('log.courseAmbiguous')) logLine(t('log.courseAmbiguous', { name: courseNameText(courseRef), n }));
   return cc ? accept(cc.data, courseRef) : null;
 }
 
@@ -1218,7 +1220,7 @@ function raceCourseUnitNow(ref) {
   if (typeof ref === 'object') {
     // 表示名は courseDisplayName と同じ規則 (en で name_en)。検査で断られた def は name が文字列とは限らない。
     const nm = (getLang() === 'en' && typeof ref.name_en === 'string' && ref.name_en) ? ref.name_en
-      : ((typeof ref.name === 'string' && ref.name) ? ref.name : '(courseDef)');
+      : ((typeof ref.name === 'string' && ref.name) ? courseNameText(ref.name) : '(courseDef)');
     const label = hasKey('rank.course.bundled') ? t('rank.course.bundled', { name: nm }) : nm;
     const rc = resolveRaceCourse(ref, { quiet: true });
     return rc ? { id: id(rc), label } : { label };   // 解決できなければ鍵は race_ladder の既定 (def の指紋)
@@ -1552,9 +1554,36 @@ function courseDisplayName(c) {
   if (!c) return '';
   if (typeof c === 'string') {
     const p = presetByName(c);
-    return (getLang() === 'en' && p && p.name_en) ? p.name_en : c;
+    return (getLang() === 'en' && p && p.name_en) ? p.name_en : courseNameText(c);
   }
-  return (getLang() === 'en' && c.name_en) ? c.name_en : (c.name || '');
+  return (getLang() === 'en' && c.name_en) ? c.name_en : (courseNameText(c.name) || '');
+}
+// BM6: 名前の無いコースに course.js が付ける既定名 (DEFAULT_COURSE_NAME＝カスタム/トラック/アニュラス/峠) は ja のまま
+//   保存・公式記録の識別子になる (normalizeCourse の出力は不変) ので、英語表示のときだけ course.defaultName.<kind> に訳す。
+//   ja・既定名以外・文字列でない名前は受け取った値をそのまま返す (改修前と同値)。名前空間 import で受ける (BA1 の注記)。
+function courseNameText(name) {
+  const D = courseParts.DEFAULT_COURSE_NAME;
+  if (getLang() !== 'en' || !D || typeof name !== 'string') return name;
+  for (const k of Object.keys(D)) if (D[k] === name) return hasKey(`course.defaultName.${k}`) ? t(`course.defaultName.${k}`) : name;
+  return name;
+}
+// BM6 fix1: コース名の入力欄 (#edName) に読み込んだコースの名前を出す。既定名は英語表示で訳して見せ (courseNameText)、
+//   保存・投稿 (#edSave・#edShare) で欄が見せたままなら識別子 (ja の既定名) へ戻す＝保存データは言語に依らない。
+//   利用者が欄を書き換えたら書いた値をそのまま使う (従来どおり)。ja では見せる値＝識別子なので従来と同じ。
+let edNameShown = null;   // { ident: 識別子 (文字列), text: 欄に見せた値 }
+function setEdNameFromCourse(name) {
+  const el = $('edName'); if (!el) return;
+  el.value = courseNameText(name);
+  edNameShown = (typeof name === 'string') ? { ident: name, text: el.value } : null;
+}
+function edNameValue() {
+  const el = $('edName'); if (!el) return '';
+  const v = el.value.trim();
+  return (edNameShown && v !== '' && v === edNameShown.text.trim()) ? edNameShown.ident.trim() : v;
+}
+function refreshEdNameShown() {
+  const el = $('edName');
+  if (el && edNameShown && el.value === edNameShown.text) setEdNameFromCourse(edNameShown.ident);
 }
 function courseDisplayDesc(c) {
   return (getLang() === 'en' && c && c.desc_en) ? c.desc_en : ((c && c.desc) || '');
@@ -1705,7 +1734,7 @@ function rebuildCourseList(selectName) {
     //   保存すると値が保存順で入れ替わり、🗑 と再保存の後に走行中のコースの値・共有 URL が別の保存コースを指した。
     const key = (courseSources[n] || n.startsWith('gh:') || n.startsWith('★')) ? '★' + n : n;
     courseSources[key] = { type: 'saved', data: saved[n], savedName: n };
-    addOpt(sel, '★ ' + n, key);
+    addOpt(sel, '★ ' + courseNameText(n), key);   // BM6 fix1: 表示だけ既定名を訳す (value・保存名は不変)
   }
   // GitHub 投稿コース (プリセット名との衝突を避けるため value を 'gh:' で前置)
   for (const c of communityCourses) {
@@ -1794,8 +1823,8 @@ function finishPendingShareCourse() {
   if (!key) {
     // BE6: 名前が複数の投稿コースに当たるなら「見つからない」でなく「決められない」と言う (実際には在る)。
     const n = communityByRef(want).n;
-    logLine(n > 1 && hasKey('log.courseAmbiguous') ? t('log.courseAmbiguous', { name: want, n })
-                                                   : t('log.share.course.missing', { name: want }));
+    logLine(n > 1 && hasKey('log.courseAmbiguous') ? t('log.courseAmbiguous', { name: courseNameText(want), n })
+                                                   : t('log.share.course.missing', { name: courseNameText(want) }));
     updateShareHash(); return;
   }
   // 見つかったが利用者が既に自分でコースを決めているなら、**黙って何もしない** (上書きしない)。
@@ -1863,7 +1892,8 @@ function enforceFitRatio(reason) {
         const v = $('carScalev'); if (v) v.textContent = k.toFixed(1) + '×';
         if (!running) rebuildSpawns(slots, course);
       },
-      log: (key, params) => logLine(t(key, params)),
+      // BM6 fix1: fitguard.js の告知は course.name をそのまま {name} に入れる (判定コアは i18n を知らない) ので、ここで既定名を訳す。
+      log: (key, params) => logLine(t(key, (params && Object.prototype.hasOwnProperty.call(params, 'name')) ? { ...params, name: courseNameText(params.name) } : params)),
     };
     const r = settleFitRatio(course, {
       regime: sel.value,
@@ -1883,12 +1913,12 @@ function enforceFitRatio(reason) {
       rebuildSpawns(slots, course);
       buildFleetColumns();
       selectCar(activeIdx);
-      logLine(t(r.capZero ? r.zeroKey : 'log.capReduced', { name: course.name, n: capN, was }));
+      logLine(t(r.capZero ? r.zeroKey : 'log.capReduced', { name: courseNameText(course.name), n: capN, was }));
     } else if (r.capZero) {
       // 減らす台数が無い (既に 1 台・または走行中で splice しない) 場合も、実態ゼロは必ず伝える。
       // **文言は専用のもの (zeroKeyOnly)**: ここは台数を変えていないので「{was} 台から {n} 台にします」
       // とは言わない (AZ6・していないことを言わない)。
-      logLine(t(r.zeroKeyOnly, { name: course.name }));
+      logLine(t(r.zeroKeyOnly, { name: courseNameText(course.name) }));
     }
     warnFragileClearance();   // Stage AI: 比率補正/N台縮小が落ち着いた配置で連続クリアランスを監視
   } finally {
@@ -2109,7 +2139,7 @@ function applyEdit() {
   currentCourseKey = savedKeyOf(c.name) || (courseSources[c.name] ? c.name : '');
   rebuildCourseList();
   syncButtons();
-  logLine(t('log.courseApplied', { name: c.name }));
+  logLine(t('log.courseApplied', { name: courseNameText(c.name) }));
   noteWallsOutside(c);   // BE6 (⑥): ✔適用も黙って通さない (走るコースに見えない壁が残る)
 }
 
@@ -2392,6 +2422,14 @@ if (optPhysEl) optPhysEl.addEventListener('change', (e) => {
 // 領域(regime)切替: 物理スケール (長さ/速度/μ/重力) のプリセットを適用する。車体スケールと
 // ToF レンジが連動するため全車を初期位置へリセット (物理モデル切替と同じ扱い)。動的相似なので
 // 同じプログラムでも領域を変えると挙動の意味が変わる (Ay*=(v²/R)/(μg) の支配比は不変)。
+// BM6: 領域の表示名/説明 (log.regime の {name}/{desc})。REGIMES の name/desc は物理側 (physics_dyn.js applyRegime の
+//   REGIME_STATE.active) も読むので書き換えず、i18n の regime.<REGIMES のキー>.name/desc を引く (ja は REGIMES の原文と同文)。
+//   キーは REGIMES の中で r と同一のオブジェクトの名前 (applyRegime が返す領域)。カタログに無い領域は REGIMES の原文へ。
+function regimeText(r, field) {
+  const k = Object.keys(REGIMES).find((x) => REGIMES[x] === r);
+  if (k && hasKey(`regime.${k}.${field}`)) return t(`regime.${k}.${field}`);
+  return (r && r[field]) || '';
+}
 const regimeEl = $('regimeSel');
 if (regimeEl) regimeEl.addEventListener('change', (e) => {
   const r = applyRegime(e.target.value);  // DYN/CAR + 幾何スケール + ToF レンジを書き換える
@@ -2408,7 +2446,7 @@ if (regimeEl) regimeEl.addEventListener('change', (e) => {
   rebuildSpawns(slots, course);
   stopAuto();   // BL2: 走行中に変えてもコード表示・■ を停止の姿へ戻す (停止は stopAuto の 1 箇所だけ)
   // 車体スケール表示はユーザー倍率 (slider) のまま。実効サイズは領域倍率×ユーザー倍率。
-  logLine(t('log.regime', { name: r.name, desc: r.desc || '', size: (r.L / 0.13).toFixed(1), mm: r.sensorMaxMm }));
+  logLine(t('log.regime', { name: regimeText(r, 'name'), desc: regimeText(r, 'desc'), size: (r.L / 0.13).toFixed(1), mm: r.sensorMaxMm }));
   // カリキュラム案内: 各領域に合うサンプルへ誘導する。
   if (e.target.value === 'fullscale') {
     logLine(t('log.learn.fullscale'));
@@ -2649,6 +2687,7 @@ fleetCols.addEventListener('change', (e) => {
     // ランキング (JS 生成) が開いていれば現在言語で作り直す (W6)。
     if ($('dlgRankings') && $('dlgRankings').open) renderRankings();
     setEdNameDefault();    // コース名の既定値も言語に追従 (未編集時のみ)
+    refreshEdNameShown();  // BM6 fix1: 訳して見せた既定名も言語に追従 (未編集時のみ)
     updateShareHash();     // 言語切替を共有 hash に反映 (AF2)
     _driveSig = null;      // 走行状態 live region を次フレームで現在言語へ再描画 (AF3)
   });
@@ -2706,7 +2745,8 @@ $('askSendBtn').addEventListener('click', () => {
   }
   const m = moderate(title + '\n' + body);
   if (!m.ok) {
-    msg.textContent = t('ask.msg.blocked', { word: m.word });
+    // BM6: NG 語以外の理由 (reason＝言語に依らないコード) は ask.reason.<reason> で訳す。NG 語は原形をそのまま出す。
+    msg.textContent = t('ask.msg.blocked', { word: m.reason ? (hasKey(`ask.reason.${m.reason}`) ? t(`ask.reason.${m.reason}`) : m.reason) : m.word });
     msg.style.color = 'var(--red)'; return;
   }
   // GitHub Issue の新規作成画面を事前入力で開く (投稿者自身のアカウントで投稿 → Fable/他者が回答)
@@ -2774,7 +2814,7 @@ $('edSave').addEventListener('click', () => {
   if (!editor) return;
   // BE6 (⑤): trim を既定名の**前**に置く。旧式 `(value || 既定).trim()` は空白だけの名前を '' にして保存し、
   // 保存名 '' のコースは option value も '' になり、選べても normalizeCourse が名前を『カスタム』に畳んでいた。
-  const name = ($('edName').value.trim() || t('ed.name.default'));
+  const name = (edNameValue() || t('ed.name.default'));   // BM6 fix1: 訳して見せた既定名は識別子 (ja) へ戻して保存する
   editor.course.name = name;
   // BF1: 書き込めなかった (容量超過・保存不可) ときは「保存しました」を出さない (失敗は AP4 のハンドラが 1 行出す)。
   // 古い course_editor.js がキャッシュに残るブラウザでは戻り値が undefined＝従来どおり出す (false のときだけ出さない)。
@@ -2786,7 +2826,7 @@ $('edSave').addEventListener('click', () => {
   rebuildCourseList();
   const savedKey = savedKeyOf(name);
   if (savedKey != null) { $('courseSel').value = savedKey; courseSelValue = savedKey; }
-  if (stored) logLine(t('log.courseSaved', { name }));
+  if (stored) logLine(t('log.courseSaved', { name: courseNameText(name) }));
   noteWallsOutside(editor.toJSON());
 });
 $('edExport').addEventListener('click', () => {
@@ -2813,17 +2853,17 @@ $('edImport').addEventListener('change', async (ev) => {
     if (!r.ok) { logLine(courseBadLine(f.name, r.why)); return; }
     editor.load(r.course);
     setView(editor.course);
-    $('edName').value = editor.course.name;
+    setEdNameFromCourse(editor.course.name);   // BM6 fix1: 既定名は英語表示で訳して見せる (保存時に識別子へ戻す)
     updateEdDims();
     syncEdDimInputs();
-    logLine(t('log.courseJsonLoaded', { name: editor.course.name || '' }));
+    logLine(t('log.courseJsonLoaded', { name: courseNameText(editor.course.name) || '' }));
     noteWallsOutside(editor.toJSON());   // BE6 (⑥): own で通した枠の外の壁を知らせる
   } catch (e) { logLine(t('log.err.json', { e: e.message })); }
 });
 $('edShare').addEventListener('click', () => {
   if (!editor) return;
   const json = editor.toJSON();
-  json.name = ($('edName').value.trim() || (json.name || '').trim() || t('ed.name.default'));   // BE6: 空白だけの名前を既定名へ (#edSave と同じ)
+  json.name = (edNameValue() || (json.name || '').trim() || t('ed.name.default'));   // BE6: 空白だけの名前を既定名へ (#edSave と同じ)
   // BC3 (⑦): 投稿しても、各利用者のアプリは loadCommunityCourses の検査 (BB2・通常基準) で落とすので
   // 一覧に載らない。それを**投稿する前に**知らせる。書き出し自体は止めない (手元のファイルは利用者のもの
   // なので人質にしない)。ここは own ではなく通常基準で見る — 配る先は他人の一覧だから。
@@ -2839,7 +2879,7 @@ $('edShare').addEventListener('click', () => {
   // 開けなかったときに「開いた GitHub のページに」と言わない (矛盾する 2 行を出さない)。
   if (r.started) {
     logLine(t(r.opened ? 'log.courseSubmitReady' : 'log.courseSubmitSavedOnly',
-              { name: json.name, file: r.filename }));
+              { name: courseNameText(json.name), file: r.filename }));
   }
 });
 $('edDelete').addEventListener('click', () => {
@@ -2847,7 +2887,7 @@ $('edDelete').addEventListener('click', () => {
   // 旧式 `loadSavedCourses()[value]` のままだと、プリセット『オーバル』を選んで 🗑 を押すと同名の保存コースが消えた。
   const src = courseSources[$('courseSel').value];
   const n = src && src.type === 'saved' ? src.savedName : null;
-  if (n != null && loadSavedCourses()[n]) { deleteCourse(n); rebuildCourseList(); logLine(t('log.savedCourseDeleted', { name: n })); }
+  if (n != null && loadSavedCourses()[n]) { deleteCourse(n); rebuildCourseList(); logLine(t('log.savedCourseDeleted', { name: courseNameText(n) })); }
   else logLine(t('log.presetNoDelete'));
 });
 $('edApply').addEventListener('click', applyEdit);
@@ -2880,7 +2920,9 @@ $('dataImport').addEventListener('change', async (ev) => {
     const res = applyImport(localStorage, data, { overwrite });
     if (!overwrite && res.applied.length === 0) { logLine(t('log.backup.cancelled')); return; }
     logLine(t('log.backup.imported', { applied: res.applied.length, skipped: res.skipped.length }));
-  } catch (e) { logLine(t('log.backup.err', { e: e.message })); }
+  } catch (e) {   // BM6: parseBackup の Error は i18nCode を持つ (data_backup.js)。JSON.parse の SyntaxError 等は従来どおり message
+    logLine(t('log.backup.err', { e: (e && e.i18nCode && hasKey(`backup.err.${e.i18nCode}`)) ? t(`backup.err.${e.i18nCode}`, e.vars) : e.message }));
+  }
 });
 
 // ---- 車両のマウス移動 (編集中以外) ----

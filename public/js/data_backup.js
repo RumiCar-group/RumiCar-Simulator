@@ -38,18 +38,28 @@ export function makeBackupEnvelope(storage, appVersion) {
   };
 }
 
-// 封筒を検証し {key: stringValue} を取り出す (キー昇順)。不正なら Error を投げる。
+// BM6: 読込失敗の Error は言語に依らないコード i18nCode (と差し込む値 vars) を持つ。表示文は main.js が
+//   i18n の backup.err.<i18nCode> で引く (ja は改修前の Error 文と同文)。message は開発者向けの英文 (画面には出さない)。
+//   改修前は message が日本語固定で、main.js が log.backup.err の {e} にそのまま入れたため英語表示でも日本語が出た。
+function backupError(code, message, vars) {
+  const e = new Error('backup: ' + message);
+  e.i18nCode = code;
+  if (vars) e.vars = vars;
+  return e;
+}
+
+// 封筒を検証し {key: stringValue} を取り出す (キー昇順)。不正なら Error を投げる (上の backupError)。
 // `rumicar.` 以外のキーは無視 (他アプリの混入を取り込まない安全側)。値は文字列必須。
 export function parseBackup(obj) {
-  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw new Error('backup: 形式が不正です');
-  if (obj.format !== BACKUP_FORMAT) throw new Error('backup: format が一致しません');
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) throw backupError('shape', 'not a backup object');
+  if (obj.format !== BACKUP_FORMAT) throw backupError('format', 'format does not match');
   const src = obj.data;
-  if (!src || typeof src !== 'object' || Array.isArray(src)) throw new Error('backup: data がありません');
+  if (!src || typeof src !== 'object' || Array.isArray(src)) throw backupError('noData', 'no data');
   const keys = Object.keys(src).filter(k => k.startsWith(BACKUP_PREFIX)).sort();
   const out = {};
   for (const k of keys) {
     const v = src[k];
-    if (typeof v !== 'string') throw new Error('backup: 値が文字列でありません (' + k + ')');
+    if (typeof v !== 'string') throw backupError('notString', 'value is not a string (' + k + ')', { key: k });
     out[k] = v;
   }
   return out;

@@ -544,7 +544,7 @@ function verifyOfficialLocally(race) {
   const note = $('ofVerifyNote');
   const rcourse = resolveRaceCourse(event.course);
   if (!rcourse) {
-    const cn = (event.course && typeof event.course === 'object') ? (event.course.name || '') : event.course;
+    const cn = (event.course && typeof event.course === 'object') ? courseDisplayName(event.course) : event.course;   // BM6 fix1: 埋め込み def の既定名を英語表示で訳す (ja は name || '' と同値)
     if (note) note.innerHTML = `<p class="official-verify-note warn">${escapeHtml(t('official.verify.noCourse', { name: cn }))}</p>`;
     return;
   }
@@ -584,7 +584,7 @@ function verifyOfficialLocally(race) {
   } catch (e) {
     // AZ5: 収容 0 台 (NO_ROOM) は技術メッセージで濁さず専用文言で出す。ここは**凍結グリッドが無い
     //   旧記録**の再走でだけ起きうる (grid があれば fitGuard は発火しない ＝ 公式記録の再現性に影響しない)。
-    const cn0 = (event.course && typeof event.course === 'object') ? (event.course.name || '') : event.course;
+    const cn0 = (event.course && typeof event.course === 'object') ? courseDisplayName(event.course) : event.course;   // BM6 fix1: 埋め込み def の既定名を英語表示で訳す (ja は name || '' と同値)
     const msg = (e && e.code === 'NO_ROOM') ? t('official.verify.noRoom', { name: cn0 })
                                             : t('log.race.err', { e: (e && e.message) || e });
     if (note) note.innerHTML = `<p class="official-verify-note warn">${escapeHtml(msg)}</p>`;
@@ -1170,7 +1170,7 @@ function ghostVsWorldRun(cls, course) {
       physics: es.physics, recon: es.recon, wear: es.wear,
       ghost: true });
   } catch (e) {   // AZ5: 収容 0 台 (NO_ROOM) は専用文言 (検証再走と同じ扱い＝兄弟経路を取り残さない)
-    logLine((e && e.code === 'NO_ROOM') ? t('official.verify.noRoom', { name: rcourse.name })
+    logLine((e && e.code === 'NO_ROOM') ? t('official.verify.noRoom', { name: courseDisplayName(rcourse) })   // BM6: 解決後のコースの既定名 (名前の無い def は normalizeCourse がカスタムにする) を英語表示で訳す
                                         : t('log.race.err', { e: (e && e.message) || e }));
     return;
   }

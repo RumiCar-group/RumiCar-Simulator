@@ -496,7 +496,7 @@ function checkStructural(mainRaw, fleetRaw, guardRaw, htmlRaw) {
   // --- main.js 適用側: 0 のときに「最大 n 台なら走り出せる」と言わない・黙らない ---
   if (!/t\(r\.capZero \? r\.zeroKey : 'log\.capReduced'/.test(mainSrc))
     v.push('main.js が capN=0 のときに capReduced（「最大 n 台なら走り出せる」）を出し分けていない＝矛盾する 2 行が出る');
-  if (!/\} else if \(r\.capZero\) \{[\s\S]{0,400}?logLine\(t\(r\.zeroKeyOnly, \{ name: course\.name \}\)\);/.test(mainSrc))
+  if (!/\} else if \(r\.capZero\) \{[\s\S]{0,400}?logLine\(t\(r\.zeroKeyOnly, \{ name: courseNameText\(course\.name\) \}\)\);/.test(mainSrc))   // BM6 fix1: 名前は courseNameText 経由
     v.push('main.js で「減らす台数が無い」経路の capN=0 告知が無い／専用文言 (zeroKeyOnly) を使っていない（無言になるか、していない台数変更を告げる）');
   // 【AZ6】減らしていない経路へ「{was} 台から {n} 台にします」と言う文言を流さないこと。
   if (!/const zeroKeyOnly = capZeroDrive \? 'log\.capZeroDriveWarnOnly' : 'log\.capZeroWarnOnly';/.test(guardSrc))
@@ -613,8 +613,8 @@ const MUTATIONS = [
   ['⑤ の静的 capN<1 判定を殺す', M({ guard: g => g.replace('let capZeroStatic = capN < 1;', 'let capZeroStatic = false;') })],
   ['⑤ の 2 種類のゼロの束ねを静的だけに戻す（AZ5 の実走ゼロを握りつぶす）', M({ guard: g => g.replace('const capZero = capZeroStatic || capZeroDrive;', 'const capZero = capZeroStatic;') })],
   ['⑤ のゼロ理由の出し分けを潰す（実走ゼロに静的の文言を当てる）', M({ guard: g => g.replace("const zeroKey = capZeroDrive ? 'log.capZeroDriveWarn' : 'log.capZeroWarn';", "const zeroKey = 'log.capZeroWarn';") })],
-  ['⑤ の「減らす台数が無い」経路の告知を殺す', M({ main: m => m.replace('logLine(t(r.zeroKeyOnly, { name: course.name }));', '') })],
-  ['⑤ の「減らす台数が無い」経路に減らした側の文言を流す（していない台数変更を告げる・AZ6）', M({ main: m => m.replace('logLine(t(r.zeroKeyOnly, { name: course.name }));', 'logLine(t(r.zeroKey, { name: course.name, n: capN, was: slots.length }));') })],
+  ['⑤ の「減らす台数が無い」経路の告知を殺す', M({ main: m => m.replace('logLine(t(r.zeroKeyOnly, { name: courseNameText(course.name) }));', '') })],
+  ['⑤ の「減らす台数が無い」経路に減らした側の文言を流す（していない台数変更を告げる・AZ6）', M({ main: m => m.replace('logLine(t(r.zeroKeyOnly, { name: courseNameText(course.name) }));', 'logLine(t(r.zeroKey, { name: courseNameText(course.name), n: capN, was: slots.length }));') })],
   ['zeroKeyOnly の出し分けを潰す（実走ゼロに静的の文言を当てる・AZ6）', M({ guard: g => g.replace("const zeroKeyOnly = capZeroDrive ? 'log.capZeroDriveWarnOnly' : 'log.capZeroWarnOnly';", "const zeroKeyOnly = 'log.capZeroWarnOnly';") })],
   ['⑥ の 1 台分岐を殺す（既定編成が再び無言になる・AZ6）', M({ guard: g => g.replace("} else if (!capZeroStatic && regNow === 'tabletop' && ctx.reason === 'race' && capN >= 1) {", "} else if (false) {") })],
   ['⑥ の 1 台分岐を slotCount<=1 へ狭める（capN=1 × 多台編成の兄弟穴を再注入・AZ6）', M({ guard: g => g.replace("ctx.reason === 'race' && capN >= 1) {", "ctx.reason === 'race' && ctx.slotCount <= 1 && capN >= 1) {") })],

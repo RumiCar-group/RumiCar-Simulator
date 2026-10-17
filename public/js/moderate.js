@@ -154,12 +154,14 @@ function hits(t, c) {
 
 /**
  * 投稿本文（タイトル＋本文）を判定する。
- * @returns {{ok:true}|{ok:false, word:string}} word＝拒否の理由として表示する語（NG 語の原形か 'リンク過多'）。
+ * @returns {{ok:true}|{ok:false, word:string}|{ok:false, reason:string}} word＝拒否の理由として表示する語（NG 語の原形）。
+ *   reason＝NG 語以外で断った理由のコード（言語に依らない。'links'＝http(s):// が 4 本以上）。表示文は main.js の askSendBtn が
+ *   i18n の ask.reason.<reason> で引く（BM6。改修前は日本語固定の word 'リンク過多' を返し、英語表示でも日本語が出た）。
  */
 export function moderate(text) {
   const t = String(text ?? '').toLowerCase();
   for (const c of COMPILED) if (hits(t, c)) return { ok: false, word: c.word };
   // 連絡先/URLスパムの軽い抑止 (技術的議論に限定)
-  if ((t.match(/https?:\/\//g) || []).length > 3) return { ok: false, word: 'リンク過多' };
+  if ((t.match(/https?:\/\//g) || []).length > 3) return { ok: false, reason: 'links' };
   return { ok: true };
 }

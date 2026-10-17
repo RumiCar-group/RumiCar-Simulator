@@ -47,6 +47,14 @@
 //       そのまま出る — BB5 で `usage.s5.lap` が実際にこれを起こしていた (data-i18n-html へ移して解消)。
 //       ⑨ はインライン本文とカタログの一致しか見ないため、**両方が同じ書式タグ込みで揃っていれば** ⑨ は
 //       通り、この不具合は検出できない。⑪ は経路 (textContent か innerHTML か) そのものを見て別に守る。)
+//   ⑫ 英語表示で日本語が出ないこと (messages.js の外の日本語固定文が画面に出る 4 経路)                … 違反で非ゼロ終了
+//      (BM6。v10.4.0 の再点検 §K で、setLang('en') でも ① 領域の切替ログ (REGIMES の name/desc)
+//       ② 質問・提案の拒否理由 (moderate.js の 'リンク過多') ③ バックアップ読込失敗 (data_backup.js の Error 文)
+//       ④ 名前の無いコースの既定名 (course.js のカスタム/トラック/アニュラス/峠) が日本語のまま出た。
+//       本番の関数 (main.js の regimeText・courseNameText・courseDisplayName は本文を取り出して評価・moderate・
+//       parseBackup・normalizeCourse・buildFromSpec) に本番の値を通し、en で日本語の文字が 0・ja は改修前と同じ文
+//       (カタログの ja ≡ REGIMES の原文・DEFAULT_COURSE_NAME) であることを課す。配線 (main.js / race_ui.js の呼び出し 25 本) は
+//       字面で照合し、生のコース名を表示へ渡す書き方 (`{ name: course.name` 等・#edName への直代入) の残りも数える (BM6 fix1)。)
 //
 // 使い方:  node wf_i18n_check.mjs        (PASS なら exit 0・違反で exit 1)
 //   ④ で落ちたら en を再確認のうえ node wf_i18n_rehash.mjs で h を更新する。
@@ -177,6 +185,11 @@ try {
 const { PROGRAMS } = await import('./public/js/programs.js');
 const { CAR_PARAM_DOC, REGIMES, TIRE_SETS, GEAR_SETS, SUSP_SETS, SUSP_DEFAULT, STEER_SETS, STEER_DEFAULT, BRAKE_SETS, BRAKE_DEFAULT } = await import('./public/js/config.js'); // CHANGELOG/APP_VERSION と同モジュール
 const { DIFF_LEVELS } = await import('./public/js/challenge.js');   // AS13: チャレンジのバッジ suffix ドメイン
+const { DEFAULT_COURSE_NAME, normalizeCourse, buildFromSpec } = await import('./public/js/course.js');   // BM6 (⑧・⑫)
+const DCN = DEFAULT_COURSE_NAME || {};   // 無い木 (BM6 前) でも落ちずに ⑫ の赤として出す
+// BM6: moderate.js の reason と data_backup.js の backupError のコードはソースの字面から集める (evaluator の subs と同じ読み方)。
+const MODERATE_REASONS = [...new Set([...readFileSync(join(JSDIR, 'moderate.js'), 'utf8').matchAll(/\breason:\s*'([A-Za-z]+)'/g)].map((m) => m[1]))];
+const BACKUP_ERR_CODES = [...new Set([...readFileSync(join(JSDIR, 'data_backup.js'), 'utf8').matchAll(/\bbackupError\(\s*'([A-Za-z]+)'/g)].map((m) => m[1]))];
 const errSubs = new Set(['line', 'stepLimit']); // line=" (行 N)" 接尾ヘルパ / stepLimit=StepLimit クラス sub
 try {
   const evalSrc = readFileSync(join(JSDIR, 'interp', 'evaluator.js'), 'utf8');
@@ -217,6 +230,12 @@ const dynFamilies = [
   { prefix: 'chal.badge.', keys: ['first', ...DIFF_LEVELS.map((d) => 'diff' + d), 'all'],
     src: `first + DIFF_LEVELS (${DIFF_LEVELS.length}) + all` },
   { prefix: 'chal.state.', keys: ['none', 'started', 'clear'], src: '進捗 enum (3)' },
+  // BM6: 英語表示で日本語が出た 4 経路の訳 (⑫)。suffix ドメインは本物のソース (REGIMES・DEFAULT_COURSE_NAME・
+  //   moderate.js の reason・data_backup.js の backupError のコード) から導く。
+  { prefix: 'regime.', keys: Object.keys(REGIMES).flatMap((k) => [`${k}.name`, `${k}.desc`]), src: `REGIMES×2 (${Object.keys(REGIMES).length}×2)` },
+  { prefix: 'course.defaultName.', keys: Object.keys(DCN), src: `DEFAULT_COURSE_NAME (${Object.keys(DCN).length})` },
+  { prefix: 'ask.reason.', keys: MODERATE_REASONS, src: `moderate.js reason (${MODERATE_REASONS.length})` },
+  { prefix: 'backup.err.', keys: BACKUP_ERR_CODES, src: `data_backup.js backupError (${BACKUP_ERR_CODES.length})` },
 ];
 const dynExpected = [];
 for (const f of dynFamilies) for (const k of f.keys) dynExpected.push(f.prefix + k);
@@ -228,6 +247,143 @@ for (const k of dynExpected) {
   if (e.ja == null || e.ja === '') dynEmpty.push(`${k} (ja 空)`);
   if (e.en == null || e.en === '') dynEmpty.push(`${k} (en 空)`);
 }
+
+// ---- ⑫ 英語表示で日本語が出ないこと (BM6・ヘッダ ⑫) ----
+// 日本語の文字＝ひらがな・カタカナ・CJK 統合漢字 (拡張 A を含む)・半角カナ (docs/stage_bm/probe/k_scan.mjs と同じ集合)。
+const JP_RE = /[぀-ヿ㐀-鿿ｦ-ﾟ]/;
+const i18nMod = await import('./public/js/i18n.js');
+const { moderate } = await import('./public/js/moderate.js');
+const { parseBackup } = await import('./public/js/data_backup.js');
+const mainSrc = readFileSync(join(JSDIR, 'main.js'), 'utf8');
+// main.js は DOM を前提にするので import できない。表示名を決める関数の本文だけを取り出し、依存を渡して評価する
+// (再実装しない＝本番の本文そのもの。取り出せなければ ⑫ の赤として出す)。
+const takeFn = (name) => {
+  const a = mainSrc.indexOf(`\nfunction ${name}(`);
+  const b = a < 0 ? -1 : mainSrc.indexOf('\n}\n', a);
+  return (a < 0 || b < 0) ? null : mainSrc.slice(a + 1, b + 2);
+};
+const i18nNg = [];   // ⑫ の違反 (文で残す)
+const FN_NAMES = ['regimeText', 'courseNameText', 'courseDisplayName', 'courseBadLine', 'setEdNameFromCourse', 'edNameValue', 'refreshEdNameShown'];
+const fnSrc = Object.fromEntries(FN_NAMES.map((k) => [k, takeFn(k)]));
+for (const [k, v] of Object.entries(fnSrc)) if (!v) i18nNg.push(`main.js に function ${k} が見つからない`);
+if (!DEFAULT_COURSE_NAME) i18nNg.push('course.js に DEFAULT_COURSE_NAME (名前の無いコースの既定名) が無い');
+let FN = null;
+const edNameEl = { value: '' };   // #edName の代わり (setEdNameFromCourse／edNameValue は $('edName').value だけを読み書きする)
+if (!i18nNg.length) {
+  const courseParts = await import('./public/js/course.js');
+  const presetByName = courseParts.presetByName || (() => null);
+  const $ = (id) => (id === 'edName' ? edNameEl : null);
+  // edNameShown は main.js の module 変数 (let)。関数の本文と同じく取り出せないので、ここで同じ初期値で宣言する。
+  FN = new Function('REGIMES', 'courseParts', 'presetByName', 't', 'hasKey', 'getLang', '$',
+    `let edNameShown = null;\n${FN_NAMES.map((k) => fnSrc[k]).join('\n')}\nreturn { ${FN_NAMES.join(', ')} };`)(
+    REGIMES, courseParts, presetByName, i18nMod.t, i18nMod.hasKey, i18nMod.getLang, $);
+}
+// 配線: 本文で取り出した関数を main.js / race_ui.js が該当の表示で呼んでいること (呼び出しの式そのもの)。
+//   BM6 fix1 (層4 F1/F2): 名前の無いコースの名前を表示する全経路 (取込・✔適用・保存・投稿・削除・一覧・収容告知・
+//   参照が曖昧/見つからない・公式開催の衝突・ランキングの bundled ラベル・公式記録の検証再走) を数え上げて照合する。
+const raceUiSrc = readFileSync(join(JSDIR, 'race_ui.js'), 'utf8');
+const WIRES = [
+  ["logLine(t('log.regime', { name: regimeText(r, 'name'), desc: regimeText(r, 'desc'),", '領域の切替ログが regimeText を通す'],
+  ["t('ask.msg.blocked', { word: m.reason ? (hasKey(`ask.reason.${m.reason}`) ? t(`ask.reason.${m.reason}`) : m.reason) : m.word })", '質問・提案の拒否理由が reason を訳す (hasKey ガード)'],
+  ["t('log.backup.err', { e: (e && e.i18nCode && hasKey(`backup.err.${e.i18nCode}`)) ? t(`backup.err.${e.i18nCode}`, e.vars) : e.message })", 'バックアップ読込失敗が i18nCode を訳す (hasKey ガード)'],
+  ["? courseNameText(ref.name) : '(courseDef)')", 'ランキングの bundled def のラベルが既定名を訳す (raceCourseUnitNow)'],
+  ["t(k, { name: cref.clash != null ? cref.clash : courseDisplayName(course) })", '公式開催の衝突/不明の告知が courseDisplayName を通す'],
+  ["`⚠ ${cref.clash != null ? cref.clash : courseDisplayName(course)}`", '同 (古い messages.js の素の形)'],
+  ["t('log.courseAmbiguous', { name: courseNameText(courseRef), n })", '参照が曖昧の告知 (resolveRaceCourse)'],
+  ["t('log.courseAmbiguous', { name: courseNameText(want), n })", '参照が曖昧の告知 (共有 URL)'],
+  ["t('log.share.course.missing', { name: courseNameText(want) })", '共有 URL のコースが見つからない告知'],
+  ["addOpt(sel, '★ ' + courseNameText(n), key);", '保存コースの一覧の表示名'],
+  ["t(r.capZero ? r.zeroKey : 'log.capReduced', { name: courseNameText(course.name), n: capN, was })", '収容の告知 (台数を減らす)'],
+  ["logLine(t(r.zeroKeyOnly, { name: courseNameText(course.name) }));", '収容の告知 (減らす台数が無い)'],
+  ["log: (key, params) => logLine(t(key, (params && Object.prototype.hasOwnProperty.call(params, 'name')) ? { ...params, name: courseNameText(params.name) } : params)),", 'fitguard.js の告知 (fx.log) が {name} を訳す'],
+  ["t('log.courseApplied', { name: courseNameText(c.name) })", '✔適用の告知'],
+  ["const name = (edNameValue() || t('ed.name.default'));", '保存が欄の値を edNameValue で読む (訳して見せた既定名を識別子へ戻す)'],
+  ["t('log.courseSaved', { name: courseNameText(name) })", '保存の告知'],
+  ["setEdNameFromCourse(editor.course.name);", 'JSON 取込が欄に setEdNameFromCourse で名前を出す'],
+  ["t('log.courseJsonLoaded', { name: courseNameText(editor.course.name) || '' })", 'JSON 取込の告知'],
+  ["json.name = (edNameValue() ||", '投稿が欄の値を edNameValue で読む'],
+  ["{ name: courseNameText(json.name), file: r.filename }", '投稿の告知'],
+  ["t('log.savedCourseDeleted', { name: courseNameText(n) })", '保存コース削除の告知'],
+  ["refreshEdNameShown();", '言語切替で欄の訳した既定名を追従'],
+];
+for (const [w, what] of WIRES) if (!mainSrc.includes(w)) i18nNg.push(`配線なし: ${what} (main.js に「${w}」が無い)`);
+const RACE_UI_WIRES = [
+  ["const cn = (event.course && typeof event.course === 'object') ? courseDisplayName(event.course) : event.course;", '検証再走: コースが見つからない'],
+  ["const cn0 = (event.course && typeof event.course === 'object') ? courseDisplayName(event.course) : event.course;", '検証再走: 収容 0 台'],
+  ["t('official.verify.noRoom', { name: courseDisplayName(rcourse) })", '👻 世界ベスト: 収容 0 台'],
+];
+for (const [w, what] of RACE_UI_WIRES) if (!raceUiSrc.includes(w)) i18nNg.push(`配線なし: ${what} (race_ui.js に「${w}」が無い)`);
+// 兄弟の取り残し: コースの名前を生のまま告知・欄へ入れる書き方が main.js に残っていないこと (新しい経路の書き忘れも拾う)。
+for (const re of [/\{ name: (?:course|c|editor\.course|rc|rcourse|json)\.name\b/g, /\$\('edName'\)\.value = (?!next)/g]) {
+  for (const mm of mainSrc.matchAll(re)) {
+    const ln = mainSrc.slice(0, mm.index).split('\n').length;
+    i18nNg.push(`生のコース名を表示へ渡す書き方: main.js:${ln} 「${mainSrc.split('\n')[ln - 1].trim().slice(0, 120)}」 (courseNameText／courseDisplayName／setEdNameFromCourse を通す)`);
+  }
+}
+const i18nRows = [];   // [言語, 経路, 文]
+const BAD_BACKUPS = [null, [], 'x', { format: 'x' }, { format: 'rumicar-backup' }, { format: 'rumicar-backup', data: [] },
+  { format: 'rumicar-backup', data: { 'rumicar.a': 1 } }];
+const COURSES_JSON = JSON.parse(readFileSync(join(ROOT, 'public', 'data', 'courses.json'), 'utf8'));
+const nameless = (kind) => { const sp = COURSES_JSON.find((c) => c.kind === kind); if (!sp) return null; const o = { ...sp }; delete o.name; delete o.name_en; return o; };
+const langBefore = i18nMod.getLang();
+if (FN) for (const lang of ['ja', 'en']) {
+  i18nMod.setLang(lang);
+  if (i18nMod.getLang() !== lang) { i18nNg.push(`setLang('${lang}') が効かない`); continue; }
+  const tt = i18nMod.t;
+  for (const k of Object.keys(REGIMES)) {
+    const r = REGIMES[k];
+    i18nRows.push([lang, `regime.${k}`, tt('log.regime', { name: FN.regimeText(r, 'name'), desc: FN.regimeText(r, 'desc'), size: (r.L / 0.13).toFixed(1), mm: r.sensorMaxMm })]);
+    if (lang === 'ja' && (FN.regimeText(r, 'name') !== r.name || FN.regimeText(r, 'desc') !== (r.desc || '')))
+      i18nNg.push(`ja の regime.${k}.name/desc が REGIMES.${k} の原文と違う (改修前の ja と同じ文にすること)`);
+  }
+  const m = moderate(Array.from({ length: 4 }, (_, i) => `https://e${i}.example/`).join(' '));
+  if (m.ok !== false || !m.reason) i18nNg.push(`moderate の URL 過多が reason を返さない (実 ${JSON.stringify(m)})`);
+  else i18nRows.push([lang, 'ask.reason', tt('ask.msg.blocked', { word: m.reason ? tt(`ask.reason.${m.reason}`) : m.word })]);
+  BAD_BACKUPS.forEach((b, i) => {
+    try { parseBackup(b); i18nNg.push(`parseBackup が不正な入力 #${i} を通した`); }
+    catch (e) {
+      if (!e || !e.i18nCode) i18nNg.push(`parseBackup の Error #${i} に i18nCode が無い (${e && e.message})`);
+      i18nRows.push([lang, `backup#${i}`, tt('log.backup.err', { e: (e && e.i18nCode) ? tt(`backup.err.${e.i18nCode}`, e.vars) : e.message })]);
+    }
+  });
+  const base = { walls: [{ x1: 0, y1: 0, x2: 1, y2: 0 }], bounds: { w: 3, h: 2 }, start: { x: 1, y: 1, theta: 0 } };
+  i18nRows.push([lang, 'normalizeCourse', FN.courseDisplayName(normalizeCourse(base))]);
+  for (const kind of Object.keys(DCN)) {
+    const sp = kind === 'raw' ? { kind: 'raw', ...base } : nameless(kind);
+    if (!sp) { i18nNg.push(`courses.json に kind=${kind} のコースが無い (名前の無い ${kind} を作れない)`); continue; }
+    const c = buildFromSpec(sp);
+    if (c.name !== DCN[kind]) i18nNg.push(`buildFromSpec(名前の無い ${kind}).name が DEFAULT_COURSE_NAME.${kind} でない (実 ${c.name})`);
+    i18nRows.push([lang, `course.${kind}`, FN.courseDisplayName(c)]);
+    if (lang === 'ja' && FN.courseDisplayName(c) !== DCN[kind]) i18nNg.push(`ja の既定名 ${kind} が DEFAULT_COURSE_NAME と違う`);
+    // courseDisplayName の文字列の分岐 (公式記録の course 識別子) と取り込み拒否の 1 行 (courseBadLine) も同じ規則。
+    i18nRows.push([lang, `course.${kind}(識別子)`, FN.courseDisplayName(DCN[kind])]);
+    if (lang === 'ja' && FN.courseDisplayName(DCN[kind]) !== DCN[kind]) i18nNg.push(`ja の識別子 ${kind} の表示が既定名と違う`);
+    i18nRows.push([lang, `courseBad.${kind}`, FN.courseBadLine(DCN[kind], 'walls[0]')]);
+    // 欄 (#edName): 既定名は訳して見せ、見せたままなら識別子へ戻す。書き換えたら書いた値。空白だけは ''。
+    FN.setEdNameFromCourse(DCN[kind]);
+    i18nRows.push([lang, `edName.${kind}`, edNameEl.value]);
+    if (FN.edNameValue() !== DCN[kind]) i18nNg.push(`[${lang}] 欄に見せた既定名 ${kind} が保存時に識別子へ戻らない (実 ${FN.edNameValue()})`);
+    edNameEl.value = '  ' + edNameEl.value + ' ';
+    if (FN.edNameValue() !== DCN[kind]) i18nNg.push(`[${lang}] 欄の前後の空白で既定名 ${kind} が識別子へ戻らない`);
+    edNameEl.value = 'My Own';
+    if (FN.edNameValue() !== 'My Own') i18nNg.push(`[${lang}] 書き換えた欄の値がそのまま使われない`);
+    edNameEl.value = '   ';
+    if (FN.edNameValue() !== '') i18nNg.push(`[${lang}] 空白だけの欄が '' にならない (既定名へ落ちない)`);
+    if (lang === 'ja' && edNameEl.value !== '   ') i18nNg.push('edNameValue が欄を書き換えた');
+  }
+  // 言語切替: 見せたままの欄は新しい言語の表示へ、書き換えた欄は触らない。
+  FN.setEdNameFromCourse(DCN.raw);
+  const other = lang === 'ja' ? 'en' : 'ja';
+  i18nMod.setLang(other); FN.refreshEdNameShown();
+  const want = FN.courseNameText(DCN.raw);
+  if (edNameEl.value !== want) i18nNg.push(`[${lang}→${other}] 欄の既定名が言語に追従しない (実 ${edNameEl.value} / 期待 ${want})`);
+  edNameEl.value = 'Mine'; i18nMod.setLang(lang); FN.refreshEdNameShown();
+  if (edNameEl.value !== 'Mine') i18nNg.push(`[${other}→${lang}] 書き換えた欄を言語切替が上書きした`);
+  // 利用者が名付けた既定名以外の名前は訳さない (ja/en とも受け取った値のまま)。
+  if (FN.courseNameText('カスタム車') !== 'カスタム車' || FN.courseDisplayName({ name: 'X峠' }) !== 'X峠') i18nNg.push('既定名と完全一致しない名前まで訳している');
+}
+i18nMod.setLang(langBefore);
+for (const [lang, what, txt] of i18nRows) if (lang === 'en' && JP_RE.test(String(txt))) i18nNg.push(`en に日本語: ${what} → ${txt}`);
 
 // ---- ⑨ index.html のインライン本文 ≡ ja カタログ (AU3・BC2 で plain data-i18n へ拡張) ----
 // 抽出: data-i18n / data-i18n-html を持つ要素の innerHTML を、**同名タグの入れ子を数えて**取り出す(DOM 非依存)。
@@ -467,9 +623,18 @@ if (formatTagHits.length) {
   console.log(`✓ ⑪ textContent/属性経由 ${plainAttrKeys.size} キーに書式タグなし (例外リストなし)`);
 }
 
+if (i18nNg.length) {
+  fail = true;
+  console.log(`\n✗ ⑫ 英語表示で日本語が出る経路 (BM6): ${i18nNg.length} 件`);
+  for (const s2 of i18nNg) console.log(`    - ${s2}`);
+} else {
+  const enN = i18nRows.filter((r) => r[0] === 'en').length;
+  console.log(`✓ ⑫ 英語表示: 4 経路の ${enN} 文に日本語 0・ja は REGIMES/DEFAULT_COURSE_NAME の原文と同じ・欄の往復 OK・配線 ${WIRES.length + RACE_UI_WIRES.length} 本あり・生のコース名の表示 0`);
+}
+
 console.log(`\n${line}`);
 if (fail) {
-  console.log('結果: FAIL (①②④⑤⑥⑦⑧⑨⑩⑪ のいずれかに違反) — 版アップ前に修正すること');
+  console.log('結果: FAIL (①②④⑤⑥⑦⑧⑨⑩⑪⑫ のいずれかに違反) — 版アップ前に修正すること');
   process.exit(1);
 } else {
   console.log('結果: PASS');

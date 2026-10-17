@@ -419,7 +419,8 @@ const MUTATIONS = [
   ['main: fitReduced の告知を無効化', 'main', (s) => s.replace('if (!res || !(res.fitReduced > 0)) return;', 'return;')],
   ['main: 🏁 経路の fitReduced 告知を取り残す', 'main', (s) => s.replace('  noteFitReduced(res, slots.length);', '')],
   ['race_ui: ゴースト対戦の NO_ROOM を取り残す（同族バグ）', 'ui',
-    (s) => s.replace("logLine((e && e.code === 'NO_ROOM') ? t('official.verify.noRoom', { name: rcourse.name })", "logLine((e && false) ? t('official.verify.noRoom', { name: rcourse.name })")],
+    // BM6: 表示名を courseDisplayName(rcourse) に (英語表示で既定名を訳す)。変異の狙い (NO_ROOM の分岐を殺す) は同じ。
+    (s) => s.replace("logLine((e && e.code === 'NO_ROOM') ? t('official.verify.noRoom', { name: courseDisplayName(rcourse) })", "logLine((e && false) ? t('official.verify.noRoom', { name: courseDisplayName(rcourse) })")],
   ['race_ui: 検証再走の fitReduced 告知を削除', 'ui', (s) => s.replace('if (res.fitReduced > 0) {', 'if (false) {')],
   // ▼ ここから下は **層 4 敵対的レビュー（2026-09-12）が「D) は見逃す」と実測した変異**。
   //   指摘を受けて D) に構造条件を足したので、毎回「ちゃんと赤くなる」ことを機械確認する。

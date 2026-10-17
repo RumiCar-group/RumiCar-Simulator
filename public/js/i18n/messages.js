@@ -64,6 +64,8 @@ export const MESSAGES = {
   'ask.browse':       { ja: 'みんなの質問・回答を見る ↗', en: 'Browse community Q&A ↗' },
   'ask.msg.tooShort': { ja: 'タイトルと内容をもう少し具体的に書いてください', en: 'Please write the title and body a little more specifically.' },
   'ask.msg.blocked':  { ja: '投稿できません: 不適切な可能性のある表現({word})が含まれます。技術・ロジック・アイデアに限定してください。', en: 'Cannot post: it contains potentially inappropriate wording ({word}). Please keep it to technical topics, logic, and ideas.', h: '31733d20' },
+  // BM6: moderate() が NG 語以外の理由で断るときの {word}。moderate.js は言語に依らない reason ('links') だけを返し、main.js の askSendBtn が t(`ask.reason.${reason}`) で引く (ja は改修前の 'リンク過多' と同文)。
+  'ask.reason.links': { ja: 'リンク過多', en: 'too many links', h: 'c196277b' },
   'ask.msg.opened':   { ja: 'GitHub の投稿画面を開きました。送信するとみんなが見られ、回答が付きます。', en: 'Opened the GitHub submit page. Once you send it, everyone can see it and add answers.' },
   'ask.body.hint':    { ja: '<!-- 画像・スクリーンショット・動画はこの下にドラッグ&ドロップで貼り付けられます。動きを見せたいときは数枚のスクショ、または再現手順(コース名・プログラム・設定)を文章で添えると確実です。 -->', en: '<!-- You can drag and drop images, screenshots, and videos below. To show motion, add a few screenshots, or describe reproduction steps (course name, program, settings) in text to be sure. -->', h: 'ef8c70c4' },
   'ask.body.footer':  { ja: '---\n_RumiCar Simulator のコミュニティ投稿 (技術・アイデア)_', en: '---\n_RumiCar Simulator community post (technical / ideas)_', h: 'f219140a' },
@@ -645,6 +647,12 @@ export const MESSAGES = {
   'course.diff.3': { ja: 'ふつう',   en: 'Normal' },
   'course.diff.4': { ja: 'むずかしい', en: 'Hard' },
   'course.diff.5': { ja: '上級',     en: 'Expert' },
+  // BM6: 名前の無いコースに course.js が付ける既定名 (DEFAULT_COURSE_NAME) の表示。保存・公式記録の識別子は ja の既定名のまま
+  //   (normalizeCourse の出力は不変)。main.js の courseDisplayName が en のときだけ course.defaultName.<kind> に差し替える。
+  'course.defaultName.raw':     { ja: 'カスタム',   en: 'Custom', h: 'a4d4ce26' },
+  'course.defaultName.track':   { ja: 'トラック',   en: 'Track', h: 'd4fce8bc' },
+  'course.defaultName.annulus': { ja: 'アニュラス', en: 'Annulus', h: '716dc07f' },
+  'course.defaultName.touge':   { ja: '峠',         en: 'Touge', h: '65440d3f' },
   'course.badge.beginner':      { ja: '入門コース (全車が完走しやすい)', en: 'Beginner course (most cars finish cleanly)' },
   'course.badge.fullscaleOnly': { ja: 'フルスケール専用', en: 'Full-scale only' },
 
@@ -853,6 +861,14 @@ export const MESSAGES = {
   'log.wear.on':        { ja: 'タイヤ摩耗: ON (滑りで後輪が消耗=戦略資源。新品タイヤで再スタート){note}', en: 'Tire wear: ON (sliding consumes the rear tires = a strategic resource. Restarted on fresh tires){note}' },
   'log.wear.off':       { ja: 'タイヤ摩耗: OFF (熱・摩耗なし=常にフレッシュ){note}', en: 'Tire wear: OFF (no heat/wear = always fresh){note}' },
   'log.regime':         { ja: '領域: {name} — {desc} (車サイズ {size}× / ToF {mm}mm)', en: 'Scale: {name} — {desc} (car size {size}× / ToF {mm} mm)' },
+  // BM6: log.regime の {name}/{desc}。REGIMES (config.js) の name/desc は物理側の識別に使うので書き換えず、main.js の regimeText が
+  //   regime.<REGIMES のキー>.name/desc を引く (ja は REGIMES の name/desc と同文。カタログに無い領域は REGIMES の原文へフォールバック)。
+  'regime.tabletop.name':  { ja: '卓上 (RumiCar 実機相当)', en: 'Tabletop (≈ the real RumiCar)', h: '06ae975d' },
+  'regime.tabletop.desc':  { ja: '実寸 13cm・1.3km/h。異方性摩擦で滑り出しが見える卓上スケール。初心者はここで滑らず学ぶ。', en: 'Real size 13 cm, 1.3 km/h. A tabletop scale where anisotropic friction makes the start of a slide visible. Beginners learn here without sliding.', h: '75b45c09' },
+  'regime.midscale.name':  { ja: '中スケール (屋外 RC 相当)', en: 'Mid-scale (≈ outdoor RC)', h: '00ee0d7d' },
+  'regime.midscale.desc':  { ja: '卓上を長さ2倍・速度√2倍した相似領域。Ay* は卓上と同じ=同じプログラムが同じ挙動 (動的相似)。', en: 'A similar regime with the tabletop scaled 2× in length and √2× in speed. Ay* is the same as on the tabletop = the same program behaves the same (dynamic similarity).', h: '4f8a3419' },
+  'regime.fullscale.name': { ja: 'フルスケール・レース (実車 350km/h)', en: 'Full-scale race (real car, 350 km/h)', h: 'b8f9ef03' },
+  'regime.fullscale.desc': { ja: '実寸 2.6m・最高速約350km/h。等方実μ+空力ダウンフォースで「速度=グリップ」。上級/競技向け。', en: 'Real size 2.6 m, top speed about 350 km/h. Isotropic real μ + aerodynamic downforce make "speed = grip". For advanced / competition use.', h: '13b9f7a0' },
   'log.cartype.custom': { ja: '{name} の車種: {type} (カスタムプログラムは保持)', en: '{name} car type: {type} (custom program kept)' },
   'log.cartype.loaded': { ja: '{name} の車種: {type} → 最速プログラム「{prog}」を読込', en: '{name} car type: {type} → loaded fastest program "{prog}"' },
   'log.progLoaded':     { ja: '{name} に「{label}」を読込{note}', en: 'Loaded "{label}" into {name}{note}' },
@@ -1118,6 +1134,11 @@ export const MESSAGES = {
   'log.backup.imported':      { ja: 'バックアップを読み込みました (適用 {applied} 件 / スキップ {skipped} 件)。反映するにはページを再読み込みしてください。', en: 'Imported backup ({applied} applied / {skipped} skipped). Reload the page to apply.' },
   'log.backup.cancelled':     { ja: 'バックアップの読み込みを中止しました (上書きせず)。', en: 'Import cancelled (nothing overwritten).' },
   'log.backup.err':           { ja: 'バックアップの読み込みに失敗しました: {e}', en: 'Failed to import backup: {e}' },
+  // BM6: data_backup.js parseBackup の Error が持つ i18nCode ごとの文 (main.js が t(`backup.err.${code}`, e.vars) で引いて {e} に入れる)。ja は改修前の Error 文と同文。
+  'backup.err.shape':     { ja: 'backup: 形式が不正です', en: 'backup: the file is not a backup object', h: '7219eeb6' },
+  'backup.err.format':    { ja: 'backup: format が一致しません', en: 'backup: format does not match', h: '7ebf3731' },
+  'backup.err.noData':    { ja: 'backup: data がありません', en: 'backup: there is no data', h: 'bc1128bb' },
+  'backup.err.notString': { ja: 'backup: 値が文字列でありません ({key})', en: 'backup: a value is not a string ({key})', h: '9aabf8ed' },
   'backup.confirm.overwrite': { ja: '{n} 件のキーが現在の値と異なります。上書きしますか？\n（OK＝上書き / キャンセル＝これらは変更せず、新規キーのみ取り込みます）', en: '{n} key(s) differ from the current values. Overwrite them?\n(OK = overwrite / Cancel = leave them and import only new keys)' },
 
   // ---- Phase P / P3: コースデータ仕様ダイアログ (dlgDoc) ＋ ヘッダボタン (data-i18n-html は h 印つき) ----

@@ -181,13 +181,17 @@ const WIRING = [
            [/currentCourseKey = savedKeyOf\(c\.name\) \|\| \(courseSources\[c\.name\] \? c\.name : ''\);/, '✔適用後の走行中コースの値が、同名の保存コースでなくプリセットを指す']] },
   { id: '⑤⑥ 保存 (edSave)', from: "$('edSave').addEventListener", to: '\n});',
     must: [[/noteWallsOutside\(editor\.toJSON\(\)\);/, '保存で枠外の壁を知らせていない'],
-           [/const name = \(\$\('edName'\)\.value\.trim\(\) \|\| t\('ed\.name\.default'\)\);/, '空白だけの名前が既定名へ落ちない (trim が既定名の後)'],
+           // BM6 fix1: 欄の値は edNameValue() (trim したうえで、訳して見せた既定名を識別子へ戻す) で読む。trim は下の edNameValue の項目が見る。
+           [/const name = \(edNameValue\(\) \|\| t\('ed\.name\.default'\)\);/, '空白だけの名前が既定名へ落ちない (trim が既定名の後)'],
            [/rebuildCourseList\(\);\s*const savedKey = savedKeyOf\(name\);\s*if \(savedKey != null\) \{ \$\('courseSel'\)\.value = savedKey; courseSelValue = savedKey; \}/,
             '一覧を作り直してから保存コースの値を引いていない (初めて保存した逃がし対象の名前で別の項目を選び、🗑 で別の保存コースが消える)']] },
   { id: '⑥ JSON 取込 (edImport)', from: "$('edImport').addEventListener", to: '\n});',
     must: [[/noteWallsOutside\(editor\.toJSON\(\)\);/, 'JSON 取込で枠外の壁を知らせていない']] },
   { id: '⑤ 投稿 (edShare)', from: "$('edShare').addEventListener", to: '\n});',
-    must: [[/json\.name = \(\$\('edName'\)\.value\.trim\(\) \|\|/, '投稿の名前で空白だけを既定名へ落としていない']] },
+    must: [[/json\.name = \(edNameValue\(\) \|\|/, '投稿の名前で空白だけを既定名へ落としていない']] },
+  { id: '⑤ 欄の値 (edNameValue・BM6 fix1)', from: 'function edNameValue() {', to: '\n}\n',
+    must: [[/const v = el\.value\.trim\(\);/, '欄の値を trim せずに使っている (空白だけの名前が既定名へ落ちない)'],
+           [/edNameShown\.ident\.trim\(\)/, '訳して見せた既定名を識別子へ戻すときに trim していない']] },
   { id: '⑥ 告知の本体 (noteWallsOutside)', from: 'function noteWallsOutside(data) {', to: '\n}\n',
     must: [[/const f = courseParts\.wallsOutsideFrame;/, 'course.js の数え方を名前空間で受けていない (写し or 名前付き import)'],
            [/typeof f === 'function' \? f\(data\) : 0/, '古い course.js へのフォールバックが無い'],
@@ -195,7 +199,7 @@ const WIRING = [
   { id: '⑤ 一覧の再構築 (rebuildCourseList)', from: 'function rebuildCourseList(selectName) {', to: '\n}\n',
     must: [[/const key = \(courseSources\[n\] \|\| n\.startsWith\('gh:'\) \|\| n\.startsWith\('★'\)\) \? '★' \+ n : n;/, '保存名だけで決まる逃がし方 (プリセット名・gh:・★ で始まる名前に ★ を 1 つ) になっていない (保存順で値が入れ替わる)'],
            [/courseSources\[key\] = \{ type: 'saved', data: saved\[n\], savedName: n \};/, '保存名を savedName に持っていない'],
-           [/addOpt\(sel, '★ ' \+ n, key\);/, 'option value に逃がした値を使っていない']] },
+           [/addOpt\(sel, '★ ' \+ courseNameText\(n\), key\);/, 'option value に逃がした値を使っていない']] },
   { id: '⑤ 🗑 削除 (edDelete)', from: "$('edDelete').addEventListener", to: '\n});',
     must: [[/const n = src && src\.type === 'saved' \? src\.savedName : null;/, 'option value を保存名として消している (同名のプリセットを選んで 🗑 で保存コースが消える)']] },
   { id: '⑤ 名前で引く規則 (communityByRef)', from: 'function communityByRef(ref) {', to: '\n}\n',
@@ -288,7 +292,7 @@ else {
 const MM = [
   ['寸法変更で告知しない', s => s.replace("  noteWallsOutside(editor.toJSON());   // BE6 (⑥): 縮めた瞬間", "  // (変異) 縮めた瞬間")],
   ['✔適用で告知しない', s => s.replace('  noteWallsOutside(c);   // BE6 (⑥)', '  // (変異)')],
-  ['保存で告知しない', s => s.replace("  if (stored) logLine(t('log.courseSaved', { name }));\n  noteWallsOutside(editor.toJSON());", "  if (stored) logLine(t('log.courseSaved', { name }));")],   // BF1: 「保存しました」は書けたときだけ
+  ['保存で告知しない', s => s.replace("  if (stored) logLine(t('log.courseSaved', { name: courseNameText(name) }));\n  noteWallsOutside(editor.toJSON());", "  if (stored) logLine(t('log.courseSaved', { name: courseNameText(name) }));")],   // BF1: 「保存しました」は書けたときだけ
   ['JSON 取込で告知しない', s => s.replace('    noteWallsOutside(editor.toJSON());   // BE6 (⑥): own で通した', '    // (変異) own で通した')],
   ['告知の hasKey ガードを外す', s => s.replace("if (n > 0 && hasKey('log.edWallsOutside')) logLine", 'if (n > 0) logLine')],
   ['保存名の衝突を逃がさない', s => s.replace("const key = (courseSources[n] || n.startsWith('gh:') || n.startsWith('★')) ? '★' + n : n;", 'const key = n;')],
@@ -301,7 +305,7 @@ const MM = [
   ['同名の投稿コースを候補にしない', s => s.replace("  for (const cc of communityCourses) if (cc.data && cc.data.name === c.name && !cands.includes(cc.name)) cands.push(cc.name);\n", '')],
   ['本体に欠けがあっても ok にする (層 4 の 3 回目)', s => s.replace("communityListState = missed ? 'partial' : 'ok';", "communityListState = 'ok';")],
   ['取得失敗を記録しない', s => s.replace("if (list === null) { communityListState = 'failed';", 'if (list === null) {')],
-  ['保存名の trim を既定名の後へ戻す', s => s.replace("const name = ($('edName').value.trim() || t('ed.name.default'));", "const name = ($('edName').value || t('ed.name.default')).trim();")],
+  ['保存名の trim を既定名の後へ戻す', s => s.replace("  const v = el.value.trim();\n", "  const v = el.value;\n")],   // BM6 fix1: 欄の値は edNameValue が trim する
   ['名前で引いて先頭を選ぶ (旧式)', s => s.replace('return { cc: hits.length === 1 ? hits[0] : null, n: hits.length };', 'return { cc: hits[0] || null, n: hits.length };')],
   ['resolveRaceCourse が find に戻る', s => s.replace('const { cc, n } = communityByRef(courseRef);', 'const n = 0, cc = communityCourses.find((c) => (c.data && c.data.name) === courseRef || c.name === courseRef);')],
   ['公式開催が名前をそのまま書く (旧式)', s => s.replace('course: cref.ref,', 'course: course.name,')],

@@ -33,7 +33,8 @@ const { page, errors, benign } = await newPage(browser, {
 const texts = () => appModule(page, 'js/i18n.js', (m) => {
   const mark = '\u0001';
   const blocked = m.t('ask.msg.blocked', { word: mark });
-  return { opened: m.t('ask.msg.opened'), blockedHead: blocked.split(mark)[0], blockedTail: blocked.split(mark)[1] };
+  // BM6: URL 過多の理由は言語に依らない reason ('links') を ask.reason.links で訳す (ja 'リンク過多'・en 'too many links')。
+  return { opened: m.t('ask.msg.opened'), blockedHead: blocked.split(mark)[0], blockedTail: blocked.split(mark)[1], links: m.t('ask.reason.links') };
 });
 
 async function send(title, body) {
@@ -58,13 +59,13 @@ const PASS_CASES = [
   ['Essex のコースを作った', NEUTRAL_BODY],
   ['質問: die hard な設定', 'Dickens と Sussex の名前を付けたカスタム車種で differential と diesel を試した。'],
 ];
-// [タイトル, 本文, 拒否の表示に出るはずの語]
+// [タイトル, 本文, 拒否の表示に出るはずの語 (null＝URL 過多＝その言語の ask.reason.links・BM6)]
 const REJECT_CASES = [
   ['このコースについて', 'お前はカスだ。もう投稿するな。', 'カス'],
   ['about the course', 'you are an idiot, stop posting.', 'idiot'],
   // 層4 往復 2 の F1: 短い語の直後の添え字（促音・感嘆）。e2869c0 では通っていた（v10.3.0 は拒否）。
   ['このコースについて', 'お前はバカッ！もう投稿するな。', 'バカ'],
-  ['リンク集を置きます', 'https://a.example/ https://b.example/ https://c.example/ https://d.example/', 'リンク過多'],
+  ['リンク集を置きます', 'https://a.example/ https://b.example/ https://c.example/ https://d.example/', null],
 ];
 
 for (const lang of ['ja', 'en']) {
@@ -79,11 +80,14 @@ for (const lang of ['ja', 'en']) {
     ok(r.opened.length === 1 && r.opened[0].startsWith('https://github.com/RumiCar-group/RumiCar/issues/new?'),
        `[${lang}] 通過「${title}」: 投稿画面の URL を 1 回開こうとした (実 ${r.opened.length} 回)`);
   }
-  for (const [title, body, word] of REJECT_CASES) {
+  for (const [title, body, word0] of REJECT_CASES) {
+    const word = word0 === null ? T.links : word0;
     const r = await send(title, body);
     ok(r.msg === T.blockedHead + word + T.blockedTail,
        `[${lang}] 拒否「${body.slice(0, 24)}…」: 拒否の表示に語「${word}」 (表示="${r.msg}")`);
     ok(r.opened.length === 0, `[${lang}] 拒否「${body.slice(0, 24)}…」: 投稿画面を開かない (実 ${r.opened.length} 回)`);
+    if (lang === 'en') ok(!/[\u3040-\u30ff\u3400-\u9fff]/.test(r.msg.replace(word, '')),
+       `[en] 拒否「${body.slice(0, 24)}…」: 語以外の表示に日本語が無い (BM6・v10.4.0 は URL 過多で「リンク過多」が出た)`);
   }
 }
 

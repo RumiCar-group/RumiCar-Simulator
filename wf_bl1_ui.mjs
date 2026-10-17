@@ -236,9 +236,11 @@ for (const [s, w] of [['idiots everywhere', 'idiot'], ['so retarded', 'retard'],
 }
 
 console.log('\nA-3) URL 過多（http(s):// が 4 本以上で拒否・3 本は通過）');
+// BM6: 拒否の理由は言語に依らないコード reason: 'links'（表示文は main.js が i18n の ask.reason.links で引く＝A-4 の配線）。
+//   BM6 より前の木は日本語固定の { ok: false, word: 'リンク過多' } を返した（--root で回すとこの 2 行が赤＝英語表示で日本語が出た形）。
 const urls = (n, p = 'https') => Array.from({ length: n }, (_, i) => `${p}://e${i}.example/`).join(' ');
-ok(J(moderate(urls(4))) === J({ ok: false, word: 'リンク過多' }), `https 4 本 → リンク過多（実 ${J(moderate(urls(4)))}）`);
-ok(J(moderate(urls(4, 'http'))) === J({ ok: false, word: 'リンク過多' }), 'http 4 本 → リンク過多');
+ok(J(moderate(urls(4))) === J({ ok: false, reason: 'links' }), `https 4 本 → reason links（実 ${J(moderate(urls(4)))}）`);
+ok(J(moderate(urls(4, 'http'))) === J({ ok: false, reason: 'links' }), 'http 4 本 → reason links');
 ok(moderate(urls(3)).ok === true, 'https 3 本 → 通過');
 ok(moderate('').ok === true && moderate(null).ok === true && moderate(undefined).ok === true, '空・null・undefined → 通過（例外を投げない）');
 
@@ -250,6 +252,9 @@ console.log('\nA-4) 配線（main.js の askSendBtn が moderate.js の moderate
   const h = main.indexOf("$('askSendBtn').addEventListener");
   ok(h >= 0 && /const m = moderate\(title \+ '\\n' \+ body\);/.test(main.slice(h, h + 1200)),
      "askSendBtn のハンドラが moderate(title + '\\n' + body) を呼ぶ");
+  // BM6: reason（NG 語以外の理由のコード）は ask.reason.<reason> で訳して {word} に入れる（NG 語は原形のまま）。
+  ok(h >= 0 && main.slice(h, h + 1600).includes("t('ask.msg.blocked', { word: m.reason ? (hasKey(`ask.reason.${m.reason}`) ? t(`ask.reason.${m.reason}`) : m.reason) : m.word })"),
+     'askSendBtn のハンドラが reason を i18n の ask.reason.<reason> で訳す（BM6・fix1 で hasKey ガード＝古い messages.js ではコードのまま）');
   const msrc = existsSync(join(JS, 'moderate.js')) ? readFileSync(join(JS, 'moderate.js'), 'utf8') : '';
   ok(msrc !== '' && !/\b(document|window|localStorage)\b/.test(msrc.replace(/^\s*\/\/.*$/gm, '')),
      'moderate.js は DOM に触れない（document/window/localStorage の参照 0 件・コメントを除く）');
