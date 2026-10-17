@@ -24,7 +24,7 @@ Chrome の「ヘッドレス」は3層あり、**見落とすのは①**。
 | ② `chrome --headless=new` | フルバイナリの無画面モード | Blink/V8 は headed と同一経路。window/フォーカス周りが残る |
 | ③ headed + Xvfb（**本ハーネス**） | 実ウィンドウ・実コンポジタ | ほぼ無し |
 
-本アプリは canvas 描画・`requestAnimationFrame` 前提の物理ループ・WebGL（`elev3d.js`）・
+本アプリは canvas 描画（`elev3d.js` の立体プレビューも 2D canvas）・`requestAnimationFrame` 前提の物理ループ・
 CSS `@container`（`fleet-cols`）に依存するため ③ を採る。
 
 ## 構成
