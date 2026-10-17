@@ -201,7 +201,9 @@ CHECK_URL=http://127.0.0.1:8090/simulator/ bash restore_simulator.sh
 ```bash
 cd RumiCar-Simulator
 node gen_course_files.mjs      # → /tmp/rc_courses  (1コース1ファイル + index.json + README)
-node gen_program_files.mjs     # → /tmp/rc_programs (.ino + index.json + README)
+node gen_program_files.mjs     # → /tmp/rc_programs (.ino/.py + index.json + README)
+# 第 1 引数で出力先を指定できる（例: node gen_course_files.mjs /tmp/out_c）。指定先は存在しない/空のディレクトリのみ
+# 受け付け、空でない・空文字は exit 1 で拒否し、**何も削除しない**。引数なしの既定 /tmp/rc_* だけ従来どおり消して作り直す。
 ```
 
 生成物を `RumiCar-group/RumiCar` の `courses/` `programs/` へ反映します。**`programs/community/` と `courses/community/` の投稿物は生成対象外なので、消さないよう追加・更新のみ行ってください。**

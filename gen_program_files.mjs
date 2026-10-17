@@ -1,9 +1,25 @@
-// "Fable Racing Line" の6プログラムを GitHub 公開用 .ino + README として /tmp/rc_programs へ生成。
-import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
+// "Fable Racing Line" のプログラム群を GitHub 公開用 (.ino/.py) + README として生成（出力先は第 1 引数＝存在しない/空のディレクトリのみ・何も削除しない。既定 /tmp/rc_programs）。
+import { writeFileSync, mkdirSync, rmSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { PROGRAMS } from './public/js/programs.js';
 
-const OUT = '/tmp/rc_programs';
-rmSync(OUT, { recursive: true, force: true });
+// 出力先は第 1 引数（未指定＝従来の既定 /tmp/rc_programs。既定だけ従来どおり消して作り直す）。
+// 引数で出力先を指定したときは **何も削除しない**: 存在しない or 空のディレクトリだけ受け付け、
+// 空でないもの・ディレクトリでないもの・空文字は exit 1 で拒否する（誤指定で clone や public/ を消さないため）。
+const ARG = process.argv[2];
+let OUT;
+if (ARG === undefined) {
+  OUT = '/tmp/rc_programs';
+  rmSync(OUT, { recursive: true, force: true });
+} else {
+  OUT = ARG;
+  let bad = '';
+  if (ARG === '') bad = '出力先が空文字';
+  else if (existsSync(ARG)) {
+    if (!statSync(ARG).isDirectory()) bad = 'ディレクトリではない';
+    else if (readdirSync(ARG).length) bad = '空でないディレクトリ（何も削除しません）';
+  }
+  if (bad) { console.error(`出力先 "${ARG}" を拒否: ${bad}。存在しないか空のディレクトリを指定してください。`); process.exit(1); }
+}
 mkdirSync(OUT + '/programs', { recursive: true });
 
 // carType key → ファイル名 (例: normal_fr-apex-hunter.ino)
@@ -11,9 +27,10 @@ function slug(name) { return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').repl
 
 const index = [];
 for (const p of PROGRAMS) {
-  const fn = `${p.carType}-${slug(p.name)}.ino`;
+  const ext = p.lang === 'py' ? 'py' : p.lang === 'js' ? 'js' : 'ino';   // lang で拡張子を決める（既定 .ino）
+  const fn = `${p.carType}-${slug(p.name)}.${ext}`;
   writeFileSync(`${OUT}/programs/${fn}`, p.code);
-  index.push({ file: `programs/${fn}`, name: p.name, carType: p.carType, label: p.label });
+  index.push({ file: `programs/${fn}`, lang: p.lang || 'c', name: p.name, carType: p.carType, label: p.label });
 }
 writeFileSync(`${OUT}/programs/index.json`, JSON.stringify(index, null, 2) + '\n');
 
@@ -24,7 +41,8 @@ const table = PROGRAMS
 writeFileSync(`${OUT}/programs/README.md`, `# RumiCar Simulator — 車種別 最速プログラム集 "Fable Racing Line"
 
 [RumiCar Simulator](https://www.rumicar.com/simulator/) 用に、各車種の物理特性を最大限に
-引き出すよう調整した走行プログラムです。Arduino C++ 形式なので **実機 RumiCar でも動作**します。
+引き出すよう調整した走行プログラムです。C 版 (\`.ino\`, Arduino C++ 形式) は **実機 RumiCar でも動作**します。
+Python 版 (\`.py\`) はシミュレータ用です。
 tuned by **Fable 5**。
 
 ## 一覧 (学習しやすいよう「単純→特性活用」の順)
@@ -120,5 +138,5 @@ PWM を上げて滑り始める値を見つけ、\`CRUISE\` と \`TCAP\` をそ�
 シミュレータ: <https://www.rumicar.com/simulator/>
 `);
 
-console.log(`生成完了: ${PROGRAMS.length} 本の .ino + index.json + README`);
+console.log(`生成完了: ${PROGRAMS.length} 本のプログラム + index.json + README`);
 console.log('出力先:', OUT + '/programs');

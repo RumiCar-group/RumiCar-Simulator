@@ -1,11 +1,27 @@
 // テストコース courses.json を GitHub 公開用に「1コース1ファイル」へ分割し、
-// 索引 (index.json)・README・コミュニティ投稿の例を /tmp/rc_courses 配下へ生成する。
-import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+// 索引 (index.json)・README・コミュニティ投稿の例を第 1 引数（存在しない/空のディレクトリのみ・何も削除しない）か既定 /tmp/rc_courses 配下へ生成する。
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync, readdirSync } from 'node:fs';
 import { buildFromSpec } from './public/js/course.js';
 import { AX3, derivedTougeSpec } from './wf_touge_driver.mjs';   // AX4: 派生峠の水準と名前の単一真実源
 
-const OUT = '/tmp/rc_courses';
-rmSync(OUT, { recursive: true, force: true });
+// 出力先は第 1 引数（未指定＝従来の既定 /tmp/rc_courses。既定だけ従来どおり消して作り直す）。
+// 引数で出力先を指定したときは **何も削除しない**: 存在しない or 空のディレクトリだけ受け付け、
+// 空でないもの・ディレクトリでないもの・空文字は exit 1 で拒否する（誤指定で clone や public/ を消さないため）。
+const ARG = process.argv[2];
+let OUT;
+if (ARG === undefined) {
+  OUT = '/tmp/rc_courses';
+  rmSync(OUT, { recursive: true, force: true });
+} else {
+  OUT = ARG;
+  let bad = '';
+  if (ARG === '') bad = '出力先が空文字';
+  else if (existsSync(ARG)) {
+    if (!statSync(ARG).isDirectory()) bad = 'ディレクトリではない';
+    else if (readdirSync(ARG).length) bad = '空でないディレクトリ（何も削除しません）';
+  }
+  if (bad) { console.error(`出力先 "${ARG}" を拒否: ${bad}。存在しないか空のディレクトリを指定してください。`); process.exit(1); }
+}
 mkdirSync(OUT + '/courses/community', { recursive: true });
 
 const specs = JSON.parse(readFileSync('./public/data/courses.json', 'utf8'));
@@ -34,6 +50,14 @@ const ROMAJI = {
   // 40-course.json のような無意味なファイル名になるため明示する。
   '競技グラウンド (フルスケール)': 'competition-ground',
   '競技サーキット (フルスケール)': 'competition-circuit',
+  // 舵角限界ベンチ（bench 持ち 7 本。道幅違いは名前に含まれる。下の派生展開は走るが bench 名は展開形に当たらず未使用キーが増えるだけ）
+  '舵角限界ベンチ R_out/R_min=1.02〔道幅 2 台分〕': 'bench-steer-1-02-w2',
+  '舵角限界ベンチ R_out/R_min=0.95〔道幅 2 台分〕': 'bench-steer-0-95-w2',
+  '舵角限界ベンチ R_out/R_min=0.856〔道幅 2 台分〕': 'bench-steer-0-856-w2',
+  '舵角限界ベンチ R_out/R_min=0.8〔道幅 2 台分〕': 'bench-steer-0-8-w2',
+  '舵角限界ベンチ R_out/R_min=1.02〔道幅 3.5 台分〕': 'bench-steer-1-02-w35',
+  '舵角限界ベンチ R_out/R_min=0.95〔道幅 3.5 台分〕': 'bench-steer-0-95-w35',
+  '舵角限界ベンチ R_out/R_min=0.856〔道幅 3.5 台分〕': 'bench-steer-0-856-w35',
 };
 // AX3 (2026-09-07): 道幅比の派生峠〔道幅 N 台分〕は「元の slug + -wN」。対応表に無い名前が 'course' へ落ちるのを防ぐ。
 // **【AX4・2026-09-07 是正】水準と名前の綴りを手で複製しない。** 旧版は `['4.5','3','2']` と `〔道幅 N 台分〕` を
