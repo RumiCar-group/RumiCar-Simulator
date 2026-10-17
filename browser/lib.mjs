@@ -6,7 +6,7 @@
 //     ① chrome-headless-shell … 機能を削った別バイナリ。Playwright の headless:true の既定。
 //     ② chrome --headless=new  … フルバイナリの無画面モード。Blink/V8 は headed と同一経路。
 //     ③ headed + Xvfb         … 実ウィンドウ・実コンポジタ。差はほぼ無い。
-//   本アプリは canvas 描画・requestAnimationFrame 前提の物理ループ・WebGL(elev3d.js)・
+//   本アプリは canvas 描画（elev3d.js の立体プレビューも 2D canvas）・requestAnimationFrame 前提の物理ループ・
 //   CSS @container(fleet-cols) に依存するため ③ を採る。
 //   → 起動は必ず run.sh (xvfb-run) 経由。DISPLAY が無いと launch は失敗する。
 //
