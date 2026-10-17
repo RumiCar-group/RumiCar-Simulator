@@ -181,7 +181,9 @@ export function parseC(src) {
     let els = null;
     if (isKw('else')) {
       next();
-      if (isKw('if')) els = [ifStmt()];
+      // BL7 fix2（層4 往復 2 F4）: else if の if の節は行（line）を持たない（statement() を通らない）。条件の行 condLine＝if の行を列挙しない
+      //   プロパティで持つ（parser_py の elif と同じ・AST の JSON は是正前と同じ）。是正前は else if の条件のエラーが最初の if の行を指した。
+      if (isKw('if')) { const cl = peek().line; const n = ifStmt(); Object.defineProperty(n, 'condLine', { value: cl }); els = [n]; }
       else els = bodyAsArray();
     }
     return { t: 'if', cond, then, els };

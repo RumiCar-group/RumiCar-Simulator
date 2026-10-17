@@ -153,7 +153,10 @@ export function parsePy(src) {
     const cond = expr(); eat('PUNC', ':'); const then = suite();
     let els = null;
     skipNewlines();
-    if (isKw('elif')) { next(); els = [ifTail()]; }
+    // BL7 fix2（層4 往復 2 F4）: elif の if の節には行（line）を付けない（付けると実行位置ハイライトとステップ上限の行が elif の行へ動く）。
+    //   代わりに条件を評価する行 condLine＝elif の行を**列挙しない**プロパティで持つ（evaluator の if が condAt で使う＝条件で出たエラーの行）。
+    //   列挙しない＝AST の JSON（出荷サンプルの AST 指紋・wf_bj1_pysem E 章）は是正前と同じ。是正前は elif の条件のエラーが if の行を指した。
+    if (isKw('elif')) { const cl = peek().line; next(); const n = ifTail(); Object.defineProperty(n, 'condLine', { value: cl }); els = [n]; }
     else if (isKw('else')) { next(); eat('PUNC', ':'); els = suite(); }
     return { t: 'if', cond, then, els };
   }

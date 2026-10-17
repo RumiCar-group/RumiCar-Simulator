@@ -14,6 +14,8 @@ class ContinueSignal { constructor(line) { this.line = line; } }
 // BK1: kind＝エラーの種類 (i18nKey。既定は sub)。同じ種類で文言だけを状況で変えるとき、sub に文言のキー・kind に種類を渡す
 //   (breakOutside の Generic 版・stepLimit の millis() ヒント付き版)。i18nMsgKey＝実際に描画した文言のキー。
 const ERR_PREFIX = 'interp.err.';
+// BL7 fix2: 引数を 1 つだけ取る組込関数の印（api.js が len・random.choice に付ける・値＝文言の {fn}）。callHost が py・C の呼び出しで数える。
+export const ONE_ARG = Symbol('oneArg');
 export class RuntimeError extends Error {
   constructor(sub, params, line, kind) {
     let msg = t('interp.err.' + sub, params || {});
@@ -121,7 +123,7 @@ export class Interp {
     return e;
   }
   // BL7 fix1（層4 F3）: ループの条件を行 ln（そのループの文の行）で評価して真偽を返し、curLine を評価前の値へ戻す（例外で抜けたときは
-  //   戻さない＝エラーの行は ln か、条件が呼んだ関数の中の行）。
+  //   戻さない＝エラーの行は ln か、条件が呼んだ関数の中の行）。条件の中の関数の呼び出しの tick で出たステップ上限エラーも行 ln（execStmt の while の注記）。
   condAt(ln, cond, scope) {
     const keep = this.curLine;
     if (ln) this.curLine = ln;
@@ -130,7 +132,8 @@ export class Interp {
     return v;
   }
   // BL7 fix1（層4 F3）: C の for の更新部（parser_c の { t: 'exprstmt' }・行なし）を for の行で評価する。execStmt と同じく先に tick()
-  //   （ステップの数とステップ上限エラーの行は是正前と同じ）・評価の後は curLine を戻す。行を持つ・式でない更新部は従来どおり execStmt。
+  //   （ステップの数と、この tick で上限に達したときの行は是正前と同じ。更新部の中の関数の呼び出しの tick で達したときは for の行＝条件と
+  //   同じ・fix2）・評価の後は curLine を戻す。行を持つ・式でない更新部は従来どおり execStmt。
   execUpdate(node, fs) {
     const u = node.update;
     if (u.t !== 'exprstmt' || u.line) { this.execStmt(u, fs); return; }
@@ -206,15 +209,20 @@ export class Interp {
       case 'return': throw new ReturnSignal(node.value ? this.evalExpr(node.value, scope) : (this.lang === 'py' ? null : undefined), this.curLine);
       case 'break': throw new BreakSignal(this.curLine);
       case 'continue': throw new ContinueSignal(this.curLine);
+      // BL7 fix2（層4 往復 2 F4）: elif／else if の条件は、その elif／else if の行（parser の列挙しない condLine）で評価する（condAt・ループの
+      //   条件と同じ）。是正前は if の行（elif の節は行を持たない）。最初の if の条件と condLine の無い節は従来どおり。
       case 'if': {
-        if (this.tr(this.evalExpr(node.cond, scope))) this.execBlock(node.then, scope);
+        if (node.condLine ? this.condAt(node.condLine, node.cond, scope) : this.tr(this.evalExpr(node.cond, scope))) this.execBlock(node.then, scope);
         else if (node.els) this.execBlock(node.els, scope);
         return;
       }
       // BL7 fix1（層4 F3）: ループの条件（while・C の for の条件と更新・do-while の条件）は、そのループの文の行で評価する（condAt・execUpdate）。
       //   是正前は 2 回目以降の条件を本体の最後に実行した文の行のまま評価し、条件の中で出たエラー（len(None)・ゼロ除算・未定義の名前ほか）の
-      //   行が本体の最後の文を指した（1 回目だけ while の行）。評価の後は curLine を元へ戻す＝エラーが出ない限り、実行位置ハイライト（line()）・
-      //   ステップ上限エラーの行・評価ステップの数は是正前と同じ。
+      //   行が本体の最後の文を指した（1 回目だけ while の行）。評価の後は curLine を元へ戻す＝エラーが出ない限り、実行位置ハイライト（line()）と
+      //   評価ステップの数は是正前と同じ。ステップ上限エラー（StepLimit）は「上限を越えた 1 歩」の行なので、その 1 歩が条件（C の for の更新部・
+      //   elif／else if の条件も）の中の関数の呼び出し（evalCall の tick）ならループ（elif）の行になる（是正前は本体の最後の文・最初の if の行。
+      //   BL7 fix2＝層4 往復 2 F1 の実測で、条件に abs()／f() を書いた 36 変種中 10 が変化）。条件の評価そのものは tick しない＝条件に関数の
+      //   呼び出しが無ければ上限の行も是正前と同じ（wf_bl1_ui K-4）。
       case 'while': {
         while (this.condAt(node.line, node.cond, scope)) {
           this.tick();
@@ -569,7 +577,13 @@ export class Interp {
   // BL7 ①②: ホスト（api.js）の組込関数を呼ぶ。組込関数は文の行を知らないので、行の無い RuntimeError（len(None)・random.choice([]) ほか）を
   //   投げたら、ここで呼び出した文の行（curLine＝evalCall の時点の文の行）を付けて投げ直す（文言のキー・種類・引数は同じ）。
   //   それ以外の例外と、行の付いた RuntimeError はそのまま。正常に戻る呼び出しの値と this は従来どおり（this.host[name](...) は this＝host）。
+  // BL7 fix2（層4 往復 2 F2）: 引数を 1 つだけ取る組込関数（api.js が ONE_ARG の印を付けた len・random.choice）は、py・C のプログラムが
+  //   書いた引数の数が 1 つでなければ interp.err.oneArg（行＝この文の行）。数えるのはこの経路（py・C の呼び出し）だけ＝JS で書いたプログラムと、
+  //   ホストの関数がネイティブに呼ぶ形（`["ab", "c"].map(len)` は Array.prototype.map が要素・添字・配列の 3 つを渡す）は従来どおり 1 つ目だけを
+  //   使う（15341f4・e961e4b と同じ値）。cb9ea81（fix1）は api.js の関数の中で arguments.length を数え、map(len) を「3 個渡されました」で止めた。
   callHost(fn, self, args) {
+    const one = fn[ONE_ARG];
+    if (one !== undefined && args.length !== 1) throw new RuntimeError('oneArg', { fn: one, n: args.length }, this.curLine);
     try { return fn.apply(self, args); }
     catch (e) {
       if (e instanceof RuntimeError && !e.line) throw new RuntimeError(e.i18nMsgKey.slice(ERR_PREFIX.length), e.i18nParams, this.curLine, e.i18nKey.slice(ERR_PREFIX.length));
@@ -591,7 +605,7 @@ function pyTruthy(v) {
 //   for … in が数えるのは自前の列挙できる鍵だけ＝Object.keys と同じ集合）。ソースの上では最初の鍵で抜けるが、**速くはならない**:
 //   BL7 fix1（層4 F1）の実測（Node 22.22.1）で、Object.create(null) の辞書は V8 の辞書モード（%HasFastProperties＝false）で、for … in は
 //   始める前に全部の鍵を集める＝鍵の数に比例（N＝1／1000／20000 で 0.29／22.8／2132 µs・Object.keys 版との比 1.0〜1.6）・割り当ても同じ
-//   （N＝1000 を 2 万回で GC の scavenge が両方 160 回）。O(1) にするには dict に要素数を持たせ、全部の更新箇所で同期する必要がある
+//   （N＝1000 を 2 万回で GC の scavenge が両方 160 回）。鍵の数に比例しない判定にするには dict に要素数を持たせ、全部の更新箇所で同期する必要がある
 //   （採らない・決定ログ BL7 fix1）。値は是正前と同じ・Object.keys を呼ばない（wf_bl1_ui K-3 の配線）ことだけを主張する。
 function dictNonEmpty(o) { for (const k in o) return true; return false; }
 

@@ -120,8 +120,15 @@
 //    K-2 にスタック切れの文言の例が list だけ（dict は浅くても str() が TypeError＝BK-9 の未是正の差・スタック切れに届かない）、K-4 にループの
 //    条件の行（while〔py・C〕の 2 回目以降・C の for の条件と更新部・do-while の条件で出たエラーの行＝そのループの行〔do-while は while の行〕・
 //    エラーの出ない tick の実行位置ハイライトとステップ上限エラーの行は是正前と同じ）。
+//    BL7 fix2（層4 往復 2）: K-1 に引数の数を数える経路（py・C の呼び出しだけ＝evaluator.js callHost の ONE_ARG。JS のプログラムと
+//    `["ab", "c"].map(len)`／`.map(random.choice)` のネイティブの呼び出しは 15341f4 と同じ値＝fix1 の回帰 F2）、K-3 の速さの語の検査の範囲を
+//    注記まで（evaluator.js pyTruthy の上の注記〜dictNonEmpty・api.js pyLen の上の注記〜本体・physics_model §9 の dict を含む行・changelog.js の
+//    dict／辞書を含む文。語＝O(1)・定数時間・一定時間・高速・鍵の一覧を作らない・constant time・faster・quicker・no longer builds the list of keys）、
+//    K-4 にステップ上限の行（条件の中の関数の呼び出しの 1 歩で上限を越えるとループ／elif の行＝F1・行は SIM.maxStepsPerTick で決まる）と
+//    elif／else if の条件のエラーの行（parser の列挙しない condLine・AST の JSON は不変＝F4）。
 //    赤になる章（2026-10-17 の実測・--root 15341f4＝BL6 後・BL7 前）: 件数は決定ログ BL7 結果。--root e961e4b（BL7 初版）＝K-1 の引数の数の行・
-//    K-2 の文言の例・K-4 の条件の行（件数は決定ログ BL7 fix1 結果）。
+//    K-2 の文言の例・K-4 の条件の行（件数は決定ログ BL7 fix1 結果）。fix2 の行（K-1 のネイティブの呼び出し・K-3 の注記・K-4 のステップ上限と
+//    elif）の赤は決定ログ BL7 fix2 結果（--root 15341f4・e961e4b・cb9ea81）。
 //
 // 使い方: node wf_bl1_ui.mjs              … 検査
 //         node wf_bl1_ui.mjs --root <dir>  … <dir>/public/js の product で回す（是正前の木で赤になることの確認用）
@@ -2167,6 +2174,24 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
     ok(ja.ctor === 'RuntimeError' && ja.key === 'interp.err.lenArg' && !ja.line && ja.msg === want('ja', 'interp.err.lenArg', { type: 'None' }, 0)
       && en.msg === want('en', 'interp.err.lenArg', { type: 'None' }, 0), `K-1 JS の len(null) → 行なしの lenArg（ja ${J(ja.msg)}・en ${J(en.msg)}）`);
   }
+  { // BL7 fix2（層4 往復 2 F2）: 引数の数を数えるのは py・C のプログラムに書いた呼び出しだけ（evaluator.js callHost が api.js の付けた ONE_ARG の
+    //   印で数える）。JS のプログラムと、ホストの関数がネイティブに呼ぶ形（Array.prototype.map は要素・添字・配列の 3 つを渡す）は 15341f4・e961e4b と
+    //   同じ値。cb9ea81（fix1）は api.js の関数の中で arguments.length を数え「3 個渡されました」で止めた（回帰）。py の len()／len(a, b) は上の K1N。
+    const NATIVE = [
+      ['JS の ["ab", "c"].map(len)', 'js', 'function setup(){ print(["ab", "c"].map(len).join(",")); }\nfunction loop(){}', ['2,1']],
+      ['JS の [["a"], ["b"]].map(random.choice)', 'js', 'function setup(){ print([["a"], ["b"]].map(random.choice).join(",")); }\nfunction loop(){}', ['a,b']],
+      ['JS の len([1], [2, 3])（JS は引数の数を数えない＝1 つ目）', 'js', 'function setup(){ print(len([1], [2, 3])); }\nfunction loop(){}', ['1']],
+      ['py の ["ab", "c"].map(len)（list の map＝JS のネイティブの経路）', 'py', 'x = ["ab", "c"].map(len)\nprint(x[0], x[1], len(x))\n', ['2 1 2']],
+      ['py の [["a"], ["b"]].map(random.choice)', 'py', 'import random\nx = [["a"], ["b"]].map(random.choice)\nprint(x[0], x[1])\n', ['a b']],
+    ];
+    for (const [label, lang, code, want1] of NATIVE) {
+      const r = runK(code, lang, 0);
+      ok(!r.ctor && J(r.out) === J(want1), `K-1 ${label} → ${J(want1)}（実 ${r.ctor ? r.ctor + ' ' + J(r.msg) : J(r.out)}）`);
+    }
+    const apiSrc = readFileSync(join(JS, 'api.js'), 'utf8'), evSrc = readFileSync(join(JS, 'interp/evaluator.js'), 'utf8');
+    ok(!/arguments\.length/.test(apiSrc.replace(/\/\/.*$/gm, '')) && /callHost\(fn, self, args\)\s*\{\s*const one = fn\[ONE_ARG\];/.test(evSrc),
+      'K-1 配線: 引数の数は evaluator.js callHost が ONE_ARG の印で数え、api.js（コメントを除く）は arguments.length を使わない');
+  }
   { // 選べる列の値と乱数の消費は是正前と同じ: choice(L) の列が L[randrange(len(L))]（同じ式 Math.floor(rand×長さ）を独立に使う経路）と一致。
     const code = 'import random\nL = [3, 1, 4, 1, 5, 9, 2, 6]\nS = "rumicar"\nrandom.seed(7)\na = []\nfor i in range(60):\n    a.append(random.choice(L))\n    a.append(random.choice(S))\n'
       + 'random.seed(7)\nb = []\nfor i in range(60):\n    b.append(L[random.randrange(len(L))])\n    b.append(S[random.randrange(len(S))])\nprint(a == b, len(a))\n';
@@ -2244,11 +2269,29 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
     ok(truthy && !truthy.includes('Object.keys') && /dictNonEmpty\(v\)/.test(truthy) && nonEmpty && !nonEmpty.includes('Object.keys') && /for \(const k in o\) return true/.test(nonEmpty),
       `K-3 配線（形）: evaluator.js pyTruthy は dictNonEmpty（for … in）で判定し Object.keys を呼ばない（pyTruthy ${truthy ? truthy.length + ' 字' : '無し'}）`);
     ok(lenM && !lenM[0].includes('Object.keys') && /for \(const k in x\)/.test(lenM[0]), `K-3 配線（形）: api.js pyLen は for … in で鍵を数え Object.keys を呼ばない（${lenM ? lenM[0].length + ' 字' : 'pyLen 無し'}）`);
-    // BL7 fix1（層4 F1）: 「O(1)」「鍵の一覧を作らない」を主張しない（e961e4b はコメントと physics_model §9 に書いた）。同じ語が戻ったら赤。
+    // BL7 fix1（層4 F1）＋fix2（層4 往復 2 F3）: 速さを主張しない（e961e4b は dictNonEmpty の上の注記と physics_model §9 に「O(1)」「鍵の一覧を
+    //   作らない」と書いた）。見る範囲＝evaluator.js の pyTruthy の上の注記から dictNonEmpty の行まで・api.js の pyLen の上の注記から本体の終わりまで・
+    //   physics_model.md／.en.md の §9 の dict を含む行・changelog.js の dict／辞書を含む文（。か ". " で区切る）。語は言い換えを含めて SPEED。
+    const SPEED = /O\(1\)|定数時間|一定時間|高速|鍵の一覧を作らない|constant[- ]time|faster|quicker|no longer builds the list of keys/gi;
+    const noteStart = (src, at) => {   // at を含む行の上に続く // の注記の始まり
+      let s0 = src.lastIndexOf('\n', at - 1) + 1;
+      while (s0 > 0) { const p = src.lastIndexOf('\n', s0 - 2) + 1; if (!/^\s*\/\//.test(src.slice(p, s0 - 1))) break; s0 = p; }
+      return s0;
+    };
+    const span = (src, startRe, endRe) => { const a = startRe.exec(src); const b = endRe.exec(src); if (!a || !b) return ''; const e = src.indexOf('\n', b.index); return src.slice(noteStart(src, a.index), e < 0 ? src.length : e); };
+    const evNotes = span(evSrc, /^function pyTruthy\(v\) \{/m, /^function dictNonEmpty\(o\) \{/m);
+    const lenNotes = lenM ? apiSrc.slice(noteStart(apiSrc, lenM.index), lenM.index + lenM[0].length) : '';
+    const sec9 = (md) => { const a = md.search(/^## 9\./m); if (a < 0) return ''; const b = md.slice(a + 3).search(/^## /m); return md.slice(a, b < 0 ? md.length : a + 3 + b); };
     const pmJa = readFileSync(join(ROOT, 'docs/physics_model.md'), 'utf8'), pmEn = readFileSync(join(ROOT, 'docs/physics_model.en.md'), 'utf8');
-    const claims = [/O\(1\)/.test(nonEmpty || '') && 'evaluator.js dictNonEmpty の O(1)', /O\(1\)/.test(lenM ? lenM[0] : '') && 'api.js pyLen の O(1)',
-      pmJa.includes('鍵の一覧を作らない') && 'physics_model.md「鍵の一覧を作らない」', pmEn.includes('no longer builds the list of keys') && 'physics_model.en.md "no longer builds the list of keys"'].filter(Boolean);
-    ok(claims.length === 0, `K-3 速さの主張が無い（O(1)・鍵の一覧を作らない）${claims.length ? '（残り: ' + claims.join('・') + '）' : ''}`);
+    const dictLines = (md) => sec9(md).split('\n').filter((l) => /dict/.test(l)).join('\n');
+    const clSrc = readFileSync(join(JS, 'changelog.js'), 'utf8');
+    const clDict = clSrc.split(/。|\. /).filter((x) => /dict|辞書/.test(x)).join('\n');
+    const hits = (label, txt) => [...new Set(txt.match(SPEED) || [])].map((w) => `${label} の「${w}」`);
+    const claims = [...hits('evaluator.js pyTruthy〜dictNonEmpty の注記', evNotes), ...hits('api.js pyLen の注記と本体', lenNotes),
+      ...hits('physics_model.md §9 の dict の行', dictLines(pmJa)), ...hits('physics_model.en.md §9 の dict の行', dictLines(pmEn)), ...hits('changelog.js の dict の文', clDict)];
+    ok(evNotes.length > 200 && lenNotes.length > 200 && dictLines(pmJa) && dictLines(pmEn),
+      `K-3 速さの語を探す範囲が取れた（evaluator ${evNotes.length} 字・api ${lenNotes.length} 字・§9 の dict の行 ja ${dictLines(pmJa).split('\n').length}／en ${dictLines(pmEn).split('\n').length} 行・changelog の dict の文 ${clDict ? clDict.split('\n').length : 0}）`);
+    ok(claims.length === 0, `K-3 速さの主張が無い（注記・§9・changelog の語 SPEED）${claims.length ? '（残り: ' + claims.join('・') + '）' : ''}`);
   }
   { // 参考の印字（判定しない）: 本番の pyTruthy（Interp.tr）と pyLen の 1 回あたりの時間を、是正前の式（Object.keys(v).length）と並べる。
     const ipK = runK('x = 1\n', 'py').ctrl.interp;   // 本番の buildController が作った py の Interp
@@ -2279,7 +2322,8 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
     const r = runK(code, lang, ticks);
     ok(r.ctor === 'RuntimeError' && r.key === key && r.line === ln && r.ctrl && r.ctrl.line() === ln, `K-4 ${label} → ${key}（行 ${ln}）（実 ${r.ctor || '例外なし'} ${r.key || ''}・行 ${r.line}・ハイライト ${r.ctrl ? r.ctrl.line() : '?'}）`);
   }
-  // エラーの出ない tick の後の実行位置ハイライトとステップ上限エラーの行は是正前と同じ（条件の評価の後に curLine を戻す・更新部の tick は先）。
+  // エラーの出ない tick の後の実行位置ハイライトと、条件に関数の呼び出しの無いループのステップ上限エラーの行は是正前と同じ（条件の評価の後に
+  //   curLine を戻す・条件の評価そのものは tick しない・更新部の tick は先）。条件の中の関数の呼び出しの 1 歩で上限を越える形は下の STEPC。
   const SAME = [
     ['py while の後のハイライト（本体の最後の文）', 'py', 'def loop():\n    x = 3\n    while x > 0:\n        x = x - 1\n        y = 1\n', 1, null, 5],
     ['C for の後のハイライト（本体の最後の文）', 'c', 'void setup(){}\nvoid loop(){\n  int k = 0;\n  for (int i = 0; i < 3; i++) {\n    k = k + 1;\n    k = k + 0;\n  }\n}', 1, null, 6],
@@ -2290,6 +2334,59 @@ const L6 = new Function('CAR_TYPE_BY_KEY', 'hasKey', 't',
     const r = runK(code, lang, ticks);
     const got = key ? r.line : (r.ctor ? 'ERR ' + r.msg : r.ctrl.line());
     ok((key ? r.key === key : !r.ctor) && got === ln && r.ctrl && r.ctrl.line() === ln, `K-4 ${label}: 行 ${ln}（実 ${r.key || '例外なし'}・${got}）`);
+  }
+  // BL7 fix2（層4 往復 2 F1）: ステップ上限エラーは「上限を越えた 1 歩」の行。その 1 歩が条件（while・C の for の条件と更新部・elif／else if）の中の
+  //   関数の呼び出し（evalCall の tick）なら、そのループ／elif／else if の行（e961e4b までは本体の最後に実行した文・最初の if の行）。どの 1 歩で
+  //   越えるかは SIM.maxStepsPerTick（刻んだ時 200000）とステップの数え方で決まる＝上限を変えたら刻み直す。変種は層4 の probe（条件に abs()／f() を
+  //   書き本体の文の数を 0〜5 で振った 36 変種中 10 が変化）から経路ごとに 1 つ＋elif／else if（本体 0〜11 の文で探索）。[ラベル, 言語, 本文, 行, e961e4b の行]
+  const B = (n, l) => Array.from({ length: n }, () => l).join('');
+  const STEPC = [
+    ['py while の条件の abs()', 'py', 'def loop():\n    x = 1\n    while abs(x) > 0:\n        x = x + 1\n', 3, 4],
+    ['py while の条件の自作の関数 f()', 'py', 'def f(v):\n    return v\ndef loop():\n    x = 1\n    while f(x) > 0:\n        x = x + 1\n' + B(2, '        y = 2\n'), 5, 8],
+    ['C while の条件の abs()', 'c', 'void setup(){}\nvoid loop(){\n  int k = 0;\n  while (abs(k) >= 0) {\n    k = k + 1;\n  }\n}', 4, 5],
+    ['C for の条件の abs()', 'c', 'void setup(){}\nvoid loop(){\n  int k = 0;\n  for (int i = 0; abs(i) < 3; i = i + 0) {\n    k = k + 1;\n' + B(3, '    k = k + 0;\n') + '  }\n}', 4, 8],
+    ['C for の更新部の abs()', 'c', 'void setup(){}\nvoid loop(){\n  int k = 0;\n  for (int i = 0; i < 3; i = i + abs(0)) {\n    k = k + 1;\n' + B(2, '    k = k + 0;\n') + '  }\n}', 4, 7],
+    ['py elif の条件の abs()', 'py', 'def loop():\n    x = 1\n    while True:\n        if x < 0:\n            y = 1\n        elif abs(x) < 0:\n            y = 2\n        y = 2\n', 6, 4],
+    ['C else if の条件の abs()', 'c', 'void setup(){}\nvoid loop(){\n  int k = 0;\n  while (1) {\n    if (k < 0) {\n      k = 1;\n    } else if (abs(k) < 0) {\n      k = 2;\n    }\n    k = k + 0;\n  }\n}', 7, 5],
+  ];
+  ok(SIM.maxStepsPerTick === 200000, `K-4 ステップ上限の行の表を刻んだ時の SIM.maxStepsPerTick＝200000（実 ${SIM.maxStepsPerTick}・違えば STEPC を刻み直す）`);
+  for (const [label, lang, code, ln, old] of STEPC) {
+    const r = runK(code, lang, 1);
+    ok(r.key === 'interp.err.stepLimit' && r.line === ln && r.ctrl && r.ctrl.line() === ln,
+      `K-4 ${label}の 1 歩で上限 → ステップ上限の行 ${ln}（e961e4b まで ${old}）（実 ${r.key || '例外なし'}・行 ${r.line}・ハイライト ${r.ctrl ? r.ctrl.line() : '?'}）`);
+  }
+  // BL7 fix2（層4 往復 2 F4）: elif／else if の条件で出たエラーの行＝その elif／else if の行（parser が列挙しない condLine を付け、evaluator の if が
+  //   condAt で評価）。e961e4b・cb9ea81 は最初の if の行（elif の節は行を持たない）。本体・else の本体・条件が呼んだ関数の中のエラーの行と、
+  //   エラーの出ないときのハイライトは従来どおり。
+  const ELIF = [
+    // [ラベル, 言語, 本文, tick 数, 期待のキー（null＝エラーなし）, 行（エラーの行かハイライト）, 是正前の行]
+    ['py elif の条件のゼロ除算', 'py', 'k = 0\nif k > 5:\n    x = 1\nelif 10 / k:\n    x = 2\n', 0, 'interp.err.divZero', 4, 2],
+    ['py elif の条件の len(None)', 'py', 'y = None\nif y == 1:\n    x = 1\nelif len(y):\n    x = 2\n', 0, 'interp.err.lenArg', 4, 2],
+    ['py 2 つ目の elif の条件', 'py', 'k = 0\nif k > 5:\n    x = 1\nelif k > 6:\n    x = 2\nelif 10 / k:\n    x = 3\n', 0, 'interp.err.divZero', 6, 2],
+    ['py def loop() の中の elif の条件', 'py', 'def loop():\n    k = 0\n    if k > 5:\n        x = 1\n    elif 10 / k:\n        x = 2\n', 1, 'interp.err.divZero', 5, 3],
+    ['C else if の条件のゼロ除算', 'c', 'void setup(){\n  int k = 0;\n  if (k > 5) {\n    k = 1;\n  } else if (10 % k) {\n    k = 2;\n  }\n}\nvoid loop(){}', 0, 'interp.err.divZero', 5, 3],
+    ['py else の本体のエラー（行＝本体の文・従来どおり）', 'py', 'k = 0\nif k > 5:\n    x = 1\nelif k > 6:\n    x = 2\nelse:\n    x = 10 / k\n', 0, 'interp.err.divZero', 7, 7],
+    ['C else if の条件が呼んだ関数の中のエラー（行＝関数の中の文・従来どおり）', 'c', 'int g(int v){\n  return 10 % v;\n}\nvoid setup(){\n  int k = 0;\n  if (k > 5) {\n    k = 1;\n  } else if (g(k)) {\n    k = 2;\n  }\n}\nvoid loop(){}', 0, 'interp.err.divZero', 2, 2],
+    ['py elif が偽のときのハイライト（if の行・従来どおり）', 'py', 'def loop():\n    k = 0\n    if k > 5:\n        x = 1\n    elif k > 9:\n        x = 2\n', 1, null, 3, 3],
+    ['py elif が真のときのハイライト（本体の文・従来どおり）', 'py', 'def loop():\n    k = 0\n    if k > 5:\n        x = 1\n    elif k < 9:\n        x = 2\n', 1, null, 6, 6],
+    ['C else if が偽のときのハイライト（if の行・従来どおり）', 'c', 'void setup(){}\nvoid loop(){\n  int k = 0;\n  if (k > 5) {\n    k = 1;\n  } else if (k > 9) {\n    k = 2;\n  }\n}', 1, null, 4, 4],
+  ];
+  for (const [label, lang, code, ticks, key, ln, old] of ELIF) {
+    const r = runK(code, lang, ticks);
+    const got = key ? r.line : (r.ctor ? 'ERR ' + r.msg : r.ctrl.line());
+    ok((key ? r.ctor === 'RuntimeError' && r.key === key : !r.ctor) && got === ln && r.ctrl && r.ctrl.line() === ln,
+      `K-4 ${label} → ${key || 'エラーなし'}・行 ${ln}（是正前 ${old}）（実 ${r.key || (r.ctor ? r.ctor : '例外なし')}・${got}）`);
+  }
+  { // condLine は列挙しない＝AST の JSON（出荷サンプルの AST 指紋・wf_bj1_pysem E 章）に出ない。
+    const { parsePy } = await impK('interp/parser_py.js');
+    const { parseC } = await impK('interp/parser_c.js');
+    const ap = parsePy('k = 0\nif k > 5:\n    x = 1\nelif k > 6:\n    x = 2\nelif k:\n    x = 3\n');
+    const ac = parseC('void setup(){\n  int k = 0;\n  if (k > 5) {\n    k = 1;\n  } else if (k) {\n    k = 2;\n  }\n}\nvoid loop(){}');
+    const e1 = ap.body[1].els && ap.body[1].els[0], e2 = e1 && e1.els && e1.els[0];
+    const sc = ac.body.find((f) => f.name === 'setup'), ce = sc && sc.body[1].els && sc.body[1].els[0];
+    ok(e1 && e1.condLine === 4 && e2 && e2.condLine === 6 && ce && ce.condLine === 5 && !JSON.stringify(ap).includes('condLine') && !JSON.stringify(ac).includes('condLine')
+      && !Object.keys(e1).includes('condLine') && e1.line == null,
+      `K-4 elif／else if の condLine（py ${e1 && e1.condLine}・${e2 && e2.condLine}／C ${ce && ce.condLine}）は列挙しない（AST の JSON に出ない・elif の節は line を持たない）`);
   }
   i18nK.setLang('ja');
 }

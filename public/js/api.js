@@ -4,7 +4,7 @@ import { CONST, SENSOR_NOISE, SENSOR_HOLD, SIM } from './config.js';
 import { DYN } from './physics_dyn.js';
 import { readAll, readRear } from './sensors.js';
 import { t } from './i18n.js';
-import { RuntimeError, typeName } from './interp/evaluator.js';
+import { RuntimeError, typeName, ONE_ARG } from './interp/evaluator.js';
 
 // World は { car, walls, log(msg), rear?, encoder? } を持つ実行コンテキスト。
 // world.rear=true のとき後方センサー(任意装備)が、world.encoder=true のとき車輪エンコーダ(任意装備)が有効になる。
@@ -122,11 +122,12 @@ export function buildApi(world) {
   //   （py の dict はプロトタイプ無し・ホストのオブジェクトも自前の鍵だけを数える）＝値は是正前と同じ。速くはならない（BL7 fix1・層4 F1 の
   //   実測〔Node 22.22.1〕: V8 の辞書モードの for … in も鍵を全部集める＝鍵の数に比例。鍵 2 つの dict で 186 ns〔15341f4・Object.keys〕→
   //   250 ns・N＝1000／20000 で 1.2〜1.6 倍遅い。理由と数は evaluator.js dictNonEmpty の注記・決定ログ BL7 fix1）。
-  // BL7 fix1（層4 F5）: 引数が 1 つでなければ interp.err.oneArg（python3 は TypeError: len() takes exactly one argument (0 given)）。
-  //   是正前（e961e4b まで）は len() が「None には長さがありません」・len(a, b) は黙って len(a)。
-  //   引数の数は arguments.length で数える（list・str の len は 15341f4・e961e4b と同じ 1.5 ns 前後〔Node 22・実測〕）。
-  const pyLen = function (x) {
-    if (arguments.length !== 1) throw new RuntimeError('oneArg', { fn: 'len', n: arguments.length });
+  // BL7 fix1（層4 F5）＋fix2（層4 往復 2 F2）: 引数の数（1 つでなければ interp.err.oneArg・python3 は TypeError: len() takes exactly one
+  //   argument (0 given)）は**ここでは数えない**。py・C のプログラムが len(…) と書いた呼び出しだけを evaluator の callHost が数える
+  //   （下の ONE_ARG の印）。JS で書いたプログラムと、ホストの関数（Array.prototype.map ほか）がネイティブに呼ぶ形（`["ab", "c"].map(len)`＝
+  //   要素・添字・配列の 3 つを渡す）は従来どおり 1 つ目だけを使う＝15341f4・e961e4b と同じ値（"2,1"）。cb9ea81（fix1）は
+  //   pyLen の中で arguments.length を数えたので、map(len) が「3 個渡されました」で止まった（回帰）。
+  const pyLen = (x) => {
     if (typeof x === 'string' || Array.isArray(x)) return x.length;
     if (x != null && typeof x === 'object') {
       let n = 0;
@@ -172,15 +173,19 @@ export function buildApi(world) {
     //   IndexError: Cannot choose from an empty sequence）。どちらも乱数を引く前に投げる。行は evaluator の callHost が付ける。是正前は
     //   choice(None) が JS の TypeError「Cannot read properties of null (reading 'length')」・choice([]) は例外にならず値なし（print は空行）・
     //   dict や数は黙って値なし。選べる列の選び方（乱数 1 回・同じ添字）は是正前と同じ＝出荷・既存の列は不変。
-    // BL7 fix1（層4 F5）: 引数が 1 つでなければ interp.err.oneArg（python3 は choice() が TypeError: … missing 1 required positional
-    //   argument: 'seq'）。是正前（e961e4b まで）は random.choice() が「None からは選べません」・choice(a, b) は黙って a から選んだ。
-    choice: function (arr) {
-      if (arguments.length !== 1) throw new RuntimeError('oneArg', { fn: 'random.choice', n: arguments.length });
+    // BL7 fix1＋fix2: 引数の数（1 つでなければ interp.err.oneArg・python3 は choice() が TypeError: … missing 1 required positional
+    //   argument: 'seq'）は pyLen と同じく evaluator の callHost が py・C の呼び出しだけで数える（ONE_ARG の印）。JS・ネイティブの
+    //   `[["a"], ["b"]].map(random.choice)` は従来どおり 1 つ目から選ぶ（15341f4 と同じ値と乱数の消費）。
+    choice: (arr) => {
       if (!(Array.isArray(arr) || typeof arr === 'string')) throw new RuntimeError('choiceArg', { type: typeName(arr) });
       if (arr.length === 0) throw new RuntimeError('choiceEmpty', {});
       return arr[Math.floor(_rand() * arr.length)];
     },
   };
+  // BL7 fix2（層4 往復 2 F2）: 引数を 1 つだけ取る組込関数の印（値＝文言の {fn}）。evaluator の callHost が py・C の呼び出しの引数の数を
+  //   この印で数える（JS のプログラム・ネイティブの呼び出しは数えない）。
+  pyLen[ONE_ARG] = 'len';
+  randomMod.choice[ONE_ARG] = 'random.choice';
 
   const env = {
     // 定数

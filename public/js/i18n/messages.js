@@ -949,13 +949,14 @@ export const MESSAGES = {
   'interp.err.lenArg':      { ja: 'len() には list・tuple・str・dict を渡してください ({type} には長さがありません)', en: 'len() needs a list, tuple, str or dict ({type} has no length)' },
   'interp.err.choiceArg':   { ja: 'random.choice() には list・tuple・str を渡してください ({type} からは選べません)', en: 'random.choice() needs a list, tuple or str (cannot choose from {type})' },
   'interp.err.choiceEmpty': { ja: 'random.choice(): 空の list・tuple・str からは選べません', en: 'random.choice(): cannot choose from an empty list, tuple or str' },
-  // BL7 fix1（層4 F5）: len()・random.choice() の引数が 1 つでない（0 個・2 個以上）。{fn}＝len／random.choice・{n}＝渡した数。python3 は
-  //   len() が TypeError: len() takes exactly one argument (0 given)。是正前（e961e4b まで）は len() が lenArg の「None には長さがありません」・
-  //   2 個以上は黙って 1 つ目だけを使った。
+  // BL7 fix1（層4 F5）＋fix2（層4 往復 2 F2）: len()・random.choice() の引数が 1 つでない（0 個・2 個以上）。{fn}＝len／random.choice・
+  //   {n}＝渡した数。python3 は len() が TypeError: len() takes exactly one argument (0 given)。数えるのは py・C のプログラムに書いた呼び出し
+  //   だけ（evaluator の callHost・ONE_ARG の印）＝JS のプログラムと `["ab", "c"].map(len)` のようなネイティブの呼び出しは 1 つ目だけを使う
+  //   （15341f4 と同じ）。是正前（e961e4b まで）は len() が lenArg の「None には長さがありません」・2 個以上は黙って 1 つ目だけを使った。
+  'interp.err.oneArg':      { ja: '{fn}() には引数を 1 つだけ渡してください ({n} 個渡されました)', en: '{fn}() takes exactly one argument ({n} given)' },
   // BL7 ⑤: 実行環境の呼び出しスタックが尽きた（上限 SIM.maxCallDepth に届く前）。種類（i18nKey）は interp.err.recursion のまま・文言だけ別。
   //   段数を書かない（是正前は上の recursion の文言で、loop() の中の str(深い入れ子の list) が「1 段に達しました」と出た）。関数の外で
   //   尽きたとき（Model B の while True: の本体・1 回だけ走るプログラム）も同じ文言（是正前は JS の RangeError が漏れた）。
-  'interp.err.oneArg':      { ja: '{fn}() には引数を 1 つだけ渡してください ({n} 個渡されました)', en: '{fn}() takes exactly one argument ({n} given)' },
   // BL7 fix1（層4 F4）: 文言の例は list だけ（dict は入れ子が浅くても str()/print() が実行環境の TypeError になり＝BK-9 の未是正の差、
   //   スタック切れまで届かない。e961e4b の文言は「list・dict」）。
   'interp.err.recursionStack': { ja: '入れ子が深すぎます (実行環境の呼び出しスタックが尽きました)。再帰を止める条件が正しいか、深く入れ子にした list を str() や print() で文字列にしていないか確かめてください', en: 'Nesting is too deep (the call stack of the runtime ran out). Check the condition that stops the recursion, and whether a deeply nested list is being turned into a string with str() or print()' },
