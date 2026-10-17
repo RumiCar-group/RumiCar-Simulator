@@ -5,6 +5,9 @@
 // 束縛し main.js への逆 import を作らない(循環 import 0 維持)。共有可変 course は ./state.js の
 // live binding を読む。ghost 再生用の直近レース(pendingRaceGhost)等はこのモジュール内に閉じる。
 import { FLEET, CAR_TYPE_BY_KEY, APP_VERSION } from './config.js';
+// BM5: エントリーに同梱する carDef は config.js の carDefForEntry (常設ゲート wf_bi1_field.mjs H 章と同じ関数)。BM5 で config.js へ
+//   移した名前なので名前付き import しない (BA1 の規則)。無ければエントリーを作らず「再読込してください」と出す (形をここに写さない)。
+import * as configNS from './config.js';
 import { runRace, engineFingerprint } from './race_engine.js';
 import { frozenField } from './race_event.js';
 // BI2: resolveEventSpec は BI2 で足した名前なので名前付き import しない (古い race_event.js がキャッシュに残るブラウザで
@@ -348,14 +351,7 @@ function raceStatus(event, hasResult) {
   return 'open';
 }
 
-// 車種キー → 同梱用の carDef (純データ clone・runtime フラグ custom/community は落とす)。
-function carDefForEntry(carType) {
-  const ct = CAR_TYPE_BY_KEY[carType];
-  if (!ct) return null;
-  const def = {};
-  for (const k of Object.keys(ct)) { if (k === 'custom' || k === 'community') continue; def[k] = ct[k]; }
-  return JSON.parse(JSON.stringify(def));   // drift ネストも含めて複製
-}
+// 車種キー → 同梱用の carDef は config.js の carDefForEntry (BM5 で移した・純データ clone・runtime フラグ custom/community は落とす)。
 
 
 
@@ -688,11 +684,12 @@ function submitOfficialEntry() {
   if (!name) { $('ofMsg').textContent = t('official.entry.needName'); return; }
   if (!author) { $('ofMsg').textContent = t('official.entry.needAuthor'); return; }
   const s = activeSlot(); if (!s) return;
+  if (typeof configNS.carDefForEntry !== 'function') { $('ofMsg').textContent = t('official.entry.stale'); return; }   // BM5: 古い config.js
   const entry = {
     name, author,
     program: { lang: s.lang, src: s.src },
     carType: s.carType,
-    carDef: carDefForEntry(s.carType),
+    carDef: configNS.carDefForEntry(s.carType),
     submittedAt: new Date().toISOString(),
   };
   if (intro) entry.intro = intro;

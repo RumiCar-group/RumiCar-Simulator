@@ -37,8 +37,11 @@
 //      computeRaceTimeout・ブラウザが固定 180 秒で走らせ、regime の無い event はブラウザだけ利用者の選んでいる領域で走った。
 //      G1 構造（2 ファイルのコード部分に既定のリテラルが 0 件・3 経路が関数を通る・race_ui.js は名前空間 import＝BA1）／
 //      G2 関数の既定値（maxSec＝computeRaceTimeout・峠は runRace と同じく 1 本・regime='tabletop'・書かれた欄はそのまま）／
-//      G3 正準サンプルから maxSec と regime を落とした束を本番の wf_official_result.mjs で生成（①② 合格・③ は exit 3）→
-//      --verify exit 0・result.json に実効の regime／maxSec／laps が刻まれる／G4 検出力（写しを壊す変異 11 件）。
+//      G3 正準サンプルを卓上コース（オーバル・4 周）へ載せ替え maxSec と regime を落とした束を本番の wf_official_result.mjs で生成
+//      （①② 合格・③ は exit 3）→ --verify exit 0・result.json に実効の regime／maxSec／laps が刻まれ、完走 1 台以上・maxSec が
+//      computeRaceTimeout の上限（RACE_TO.MAX_SEC）未満かつ下限（MIN_SEC＝旧固定の 180）超＝定数と区別できる値／G4 検出力（写しを壊す変異 11 件）。
+//      【BM5・2026-10-17】BM5 の前の G3 の束は正準サンプルのフルスケールのコースのまま卓上の領域で走り、全車 timeout・maxSec が上限 1800 に
+//      張り付いて「computeRaceTimeout の値か」を定数と区別できなかった（BI-7 F3）。
 //      ※ maxSec は resultSha256 の canon に入れない（正準サンプルの pin は wf_official_result.mjs が見る）。
 //   H) 【BI3・2026-10-11】予算クラスのコスト判定（race_event.js costOf）は、公式レースが登録する定義（config.js
 //      registerRaceCarTypes → _putCarType）と同じ純関数 config.js fillCarDef で埋めた定義で測る。BI3 の前は maxSpeed の無い
@@ -49,6 +52,11 @@
 //      H3 判定の定義と registerRaceCarTypes が CAR_TYPE_BY_KEY に入れる定義が custom を除き deep-equal・コストも一致／
 //      H4 回帰（組込 6 車種の key 文字列・FILLER_POOL・carDefForEntry の同梱形・未知 key・完全な独自 carDef のコストが改修前の
 //      値表と一致）／H5 検出力（写しを壊す変異 4 件）。
+//      【BM5・2026-10-17】H6 構造: エントリーに同梱する carDef を作る関数は config.js の carDefForEntry 1 か所。race_ui.js（名前空間
+//      import＝BA1）・本ゲート・wf_share_check.mjs がそれを呼び、custom/community を落とす式の写しが 0 件（BM5 の前は race_ui.js の
+//      非公開関数を本ゲートと wf_share_check.mjs が手で写していた）／H7 関数の形（全車種・登録した独自車種で custom/community を除いた
+//      表の値と JSON 一致・表から切り離した複製・未知 key は null）／H8 検出力（写しを壊す変異）。
+//   後始末（BM5）: 一時ディレクトリは process の 'exit' で消す（未捕捉の例外・process.exit でも残さない。シグナルで終えたときは残る＝限界）。
 //
 // 見張れていないもの（限界）: ①submittedAt はエントリー側が自分で書く値（PR のマージ時刻ではない）。締切前の時刻を偽って書いた
 //   エントリーは除けない。②並べ替えは submittedAt を書かれた文字列のまま比べる（旧実装と同じ鍵）ので、表記の違う時刻（Z と +09:00
@@ -56,7 +64,7 @@
 //   👻 の作者引き・殿堂入りの作者引き）は測らない（👻 と殿堂入りは author で entries を引く＝同じ作者が 2 件出すと先の 1 件になる）。
 //   ④（BI3）予算判定はエントリーごと。同じ key の carDef を 2 件出すと、レースは後に登録した定義で両方の車を走らせ（後勝ち）、drift 未指定の
 //   2 件目は 1 件目の drift を継承する＝各エントリーの判定の定義と走る定義が分かれうる（field 全体を見る判定は持たない）。
-// 所要: 本ホスト実測 約 56 秒（単独・2026-10-11・BI2 の G3 が約 40 秒＝既定を落とした束は卓上の領域で全車が上限 1800 秒まで走る・BI3 の H 章は 1 秒未満）。
+// 所要: 本ホスト実測 約 56 秒（単独・2026-10-11）→ BM5 で G3 の束を卓上コースに替えて約 40 秒→数秒に短縮（実測は決定ログ）。BI3 の H 章は 1 秒未満。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -78,8 +86,14 @@ const report = (label, violations) => {
   if (violations.length) { pass = false; console.log(`  ✗ ${label}: ${violations.length} 件`); for (const v of violations.slice(0, 12)) console.log(`      - ${v}`); if (violations.length > 12) console.log(`      … ほか ${violations.length - 12} 件`); }
   else console.log(`  ✓ ${label}: 0 件`);
 };
+// BM5: 一時ディレクトリは 'exit' で消す。BM5 の前は末尾の 1 か所だけで消していたので、途中の例外（写しの import を向け直せない等）で
+//   終わると os.tmpdir() に wf_bi1_* が残った。'exit' は process.exit・未捕捉の例外・top-level await の reject でも呼ばれる。
+//   限界: シグナル（Ctrl-C・kill）で終わったときは消さない。本ゲートは大半が同期処理（spawnSync）で、process.on('SIGINT') を足すと
+//   既定の即時終了が無くなり、イベントループに戻る最後まで止まらなくなる（実測: SIGTERM を送っても全章を走り切って exit 0）。
 const tmps = [];
 const mkTmp = (tag) => { const d = fs.mkdtempSync(path.join(os.tmpdir(), `wf_bi1_${tag}_`)); tmps.push(d); return d; };
+const cleanTmps = () => { for (const d of tmps.splice(0)) { try { fs.rmSync(d, { recursive: true, force: true }); } catch (e) { console.error(`  (一時ディレクトリを消せない: ${d}・${e.message})`); } } };
+process.on('exit', cleanTmps);
 
 console.log('='.repeat(78));
 console.log('BI1 公式レースのフィールド構成の決定論（グリッド順・締切・同名エントリーの帰属）＋ BI2 既定値の集約 ＋ BI3 予算判定の定義');
@@ -497,22 +511,53 @@ function checkG2(resolve) {
 }
 report('G2) resolveEventSpec の既定値', checkG2(resolveEventSpec));
 
-// G3) 生成側の本番フロー: サンプルから maxSec と regime を落とした束で、生成 →（①② 合格・③ は正準サンプル専用で exit 3）→ --verify exit 0。
-//     result.json には実効の regime='tabletop'・maxSec＝computeRaceTimeout が刻まれる。
+// G3) 生成側の本番フロー: 正準サンプルを卓上コースへ載せ替え、maxSec と regime を落とした束で、生成 →（①② 合格・③ は正準サンプル専用で
+//     exit 3）→ --verify exit 0。result.json には実効の regime='tabletop'・maxSec＝computeRaceTimeout が刻まれる。
+//     【BM5】束のコースを卓上の オーバル・4 周にした（computeRaceTimeout が上限・下限のどちらでもない値になり、全車が完走する）。
+//     上限・下限は RACE_TO が export されていないので本番の computeRaceTimeout に極端な入力を渡して測り、race_engine.js の原文の
+//     RACE_TO と突き合わせる（測った値と原文がずれたら赤＝この章の前提が崩れた）。
+const G3_COURSE = 'オーバル', G3_LAPS = 4;
+const NODEF_TT = JSON.parse(JSON.stringify(SAMPLE));
+NODEF_TT.courseSpec = SPECS.find((x) => x.name === G3_COURSE);
+NODEF_TT.event.course = G3_COURSE; NODEF_TT.event.laps = G3_LAPS; NODEF_TT.event.id = 'bm5-nodefaults-tabletop';
+delete NODEF_TT.event.maxSec; delete NODEF_TT.event.regime;
+const TO_CAP = computeRaceTimeout({ course: { bounds: { w: 1e6, h: 1e6 } }, laps: 1e6, regime: 'tabletop' });   // 上限 (RACE_TO.MAX_SEC)
+const TO_FLOOR = computeRaceTimeout({ course: { bounds: { w: 0, h: 0 } }, laps: 1, regime: 'tabletop' });        // 下限 (RACE_TO.MIN_SEC＝旧固定 180)
+const RAW_ENG = fs.readFileSync(path.join(JS_ROOT, 'race_engine.js'), 'utf8');
+const RACE_TO_SRC = /const RACE_TO = \{[^}]*\bMIN_SEC:\s*(\d+(?:\.\d+)?)[^}]*\bMAX_SEC:\s*(\d+(?:\.\d+)?)/.exec(RAW_ENG);
+// result.json の判定（finishers ≥ 1・maxSec＝computeRaceTimeout・下限 < maxSec < 上限・regime）。合成の陰性対照にも同じ関数を使う。
+function g3Verdict(result, wantMax) {
+  const v = [];
+  if (result.regime !== 'tabletop') v.push(`result.regime が ${JSON.stringify(result.regime)}（期待 'tabletop'）`);
+  if (result.maxSec !== wantMax) v.push(`result.maxSec が ${result.maxSec}（computeRaceTimeout は ${wantMax}）`);
+  if (!(result.maxSec < TO_CAP)) v.push(`result.maxSec ${result.maxSec} が上限 ${TO_CAP} 未満でない（定数と区別できない）`);
+  if (!(result.maxSec > TO_FLOOR)) v.push(`result.maxSec ${result.maxSec} が下限 ${TO_FLOOR} 超でない（旧固定の 180 と区別できない）`);
+  const nFin = Array.isArray(result.finishers) ? result.finishers.length : 0;
+  if (nFin < 1) v.push(`完走 ${nFin} 台（1 台以上であること＝全車 timeout の束は maxSec の検査にならない）`);
+  return v;
+}
 function checkG3() {
   const v = [];
-  const run = runOfficial(OFFICIAL, NODEF, 'g3');
+  if (!RACE_TO_SRC) v.push('race_engine.js の RACE_TO（MIN_SEC・MAX_SEC）を原文から読めない');
+  else if (Number(RACE_TO_SRC[2]) !== TO_CAP || Number(RACE_TO_SRC[1]) !== TO_FLOOR) v.push(`測った上限・下限 ${TO_CAP}・${TO_FLOOR} が原文の RACE_TO（MAX_SEC ${RACE_TO_SRC[2]}・MIN_SEC ${RACE_TO_SRC[1]}）と違う`);
+  // 陰性対照: BM5 の前の束の結果の形（全車 timeout・maxSec＝上限）と、旧固定の 180 と同じ値は赤になること。
+  for (const [label, r] of [
+    ['全車 timeout・maxSec＝上限（BM5 の前の G3）', { regime: 'tabletop', maxSec: TO_CAP, finishers: [] }],
+    ['完走ありでも maxSec＝下限（旧固定 180）', { regime: 'tabletop', maxSec: TO_FLOOR, finishers: [{}] }],
+  ]) { const n = g3Verdict(r, r.maxSec).length; console.log(`     陰性対照 ${label} → ${n} 件で赤`); if (!n) v.push(`陰性対照「${label}」が赤にならない`); }
+  const run = runOfficial(OFFICIAL, NODEF_TT, 'g3');
   const ok12 = /① 決定論 \(2回実行\): verifyHash ✓ 一致 \/ 順位 ✓ 一致/.test(run.out) && /② result\.json 再検証: verifyHash ✓ 一致 \/ 順位 ✓ 一致/.test(run.out);
   if (!ok12 || !run.result || run.code !== 3) { v.push(`生成: ①② 合格かつ exit 3 でない（exit ${run.code}）: ${run.out.trim().split('\n').slice(-3).join(' / ')}`); return v; }
-  const sCourse = buildFromSpec(NODEF.courseSpec);
+  const sCourse = buildFromSpec(NODEF_TT.courseSpec);
   const wantMax = computeRaceTimeout({ course: sCourse, laps: run.result.laps, regime: 'tabletop' });
-  if (run.result.regime !== 'tabletop') v.push(`result.regime が ${JSON.stringify(run.result.regime)}（期待 'tabletop'）`);
-  if (run.result.maxSec !== wantMax) v.push(`result.maxSec が ${run.result.maxSec}（computeRaceTimeout は ${wantMax}）`);
+  v.push(...g3Verdict(run.result, wantMax));
   const rp = path.join(dDir, 'g3_result.json'), bp = path.join(dDir, 'g3_bundle.json');
   const r = spawnSync(process.execPath, [OFFICIAL, '--verify', rp, '--event', bp], { cwd: ROOT, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
   const vOut = (r.stdout || '') + (r.stderr || '');
   const vm = /verifyHash: 保存 (\w+) \/ 再計算 (\w+) → ✓ 一致/.exec(vOut);
-  console.log(`     生成 exit ${run.code}（①② 合格・③ は正準サンプル専用）・verifyHash=${run.result.verifyHash}・regime=${run.result.regime}・maxSec=${run.result.maxSec}・--verify exit ${r.status}${vm ? `（保存 ${vm[1]} / 再計算 ${vm[2]}）` : ''}`);
+  console.log(`     束: ${G3_COURSE}・laps ${G3_LAPS}（正準サンプルの車・プログラム・physicsMode のまま）`);
+  console.log(`     生成 exit ${run.code}（①② 合格・③ は正準サンプル専用）・verifyHash=${run.result.verifyHash}・regime=${run.result.regime}・laps=${run.result.laps}・--verify exit ${r.status}${vm ? `（保存 ${vm[1]} / 再計算 ${vm[2]}）` : ''}`);
+  console.log(`     maxSec=${run.result.maxSec}（computeRaceTimeout=${wantMax}・上限 RACE_TO.MAX_SEC=${TO_CAP} ${run.result.maxSec === TO_CAP ? 'と同じ' : 'ではない'}・下限 MIN_SEC=${TO_FLOOR} ${run.result.maxSec === TO_FLOOR ? 'と同じ' : 'ではない'}）・完走 ${run.result.finishers.length} 台・DNF ${run.result.dnf.length} 台`);
   if (r.status !== 0 || !vm || !/順位:\s+✓ 一致/.test(vOut)) v.push(`--verify が一致しない（exit ${r.status}）: ${vOut.trim().split('\n').slice(-3).join(' / ')}`);
   return v;
 }
@@ -609,8 +654,8 @@ const H_DEFS = [
   ['完全な独自 carDef', { key: 'bi3_full', name: 'F', mass: 1200, accel: 1.1, brake: 1.0, maxSpeed: 1.0, us: 0.2, os: 0.1, drift: null, yawGain: 1, powerUs: 0, powerOs: 0, liftOffOs: 0, brakeOs: 0, spin: 0, slide: 0.02 }],
   ['custom: false を持つ carDef', { key: 'bi3_c', custom: false, maxSpeed: 1.1 }],
 ];
-const cloneDef = (ct) => { const d = {}; for (const k of Object.keys(ct)) { if (k === 'custom' || k === 'community') continue; d[k] = ct[k]; } return JSON.parse(JSON.stringify(d)); };
-for (const t of cfg.CAR_TYPES.slice(0, 6)) H_DEFS.push([`carDefForEntry の同梱形 ${t.key}`, cloneDef(t)]);
+// BM5: 同梱形は race_ui.js のエントリーと同じ関数 config.js carDefForEntry で作る（BM5 の前はここに手写しの cloneDef があった）。
+for (const t of cfg.CAR_TYPES.slice(0, 6)) H_DEFS.push([`carDefForEntry の同梱形 ${t.key}`, cfg.carDefForEntry(t.key)]);
 const sansCustom = (t) => { const d = { ...t }; delete d.custom; return d; };   // 両側から custom を落として比べる（登録側は true を付け、def の custom: false は判定側に残る）
 function checkH3(fill) {
   const v = [];
@@ -641,7 +686,7 @@ function checkH4(mod) {
   const v = [];
   const byKey = Object.fromEntries(H_TABLE);
   for (const [k, w] of H_TABLE) {
-    const s1 = mod.costOf(k), s2 = mod.costOf(cloneDef(cfg.CAR_TYPE_BY_KEY[k]));
+    const s1 = mod.costOf(k), s2 = mod.costOf(cfg.carDefForEntry(k));
     if (s1 !== w) v.push(`key 文字列 ${k}: ${s1}（改修前 ${w}）`);
     if (s2 !== w) v.push(`carDefForEntry の同梱形 ${k}: ${s2}（改修前 ${w}）`);
   }
@@ -693,12 +738,107 @@ report('H4) 改修前の値表との差', checkH4(reMod));
   report('H5) 適用できなかった変異（パターン腐り）', noop);
 }
 
-{
-  const changed = [[RE_PATH, RAW_RE], [OFFICIAL, RAW_OFF], [UI_PATH, RAW_UI], [CFG_PATH, RAW_CFG]].filter(([p, raw]) => fs.readFileSync(p, 'utf8') !== raw).map(([p]) => path.relative(ROOT, p));
-  if (changed.length) { pass = false; console.log(`  ✗ ゲートの実行で ${changed.join(', ')} が変化した`); }
-  else console.log('  ✓ public/js/race_event.js・wf_official_result.mjs・public/js/race_ui.js・public/js/config.js は実行前後で無変化');
+// ── H6〜H8) BM5: エントリーに同梱する carDef を作る関数は config.js の carDefForEntry 1 か所 ─────────────────────
+console.log('\n  H6〜H8) BM5: エントリーの carDef は config.js carDefForEntry 1 か所（race_ui.js・本ゲート・wf_share_check.mjs が呼ぶ）');
+const SHARE_PATH = path.join(ROOT, 'wf_share_check.mjs');
+const RAW_SHARE = fs.readFileSync(SHARE_PATH, 'utf8');
+const RAW_SELF = fs.readFileSync(fileURLToPath(import.meta.url), 'utf8');
+// custom・community の 2 つの印を飛ばす式（race_ui.js の旧 carDefForEntry・旧 cloneDef と同じ形。変数名・空白は問わない）。
+const SKIP_MARKS = /===\s*'custom'\s*\|\|\s*\w+\s*===\s*'community'/g;
+// H6) 構造。
+function checkH6(ui, cfgText, share, self) {
+  const v = [];
+  const uiCode = stripComments(ui), cfgCode = stripComments(cfgText);
+  const need = [
+    [cfgCode, /export function carDefForEntry\(carType, byKey = CAR_TYPE_BY_KEY\) \{/g, 1, 'config.js が carDefForEntry を export する'],
+    [cfgCode, SKIP_MARKS, 1, 'config.js の custom/community を飛ばす式'],
+    [uiCode, /import \* as configNS from '\.\/config\.js';/g, 1, 'race_ui.js が config.js を名前空間で import する'],
+    [uiCode, /carDef: configNS\.carDefForEntry\(s\.carType\),/g, 1, 'race_ui.js の submitOfficialEntry が configNS.carDefForEntry で carDef を作る'],
+    [uiCode, /if \(typeof configNS\.carDefForEntry !== 'function'\) \{ \$\('ofMsg'\)\.textContent = t\('official\.entry\.stale'\); return; \}/g, 1, 'race_ui.js が古い config.js（関数なし）でエントリーを作らない'],
+    [uiCode, /function carDefForEntry\b/g, 0, 'race_ui.js に carDefForEntry の定義'],
+    [uiCode, /(?<!configNS\.)\bcarDefForEntry\(/g, 0, 'race_ui.js が名前空間を通らずに carDefForEntry を呼ぶ'],
+    [stripComments(share), /import \{[^}]*\bcarDefForEntry\b[^}]*\} from '\.\/public\/js\/config\.js';/g, 1, 'wf_share_check.mjs が config.js の carDefForEntry を import する'],
+    [stripComments(share), /function carDefForEntry\b/g, 0, 'wf_share_check.mjs に carDefForEntry の定義（手写し）'],
+  ];
+  for (const [code, re2, want, what] of need) { const n = (code.match(re2) || []).length; if (n !== want) v.push(`${what}: ${n} 件（期待 ${want}）`); }
+  for (const [name, text] of [['race_ui.js', ui], ['wf_share_check.mjs', share], ['wf_bi1_field.mjs', self]]) {
+    const n = (stripComments(text).match(SKIP_MARKS) || []).length;
+    if (n) v.push(`${name}: custom/community を飛ばす式の写しが ${n} 件（config.js の 1 か所だけであること）`);
+  }
+  if (/import\s*\{[^}]*\bcarDefForEntry\b[^}]*\}\s*from\s*'\.\/config\.js'/.test(ui)) v.push('race_ui.js が carDefForEntry を名前付き import している（BA1: 古い config.js がキャッシュに残ると全体が読めない）');
+  return v;
 }
-for (const d of tmps) fs.rmSync(d, { recursive: true, force: true });
+report('H6) carDefForEntry が 1 か所でない・写しが残る', checkH6(RAW_UI, RAW_CFG, RAW_SHARE, RAW_SELF));
+// H7) 関数の形: 全車種で「custom/community を除いた表の値」と JSON 一致（キーの並びも）・表から切り離した複製・未知 key は null・
+//     byKey を渡せばその表を引く。登録した独自車種（custom 印つき）と community 印つきの定義でも印を落とす。
+function checkH7(fn) {
+  const v = [];
+  const sans = (t) => { const { custom, community, ...rest } = t; return rest; };
+  let n = 0;
+  const one = (label, key, byKey) => {
+    const tbl = (byKey || cfg.CAR_TYPE_BY_KEY)[key];
+    const got = byKey ? fn(key, byKey) : fn(key);
+    n++;
+    if (!got || typeof got !== 'object') { v.push(`${label}: ${JSON.stringify(got)}（期待 オブジェクト）`); return; }
+    if ('custom' in got || 'community' in got) v.push(`${label}: custom/community の印が残る`);
+    if (JSON.stringify(got) !== JSON.stringify(sans(tbl))) v.push(`${label}: 表の値（印を除く）と違う`);
+    // 複製か: 返した値の中のオブジェクトが表のオブジェクトと 1 つも同じ参照でないこと（表を書き換えずに測る）。
+    const seen = new Set();
+    const walk = (o, f) => { if (o && typeof o === 'object') { f(o); for (const x of Object.values(o)) walk(x, f); } };
+    walk(tbl, (o) => seen.add(o));
+    let shared = 0; walk(got, (o) => { if (seen.has(o)) shared++; });
+    if (shared) v.push(`${label}: 表と参照を共有するオブジェクトが ${shared} 個（複製になっていない＝書き換えると表が変わる）`);
+  };
+  for (const t of cfg.CAR_TYPES) one(`組込 ${t.key}`, t.key);
+  const restore = cfg.registerRaceCarTypes([{ key: 'bm5_custom', maxSpeed: 1.1, drift: { grip: 0.5 } }]);
+  try { one('登録した独自車種 bm5_custom（custom 印つき）', 'bm5_custom'); } finally { restore(); }
+  const comm = { bm5_comm: { ...JSON.parse(JSON.stringify(cfg.CAR_TYPE_BY_KEY.drift_fr)), key: 'bm5_comm', custom: true, community: true } };
+  one('byKey を渡した community 印つきの定義', 'bm5_comm', comm);
+  for (const k of ['no_such_car', undefined, '']) { const got = fn(k); if (got !== null) v.push(`未知 key ${JSON.stringify(k)}: ${JSON.stringify(got)}（期待 null）`); }
+  if (cfg.CAR_TYPE_BY_KEY.bm5_custom) v.push('登録が元へ戻っていない');
+  return { v, n };
+}
+{
+  const { v, n } = checkH7(cfg.carDefForEntry);
+  console.log(`     carDefForEntry: ${n} 定義（組込 ${cfg.CAR_TYPES.length}・独自 1・community 1）で表の値と照合・未知 key 3 種`);
+  report('H7) carDefForEntry の形の違反', v);
+}
+// H8) 検出力: race_ui.js・wf_share_check.mjs の写し（文字列）を壊すと H6、関数を壊すと H7 が赤になる（product のファイルは無改変）。
+{
+  const miss = [], noop = [];
+  // BM5 の前の race_ui.js の関数（印を飛ばす式は部品から組む＝本ファイルの原文に式の写しを置かない・H6 が本ファイルも数える）。
+  const SKIP_SRC = ['k', "=== 'custom'", '||', 'k', "=== 'community'"].join(' ');
+  const OLD_FN = `function carDefForEntry(carType) {\n  const ct = CAR_TYPE_BY_KEY[carType];\n  if (!ct) return null;\n  const def = {};\n  for (const k of Object.keys(ct)) { if (${SKIP_SRC}) continue; def[k] = ct[k]; }\n  return JSON.parse(JSON.stringify(def));\n}\n`;
+  const H6_MUT = [
+    ['race_ui.js に手写しの関数を戻す（BM5 の前）', 'ui', (x) => x.replace('carDef: configNS.carDefForEntry(s.carType),', 'carDef: carDefForEntry(s.carType),') + '\n' + OLD_FN],
+    ['race_ui.js が carDefForEntry を名前付き import する', 'ui', (x) => x.replace("import { FLEET, CAR_TYPE_BY_KEY, APP_VERSION } from './config.js';", "import { FLEET, CAR_TYPE_BY_KEY, APP_VERSION, carDefForEntry } from './config.js';")],
+    ['race_ui.js が古い config.js の検査を外す', 'ui', (x) => x.replace("  if (typeof configNS.carDefForEntry !== 'function') { $('ofMsg').textContent = t('official.entry.stale'); return; }", '')],
+    ['wf_share_check.mjs に手写しの関数を戻す', 'share', (x) => x.replace(', carDefForEntry } from', ' } from') + '\n' + OLD_FN],
+    ['wf_share_check.mjs に別名の手写しを足す（関数名を変えた写し）', 'share', (x) => x + `\nconst cloneDef = (ct) => { const d = {}; for (const k of Object.keys(ct)) { if (${SKIP_SRC}) continue; d[k] = ct[k]; } return d; };\n`],
+  ];
+  for (const [name, which, fn] of H6_MUT) {
+    const ui = which === 'ui' ? fn(RAW_UI) : RAW_UI, share = which === 'share' ? fn(RAW_SHARE) : RAW_SHARE;
+    if (ui === RAW_UI && share === RAW_SHARE) { noop.push(name); continue; }
+    const v = checkH6(ui, RAW_CFG, share, RAW_SELF);
+    if (!v.length) miss.push(`${name} → H6 が見逃した`); else console.log(`     ✓ ${name} → H6 で ${v.length} 件の赤`);
+  }
+  const H7_MUT = [
+    ['community の印を残す', (k, b = cfg.CAR_TYPE_BY_KEY) => { const t = b[k]; if (!t) return null; const d = JSON.parse(JSON.stringify(t)); delete d.custom; return d; }],
+    ['浅い複製（drift を共有する）', (k, b = cfg.CAR_TYPE_BY_KEY) => { const t = b[k]; if (!t) return null; const { custom, community, ...d } = t; return d; }],
+    ['未知 key で undefined', (k, b = cfg.CAR_TYPE_BY_KEY) => { const t = b[k]; if (!t) return undefined; return cfg.carDefForEntry(k, b); }],
+    ['byKey を無視する', (k) => cfg.carDefForEntry(k)],
+  ];
+  for (const [name, fn] of H7_MUT) { const { v } = checkH7(fn); if (!v.length) miss.push(`${name} → H7 が見逃した`); else console.log(`     ✓ ${name} → H7 で ${v.length} 件の赤`); }
+  report('H8) 見逃した変異', miss);
+  report('H8) 適用できなかった変異（パターン腐り）', noop);
+}
+
+{
+  const changed = [[RE_PATH, RAW_RE], [OFFICIAL, RAW_OFF], [UI_PATH, RAW_UI], [CFG_PATH, RAW_CFG], [SHARE_PATH, RAW_SHARE]].filter(([p, raw]) => fs.readFileSync(p, 'utf8') !== raw).map(([p]) => path.relative(ROOT, p));
+  if (changed.length) { pass = false; console.log(`  ✗ ゲートの実行で ${changed.join(', ')} が変化した`); }
+  else console.log('  ✓ public/js/race_event.js・wf_official_result.mjs・public/js/race_ui.js・public/js/config.js・wf_share_check.mjs は実行前後で無変化');
+}
+cleanTmps();   // BM5: 正常終了の後始末（exit でも呼ばれる＝二重でも空になっている）
 
 console.log('\n' + '='.repeat(78));
 console.log(pass ? 'BI1 フィールド構成の決定論・ゲート: 全パス ○' : 'BI1 フィールド構成の決定論・ゲート: ✗ 不合格');

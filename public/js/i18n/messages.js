@@ -484,6 +484,8 @@ export const MESSAGES = {
   'official.entry.needName': { ja: '車両名を入力してください。', en: 'Please enter a car name.' },
   'official.entry.needAuthor':{ ja: 'GitHub アカウント名を入力してください。', en: 'Please enter your GitHub account.' },
   'official.entry.closed':   { ja: 'この大会はエントリー受付を締め切っています。', en: 'Entries for this race are closed.' },
+  // BM5: エントリーの carDef を作る関数 (config.js の carDefForEntry) が無い＝古い config.js がキャッシュに残っている。
+  'official.entry.stale':    { ja: '⚠ ページの部品の一部が古い版のまま読み込まれているため、エントリーを作りませんでした。ページを再読込してから、もう一度お試しください。', en: '⚠ Part of the page is still loaded from an older version, so the entry was not created. Reload the page and try again.' },
 
   // ---- エンゲージメント層 (Stage W / W6・§8)。rank.open/ghost.* の一部は HTML 静的、他は JS が t() で生成 ----
   // 公式記録のプログラム閲覧＋fork＋ショーケース (締切後に公開・原作者クレジット永続)

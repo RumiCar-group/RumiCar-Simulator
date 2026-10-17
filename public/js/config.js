@@ -461,6 +461,18 @@ export function fillCarDef(def, byKey) {
   }
   return t;
 }
+// 車種キー → 公式レースのエントリーに同梱する carDef (純データの複製・runtime の印 custom/community は落とす)。
+// 【BM5・2026-10-17】race_ui.js の submitOfficialEntry (エントリーの carDef) と常設ゲート wf_bi1_field.mjs の H 章
+//   (carDefForEntry の同梱形のコスト)・wf_share_check.mjs ⑩-3 が同じ形を作る。BM5 の前は race_ui.js の非公開関数を
+//   2 本のゲートが手で写していた (写しが本体とずれても気づけない)。ここ 1 か所に置き、3 者が呼ぶ。
+//   byKey は既定で車種表 (CAR_TYPE_BY_KEY)。表に無い key は null。drift のネストも含めて複製する (表を書き換えない)。
+export function carDefForEntry(carType, byKey = CAR_TYPE_BY_KEY) {
+  const ct = byKey[carType];
+  if (!ct) return null;
+  const def = {};
+  for (const k of Object.keys(ct)) { if (k === 'custom' || k === 'community') continue; def[k] = ct[k]; }
+  return JSON.parse(JSON.stringify(def));   // drift ネストも含めて複製
+}
 function _putCarType(def) {
   // 並び (土台の鍵 → def の新しい鍵 → custom) と custom の上書きは旧 `{ ...base, ...def, custom: true }` と同じ。
   const t = fillCarDef(def, CAR_TYPE_BY_KEY);
@@ -472,7 +484,7 @@ function _putCarType(def) {
 }
 
 // 公式レースの持ち込み車種 (full JSON・W_spec §1) を**そのレースの間だけ**登録し、元へ戻す関数を返す。
-// 【BE3】ここだけは組込 key も登録する: `race_ui.js` の carDefForEntry は、利用者がローカルで上書き (V3) した
+// 【BE3】ここだけは組込 key も登録する: `race_ui.js` は上の carDefForEntry で、利用者がローカルで上書き (V3) した
 //   組込車種を組込 key のまま同梱する＝公式記録はその定義で走ったものなので、拒むと記録が再現しない
 //   (resultSha256 が変わる)。代わりに finally で**元の参照**へ戻し、レース後のセッション (プローブ車・
 //   自作車の重複検査・次のレース) に居残らせない。登録の順序・上書きの規則 (後勝ち・drift 未指定は現行の

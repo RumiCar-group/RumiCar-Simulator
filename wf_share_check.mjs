@@ -19,7 +19,7 @@ import { encodeState, decodeState, normalizeState, SHARE_FIELDS, SHARE_VERSION, 
 import * as loader from './public/js/loader.js';
 import { uploadPageUrl, courseSubmission, programSubmission, carSubmission, eventSubmission, entrySubmission, slugify } from './public/js/loader.js';
 import { PROGRAMS } from './public/js/programs.js';
-import { CAR_TYPES, CAR_TYPE_BY_KEY, APP_VERSION } from './public/js/config.js';
+import { CAR_TYPES, APP_VERSION, carDefForEntry } from './public/js/config.js';   // BM5: carDefForEntry は race_ui.js と同じ関数
 
 let pass = 0, fail = 0;
 const fails = [];
@@ -481,13 +481,7 @@ ok(uploadPageUrl('programs/community') === expectNav('programs/community'),
 
 // --- ⑩-3 遷移先 URL が投稿物の大きさに依存しないこと (**実データで**) ---
 // 同梱 PROGRAMS 23 本 × 実車種 def = 旧 shareEntryUrl が 20 本で壊れていた母集団そのもの。
-function carDefForEntry(carType) {           // race_ui.js の carDefForEntry と同じ形
-  const ct = CAR_TYPE_BY_KEY[carType];
-  if (!ct) return null;
-  const def = {};
-  for (const k of Object.keys(ct)) { if (k === 'custom' || k === 'community') continue; def[k] = ct[k]; }
-  return JSON.parse(JSON.stringify(def));
-}
+// carDef は race_ui.js のエントリーと同じ関数 (config.js carDefForEntry・BM5 で手写しをやめた) で作る。
 {
   const navs = new Set();
   let maxText = 0, overOld = 0, oldMax = 0;
