@@ -16,7 +16,7 @@
 
 再構築を難しくする要素が無いことを確認済みです。
 
-- **バイナリ資産ゼロ** — `public/` は JS 47件 + `index.html` + `style.css` + `data/courses.json` のみ。画像は1枚も使っておらず、車体・コース・エフェクトはすべて実行時に手続き的に描画されます
+- **バイナリ資産ゼロ** — `public/` は JS (`public/js/` 配下) + `index.html` + `style.css` + `data/courses.json` のみ。画像は1枚も使っておらず、車体・コース・エフェクトはすべて実行時に手続き的に描画されます
 - **外部ライブラリ・CDN 依存ゼロ** — npm パッケージも CDN 参照もありません。`node_modules` は配信・実行のどちらにも不要です
 - **ビルドが単純** — `nginx:alpine` に `public/` を `COPY` するだけです
 
@@ -24,11 +24,12 @@
 
 アプリは実行時に `RumiCar-group/RumiCar` (公開リポジトリ) の GitHub API を参照し、コミュニティ投稿コンテンツを一覧します。
 
-| 参照先 | 用途 | 現状 |
+| 参照先 | 用途 | 現状 (2026-10-17 確認) |
 |---|---|---|
 | `courses/community` | 投稿コース | 存在する |
 | `programs/community` | 投稿プログラム | 存在する |
-| `cars/community` | 投稿車種 | **未作成 (404)** |
+| `cars/community` | 投稿車種 | 存在する |
+| `races/` | 公式レース (🏁) の大会 | 大会を開くまで作られない。**未作成なら 404 で、それが正常** (公式レースの画面が「まだ大会が無い」扱いになるだけ) |
 
 **これは必須依存ではありません。** 取得に失敗した場合 (オフライン・レート制限・404) はコードが `null` を返して1行通知するだけで、シミュレータ本体は完全に動作します。オフライン環境でも問題なく使えます。
 
@@ -43,9 +44,9 @@
 | 機能 | 変更箇所 |
 |---|---|
 | コース/プログラム/車種の一覧取得・共有 (🌐) | `public/js/loader.js` の `SAMPLE_REPO`(`{owner, repo, branch}`) |
-| 質問・提案 (💬) | `public/js/main.js` の `helpAsk` クリックハンドラ内の GitHub Issue URL (`RumiCar-group/RumiCar/issues/new`) |
+| 質問・提案 (💬) | `public/js/main.js` の `askSendBtn` (ダイアログの送信ボタン) クリックハンドラ内の GitHub Issue URL (`RumiCar-group/RumiCar/issues/new`) |
 
-投稿先を変更する場合は、投稿先リポジトリ側に `courses/community/` `programs/community/` `cars/community/` の3ディレクトリを用意しておく必要があります (無くても動きますが、共有機能はエラーになります)。
+投稿先を変更する場合は、投稿先リポジトリ側に `courses/community/` `programs/community/` `cars/community/` の3ディレクトリを用意しておく必要があります (無くても動きますが、共有機能はエラーになります)。公式レースを開く場合は `races/` も使います (無ければ公式レースの画面が「まだ大会が無い」扱いになるだけです)。
 
 ---
 
