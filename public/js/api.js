@@ -128,7 +128,7 @@ export function buildApi(world) {
   const rcParams = () => params;
   // RC_state(name): 現在の処理状態の名前 (英数字と _・24 文字まで・大文字に正規化)。正本 (RasPi) と同じく
   //   変わったときだけ `state A -> B` を出力する (Zero2Cam は PC の「判断状態」に表示)。不正な名前は 0 (無視)。
-  let state = '';
+  let state = '-';   // 正本 RasPi RumiCar.py の _state = "-" と同じ初期値 (初回は `state - -> START`)
   function rcState(name) {
     const s = String(name == null ? '' : name).trim().toUpperCase().replace(/ /g, '_');
     if (!s || s.length > 24 || !/^[A-Za-z0-9_]+$/.test(s)) return 0;
@@ -225,8 +225,6 @@ export function buildApi(world) {
     RC_drive: drive,
     RC_read: readDir,
     RC_wheel_speed: wheelSpeed,   // 車輪面速度[m/s] (任意装備の車輪エンコーダ)。未装備 -1
-    RC_params: rcParams,          // params.json の内容 (シミュレータは常に空の dict)
-    RC_state: rcState,            // 処理状態の名前 (変わったときに出力)
     // Arduino 標準 (C/JS 向け)
     Serial,
     delay: (ms) => { world._pendingDelay = (world._pendingDelay || 0) + (Number(ms) || 0); },
@@ -263,11 +261,13 @@ export function buildApi(world) {
     //   そのまま通すための最小限。シミュレータには検索パスが無いので何もしない。
     sys: { path: { append: () => {}, insert: () => {} } },
   };
-  // `import RumiCar` → `RumiCar.RC_drive(...)` と書く Python プログラム用のモジュールオブジェクト (正本 RasPi RumiCar.py の
-  //   __all__ と同じ名前)。`from RumiCar import *` は parser_py が import を読み飛ばすので env の名前がそのまま見える。
-  env.RumiCar = Object.fromEntries(PY_API_NAMES.map((k) => [k, env[k]]));
+  // Python だけの API (正本 RasPi RumiCar.py / Zero2Cam にあり Arduino には無い): RC_params()・RC_state(name)。C/JS の名前は Arduino と
+  //   同じに保つため env の名前には出さず、pythonEnv() が読む非列挙の入れ物に置く (buildJs の Object.keys にも載らない)。
+  Object.defineProperty(env, PY_ONLY, { value: { RC_params: rcParams, RC_state: rcState }, enumerable: false });
   return env;
 }
+
+const PY_ONLY = Symbol('pyOnly');
 
 // 正本 RasPi RumiCar.py の __all__ (定数と RC_* 関数)。
 const PY_API_NAMES = ['LEFT', 'CENTER', 'RIGHT', 'REAR', 'FREE', 'REVERSE', 'FORWARD', 'BRAKE',
@@ -278,14 +278,18 @@ const PY_API_NAMES = ['LEFT', 'CENTER', 'RIGHT', 'REAR', 'FREE', 'REVERSE', 'FOR
 // 素の sqrt/floor/ceil/atan2/… は `from math import sqrt` と書いたプログラムのため (parser_py は import 文を
 // 読み飛ばすので、from-import した名前は env に無いと未定義になる)。
 const PY_NAMES = [
-  ...PY_API_NAMES, 'FRONT', 'RC_wheel_speed', 'RumiCar',
+  ...PY_API_NAMES, 'FRONT', 'RC_wheel_speed',
   'print', 'abs', 'min', 'max', 'round', 'pow', 'len', 'range', 'list', 'int', 'float', 'str', 'bool', 'sum',
   'sqrt', 'floor', 'ceil', 'atan2', 'atan', 'sin', 'cos', 'hypot', 'pi',
   'math', 'random', 'time', 'sys',
 ];
 // buildApi の env から Python 用の環境を作る (runner.js が lang==='py' のとき使う)。C/JS は env をそのまま使う。
+// `import RumiCar` → `RumiCar.RC_drive(...)` と書くプログラム用のモジュールオブジェクトも持たせる (正本 RasPi RumiCar.py の __all__ と
+// 同じ名前)。`from RumiCar import *` は parser_py が import を読み飛ばすので、環境の名前がそのまま見える。
 export function pythonEnv(env) {
   const out = {};
   for (const k of PY_NAMES) if (k in env) out[k] = env[k];
+  Object.assign(out, env[PY_ONLY] || {});
+  out.RumiCar = Object.fromEntries(PY_API_NAMES.map((k) => [k, out[k]]));
   return out;
 }

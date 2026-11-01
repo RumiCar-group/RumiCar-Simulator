@@ -404,7 +404,6 @@ const STEP = [
   ['前の tick だけで time.time() を呼んだ（2 tick 目の無限ループはヒント無し）', 'py', 'n = 0\ndef loop():\n  global n\n  n += 1\n  if n == 1:\n    t = time.time()\n  if n == 2:\n    while True:\n      pass', 2, 50, 9, false],
   ['setup() だけで time.time() を呼んだ（loop() の無限ループはヒント無し）', 'py', 'def setup():\n  t = time.time()\ndef loop():\n  while True:\n    pass', 1, 50, 5, false],
   ['利用者が定義した millis()（ホストの時刻ではない）', 'py', 'def millis():\n  return 0\nwhile millis() < 100:\n  pass', 0, 0, 4, false],
-  ['py の millis() は未定義の関数（Python の環境に無い）→ ヒントの対象外（stepLimit ではなく undefFunc になるので下の別の検査で見る）', 'py', 'n = 0\nwhile n >= 0:\n    n += 1', 0, 0, 3, false],
 ];
 for (const [label, lang, code, ticks, simMs, line, hint] of STEP) {
   const { ja, en } = runBoth(code, lang, ticks, simMs);

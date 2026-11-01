@@ -650,6 +650,12 @@ function pyStr(v) {
   if (v === true) return 'True';
   if (v === false) return 'False';
   if (v === null) return 'None';
+  // 2026-11 API 統一: dict（list でない object）は python3 の表示 {'a': 1, 'b': 'x'}（鍵は repr・値は文字列なら repr・それ以外は pyStr）。
+  //   是正前はプロトタイプ付きの {} が "[object Object]"、Object.create(null) の dict（py のリテラル）は JS の TypeError だった
+  //   （RC_params() が dict を返すので print(RC_params()) で露出する）。list は従来どおり（1,2＝未是正の差）。
+  if (typeof v === 'object' && !Array.isArray(v) && (Object.getPrototypeOf(v) === null || Object.getPrototypeOf(v) === Object.prototype)) {
+    return '{' + Object.keys(v).map((k) => pyRepr(k, false) + ': ' + (typeof v[k] === 'string' ? pyRepr(v[k], false) : pyStr(v[k]))).join(', ') + '}';
+  }
   return '' + v;
 }
 // repr（`!r`）。文字列だけ python3 の repr（引用符の選び方・エスケープ・表示できない文字）。それ以外は pyStr（list の repr〔[1, 'a']〕は

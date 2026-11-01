@@ -353,9 +353,9 @@ const AST_PIN = [
   ['PROGRAMS:drift_fr', '8a8356198710859a', 'cb9868d86d2fa84bc830a5f2a11c20e7eab8fd9207693cc156e314d73abc171c'],
   ['PROGRAMS:drift_awd', 'da5f99dd07cfd68d', 'be2408f544d093af593d4f3eebeaf2726b093bd987d9540181327a6733d3e654'],
   ['PROGRAMS:drift_ff', '5890e388bc949846', '2fa73da56fe5ff332d10cd967cb909cd9aa8597b447bd40dc850393ba61c4d99'],
-  ['PROGRAMS:py_normal_fr', '697a70a7f6a57e8b', '11716a44899c08fce9955480947fe2c7a4323b1a9b721b909428baf90978a618'],
-  ['PROGRAMS:py_normal_awd', '115606958f425258', 'aa6de54c5c054481adab7edf8dcd31d40a1c1929616c5e9797490891f041c354'],
-  ['PROGRAMS:py_normal_ff', 'f360407eeb01f847', '89af99b541a44b98a1ad3062aaf96b09164ae6de17f6c5136562dc7efaf64e44'],
+  ['PROGRAMS:py_normal_fr', 'f6027d32f4f874aa', '584ae1f64d18bd3531edf4a4070ec81a8a727775b86058dde01b70b6b0597f5e'],
+  ['PROGRAMS:py_normal_awd', '9ab223e24ac21a74', 'efd04b170f3817ab28d94011e0e9517cb8c84b0172938d18501b4f0c535bf446'],
+  ['PROGRAMS:py_normal_ff', '36d373b65cd5dd4c', 'cbc137a36b37dcd49de4251f1b5a0e82cc329bc4228161d9a453ec71c2379e4c'],
   ['PROGRAMS:showtime', '0f8a2e2aae35fcd2', 'af3071a3885ab9b31ba6ae4e242e7ccf01fa3320ba8fdd16a1cbf3710a137e43'],
   ['PROGRAMS:zerocounter', '5d05f115101384fc', '939eb1ff2345d7bad7a33a81879f16045f4b6a7cacccbf4d7c1f29028ed8eadc'],
   ['PROGRAMS:comp_demo', '9b3eb17e92379dcd', '2bbbcff16ed01fa7c3d3c6c6ab3eec9d448a437aceb02b8efac73fc60da1f06f'],
@@ -370,9 +370,9 @@ const AST_PIN = [
   ['PROGRAMS:recon_racer_c', '221af979a07b1799', '3b8b4aea60cdfd1f7626bad2477bd34716765ec8631254ecfc32ad01ad5bf9d4'],
   ['PROGRAMS:comp_localize_c', '5589ae03a02759bf', '2d17083effcb920d7538bd5074ea2bb376d5df2a5e680297ba32d71885780038'],
   ['PROGRAMS:strategist', 'd59a841e26cb9832', '66a15cb883c3a07da53d050ad5f9ebca667eb95927cad211d441537bc531f11a'],
-  ['SAMPLES:c', '9baa0fc6c43e1c85', '65f5bbe22d128402aa2f8a86e18462a4fb0c85e0595640cfca62f4a2ab9c209c'],
-  ['SAMPLES:py', '39b019bb5b516334', '9b598c0df3f3c27da590b0b33d3104d6b149c055564a33f7a14826ba32a73c98'],
-  ['SAMPLES:js', 'ac97cf70326c5a7c', null],   // BJ2: js はパーサ非経由（new Function）＝本文の指紋だけ（2026-10-11・bf780f8 で実測）
+  ['SAMPLES:c', '2a4bb41e3dbaa897', '65f5bbe22d128402aa2f8a86e18462a4fb0c85e0595640cfca62f4a2ab9c209c'],
+  ['SAMPLES:py', 'b1549c518cb907f5', '9b598c0df3f3c27da590b0b33d3104d6b149c055564a33f7a14826ba32a73c98'],
+  ['SAMPLES:js', '1c94f453307cf88f', null],   // BJ2: js はパーサ非経由（new Function）＝本文の指紋だけ（2026-10-11・bf780f8 で実測）
 ];
 {
   const pin = new Map(AST_PIN.map(([k, s, a]) => [k, { src16: s, ast: a }]));
