@@ -1,6 +1,9 @@
-// RumiCar API ホスト実装。Arduino 系 (RC_*) と Raspberry Pi 系 (rc_*) の両方を提供し、
-// インタープリタ / JS 実行へバインドする共通環境を構築する。
-import { CONST, SENSOR_NOISE, SENSOR_HOLD, SIM } from './config.js';
+// RumiCar API ホスト実装。正本 (Arduino RumiCar-lib の RC_setup/RC_steer/RC_drive/RC_read) と同じ名前・同じ値を
+// 提供し、インタープリタ / JS 実行へバインドする共通環境を構築する。
+// 2026-11 API 統一: Raspberry Pi 系の別名 (rc_*・read_one_sensor/read_all_sensors・sensorN.get_distance) は廃止。
+//   RasPi (RumiCar.py)・Zero2Cam (drive.py)・Arduino のプログラムがそのまま動くことが目標。Python へ出す名前は
+//   pythonEnv() で正本と同じものだけに絞る (C/JS は Arduino と同じ sensorN.readRangeSingleMillimeters/delay/millis/Serial を残す)。
+import { CONST, SENSOR_NOISE, SENSOR_HOLD, SIM, RC_READ_RANGE } from './config.js';
 import { DYN } from './physics_dyn.js';
 import { readAll, readRear } from './sensors.js';
 import { t } from './i18n.js';
@@ -75,16 +78,24 @@ export function buildApi(world) {
     }
     return 0;
   }
+  // RC_read(direc): 正本 (RumiCar-lib v0.5.1 / RasPi RumiCar.py / Zero2Cam ABI 3) と同じ戻り値。
+  //   0〜RC_READ_RANGE.maxMm = 距離[mm]・-1 = 読めない (後方センサー未装備も -1)・-2 = 引数エラー・
+  //   -3 = 範囲外 (打ち切り値より先に何も無い=開けた道・測距そのものの範囲外/低信号も同じ -3)。
+  //   打ち切りは領域に連動 (卓上 200 mm・フルスケール 0=無し。config.js RC_READ_RANGE の注記)。測距 (sensors.js) と
+  //   C/JS の生読取 sensorN.readRangeSingleMillimeters() は打ち切らない。
   function readDir(direc) {
     refresh();
-    if (direc === CONST.LEFT) return world._sensors[0].mm;
-    if (direc === CONST.CENTER) return world._sensors[1].mm;
-    if (direc === CONST.RIGHT) return world._sensors[2].mm;
-    if (direc === CONST.BACK) return world._rear ? world._rear.mm : -2; // 後方: 未装備なら -2
-    return -2; // 引数エラー
+    let mm;
+    if (direc === CONST.LEFT) mm = world._sensors[0].mm;
+    else if (direc === CONST.CENTER) mm = world._sensors[1].mm;
+    else if (direc === CONST.RIGHT) mm = world._sensors[2].mm;
+    else if (direc === CONST.REAR) { if (!world._rear) return -1; mm = world._rear.mm; }
+    else return -2;
+    if (RC_READ_RANGE.maxMm > 0 && mm > RC_READ_RANGE.maxMm) return -3;
+    return mm;
   }
-  // 実機 VL53L0X は範囲外で大きな値 (約 8190) を返す。生読取はこれに準拠。
-  // i=3 は後方センサー (未装備時は 8190=範囲外相当)。
+  // 実機 VL53L0X は範囲外で大きな値 (約 8190) を返す。生読取はこれに準拠 (打ち切り無し)。
+  // i=3 は後方センサー (未装備時は 8190=範囲外相当)。Arduino の教材 (sensorN.readRangeSingleMillimeters()) 用。
   const rawRead = (i) => {
     refresh();
     const s = i === 3 ? world._rear : world._sensors[i];
@@ -93,20 +104,36 @@ export function buildApi(world) {
   };
   const sensorObj = (i) => ({
     readRangeSingleMillimeters: () => rawRead(i),
-    get_distance: () => rawRead(i),
   });
 
   // 車輪エンコーダ (任意装備): 前軸/後軸の車輪面速度 [m/s] を返す。未装備なら -1 (センチネル)。
   // 競技(フルスケール)領域では駆動輪が空転(ローンチ)/ロック(制動)するため、駆動輪と非駆動輪の
   // 速度差からスリップ率を計算でき、トラクション制御/ABS が書ける (実車の車輪速センサーと同じ原理)。
   // 卓上など車輪スリップ率モデル(F5)が無効な領域では車輪は滑らない=接地速度を返す。
+  // 引数は FRONT(0)/REAR(3) (REAR は RC_read の後方と同じ値)。それ以外は -2 (引数エラー・RC_read と同形)。
   const groundSpeed = () => Math.abs(world.car.u != null ? world.car.u : (world.car.v || 0));
   function wheelSpeed(axle) {
+    if (axle !== CONST.FRONT && axle !== CONST.REAR) return -2;   // 引数エラー
     if (!world.encoder) return -1;                 // 未装備
     const car = world.car;
     const vw = axle === CONST.REAR ? car.vwR : car.vwF;
     if (vw == null || !DYN.wheelDyn) return groundSpeed(); // 車輪ダイナミクス無効=滑らない
     return Math.abs(vw);
+  }
+
+  // RC_params(): プログラムと同じフォルダの params.json の内容 (正本 RasPi RumiCar.py / Zero2Cam のパック)。
+  //   シミュレータにはプログラムに添える設定ファイルが無いので、params.json が無いときの正本と同じ空の dict を返す
+  //   (呼ぶたびに同じオブジェクト=正本と同じ)。
+  const params = {};
+  const rcParams = () => params;
+  // RC_state(name): 現在の処理状態の名前 (英数字と _・24 文字まで・大文字に正規化)。正本 (RasPi) と同じく
+  //   変わったときだけ `state A -> B` を出力する (Zero2Cam は PC の「判断状態」に表示)。不正な名前は 0 (無視)。
+  let state = '';
+  function rcState(name) {
+    const s = String(name == null ? '' : name).trim().toUpperCase().replace(/ /g, '_');
+    if (!s || s.length > 24 || !/^[A-Za-z0-9_]+$/.test(s)) return 0;
+    if (s !== state) { world.log(`state ${state} -> ${s}`, true); state = s; }
+    return 1;
   }
 
   const Serial = {
@@ -188,26 +215,23 @@ export function buildApi(world) {
   randomMod.choice[ONE_ARG] = 'random.choice';
 
   const env = {
-    // 定数
-    LEFT: CONST.LEFT, CENTER: CONST.CENTER, RIGHT: CONST.RIGHT, BACK: CONST.BACK,
+    // 定数 (正本と同じ値。REAR=3 は RC_read の後方センサーと RC_wheel_speed の後軸の両方)
+    LEFT: CONST.LEFT, CENTER: CONST.CENTER, RIGHT: CONST.RIGHT, REAR: CONST.REAR,
     FREE: CONST.FREE, REVERSE: CONST.REVERSE, FORWARD: CONST.FORWARD, BRAKE: CONST.BRAKE,
-    FRONT: CONST.FRONT, REAR: CONST.REAR,   // 車輪エンコーダの車軸 (任意装備)
-    // Arduino 系
+    FRONT: CONST.FRONT,   // 車輪エンコーダの前軸 (任意装備)
+    // RumiCar API (正本)
     RC_setup: () => { world.car.reset(world.start); world._sensGen = (world._sensGen || 0) + 1; holdKey = -1; refresh(); },  // AP5: reset で姿勢が変わる=世代を進めキャッシュ無効化。AP18: 保持窓もリセット (テレポート=不連続)
     RC_steer: steer,
     RC_drive: drive,
     RC_read: readDir,
     RC_wheel_speed: wheelSpeed,   // 車輪面速度[m/s] (任意装備の車輪エンコーダ)。未装備 -1
+    RC_params: rcParams,          // params.json の内容 (シミュレータは常に空の dict)
+    RC_state: rcState,            // 処理状態の名前 (変わったときに出力)
+    // Arduino 標準 (C/JS 向け)
     Serial,
     delay: (ms) => { world._pendingDelay = (world._pendingDelay || 0) + (Number(ms) || 0); },
-    // Raspberry Pi 系
-    rc_steer: steer,
-    rc_drive: drive,
-    rc_wheel_speed: wheelSpeed,   // 車輪面速度[m/s] (任意装備の車輪エンコーダ)。未装備 -1
-    rc_clear: () => { world.car.driveDir = CONST.FREE; world.car.pwm = 0; },
-    read_one_sensor: () => readDir(CONST.CENTER),
-    read_all_sensors: () => { refresh(); return world._sensors.map(s => s.mm); },
-    // センサーオブジェクト (sensor3 は任意装備の後方センサー。未装備時は 8190 を返す)
+    // センサーオブジェクト (Arduino の教材 sensorN.readRangeSingleMillimeters()。sensor3 は任意装備の後方センサー。
+    // 未装備時は 8190 を返す)
     sensor0: sensorObj(0), sensor1: sensorObj(1), sensor2: sensorObj(2), sensor3: sensorObj(3),
     // 共通ユーティリティ
     print: (...a) => world.log(a.join(' '), true),
@@ -229,11 +253,39 @@ export function buildApi(world) {
     bool: (x) => !(x === 0 || x === false || x === '' || x == null),
     sum: (arr, s = 0) => (Array.isArray(arr) ? arr.reduce((a, b) => a + b, s) : s),
     math: mathMod, random: randomMod,
-    // time モジュール: sleep(sec) は次反復へ遅延・time() はシム時刻[秒] (決定論・wallclock 非依存)。
+    // time モジュール: sleep(sec) は次反復へ遅延・time()/monotonic() はシム時刻[秒] (決定論・wallclock 非依存)。
     time: {
       sleep: (sec) => { world._pendingDelay = (world._pendingDelay || 0) + (Number(sec) || 0) * 1000; },
       time: () => (world._simMs || 0) / 1000,
+      monotonic: () => (world._simMs || 0) / 1000,
     },
+    // sys モジュール (Python): RasPi の Exercise が書く `import sys; sys.path.append('..')` (ライブラリの置き場所を通す) を
+    //   そのまま通すための最小限。シミュレータには検索パスが無いので何もしない。
+    sys: { path: { append: () => {}, insert: () => {} } },
   };
+  // `import RumiCar` → `RumiCar.RC_drive(...)` と書く Python プログラム用のモジュールオブジェクト (正本 RasPi RumiCar.py の
+  //   __all__ と同じ名前)。`from RumiCar import *` は parser_py が import を読み飛ばすので env の名前がそのまま見える。
+  env.RumiCar = Object.fromEntries(PY_API_NAMES.map((k) => [k, env[k]]));
   return env;
+}
+
+// 正本 RasPi RumiCar.py の __all__ (定数と RC_* 関数)。
+const PY_API_NAMES = ['LEFT', 'CENTER', 'RIGHT', 'REAR', 'FREE', 'REVERSE', 'FORWARD', 'BRAKE',
+  'RC_setup', 'RC_steer', 'RC_drive', 'RC_read', 'RC_params', 'RC_state'];
+// Python のプログラムに見せる名前。正本と同じ API (上) ＋ 任意装備 (FRONT・RC_wheel_speed) ＋ Python 標準
+// (組込関数・math/random/time/sys)。Arduino 固有 (Serial・delay・millis・micros・map・constrain・sensorN) と
+// Raspberry Pi 系の旧別名は含めない (Python では print・time.sleep・time.time() を使う)。
+// 素の sqrt/floor/ceil/atan2/… は `from math import sqrt` と書いたプログラムのため (parser_py は import 文を
+// 読み飛ばすので、from-import した名前は env に無いと未定義になる)。
+const PY_NAMES = [
+  ...PY_API_NAMES, 'FRONT', 'RC_wheel_speed', 'RumiCar',
+  'print', 'abs', 'min', 'max', 'round', 'pow', 'len', 'range', 'list', 'int', 'float', 'str', 'bool', 'sum',
+  'sqrt', 'floor', 'ceil', 'atan2', 'atan', 'sin', 'cos', 'hypot', 'pi',
+  'math', 'random', 'time', 'sys',
+];
+// buildApi の env から Python 用の環境を作る (runner.js が lang==='py' のとき使う)。C/JS は env をそのまま使う。
+export function pythonEnv(env) {
+  const out = {};
+  for (const k of PY_NAMES) if (k in env) out[k] = env[k];
+  return out;
 }

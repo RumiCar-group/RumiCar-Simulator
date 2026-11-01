@@ -611,6 +611,12 @@ judgeParts(partsChecks(P), true);
 //   （e3c6f19d → a4e8a339。切り返しの後に向きが反転して逆走していた車が、5 車長で向きを直される）と、SOLO_LIVE の トライアングル|dynamic
 //   （369edf91 → e16c3004。120 秒の周回 3 → 5）・トライアングル|v2（d5567216 → 81538176。2 → 3）。ほかのレース 65 本・ライブ 25 本は
 //   向き直しが 1 回も働かず、改修前と同じ値（＝1 台走行は、逆走しない限り 1 ビットも変わらない）。
+// 【BN・2026-11-01・API 統一 v11.0.0】探針の見本を py_normal_fr（Python 版）から normal_fr（C 版 Apex Hunter）へ替え、表を刻み直した。
+//   理由: Python 版 3 本は RC_read の 200 mm 打ち切り（正本と同じ値）に合わせて「Wall Hugger」へ書き直したので、旧い表（py_normal_fr の
+//   走り）は見本の変更で当然に変わる＝物理の見張りにならない。C 版 Apex Hunter は本文も走りも変わっていない（生読取＋CONF のまま）ので、
+//   **改修前の木 (origin/main f2434df) と改修後の木で normal_fr の下の 66＋27 本の指紋が全件一致**することを別ツリー (git worktree) で実測し
+//   （_bg2_dump 相当の同じ式）、その値を刻んだ＝1 台走行の物理は 1 ビットも変わっていない証拠。SOLO_LIVE_BL6 の分岐は不要になった
+//   （表は BL6 後の木の値。BL6 前の木は --root では E 章が走らない）ので空にした。
 const SOLO_RACE = {
   "オーバル|standard|false": "7c50a7d2",
   "オーバル|standard|true": "7c50a7d2",
@@ -636,12 +642,12 @@ const SOLO_RACE = {
   "エッセ・レイアウト|dynamic|true": "f583586c",
   "エッセ・レイアウト|v2|false": "a259e354",
   "エッセ・レイアウト|v2|true": "a259e354",
-  "ツイスティ・レイアウト|standard|false": "f3e486bc",
-  "ツイスティ・レイアウト|standard|true": "f3e486bc",
-  "ツイスティ・レイアウト|dynamic|false": "db6a3553",
-  "ツイスティ・レイアウト|dynamic|true": "54963869",
+  "ツイスティ・レイアウト|standard|false": "bdf1fea8",
+  "ツイスティ・レイアウト|standard|true": "bdf1fea8",
+  "ツイスティ・レイアウト|dynamic|false": "21e916f7",
+  "ツイスティ・レイアウト|dynamic|true": "21e916f7",
   "ツイスティ・レイアウト|v2|false": "eb919443",
-  "ツイスティ・レイアウト|v2|true": "a4e8a339",
+  "ツイスティ・レイアウト|v2|true": "54921d4b",
   "峠① 中速ヘアピン (緩い下り)|standard|false": "3f52a788",
   "峠① 中速ヘアピン (緩い下り)|standard|true": "3f52a788",
   "峠① 中速ヘアピン (緩い下り)|dynamic|false": "6f56330d",
@@ -654,30 +660,30 @@ const SOLO_RACE = {
   "架空峠 ロング・ワインディング(中斜面)|dynamic|true": "19a0f26d",
   "架空峠 ロング・ワインディング(中斜面)|v2|false": "9725e60d",
   "架空峠 ロング・ワインディング(中斜面)|v2|true": "9725e60d",
-  "峠① 中速ヘアピン (緩い下り)〔道幅 3 台分〕|standard|false": "9e8d0425",
-  "峠① 中速ヘアピン (緩い下り)〔道幅 3 台分〕|standard|true": "742e969e",
-  "峠① 中速ヘアピン (緩い下り)〔道幅 3 台分〕|dynamic|false": "c8b32ac2",
-  "峠① 中速ヘアピン (緩い下り)〔道幅 3 台分〕|dynamic|true": "c8b32ac2",
-  "峠① 中速ヘアピン (緩い下り)〔道幅 3 台分〕|v2|false": "ccd3f986",
-  "峠① 中速ヘアピン (緩い下り)〔道幅 3 台分〕|v2|true": "86f344f8",
-  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|standard|false": "9f2faa38",
-  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|standard|true": "a41fae30",
-  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|dynamic|false": "3121c7f4",
-  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|dynamic|true": "3121c7f4",
-  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|v2|false": "a222c379",
-  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|v2|true": "b71d3a88",
-  "架空峠 ロング・ワインディング(中斜面)〔道幅 3 台分〕|standard|false": "1c6e7ab0",
-  "架空峠 ロング・ワインディング(中斜面)〔道幅 3 台分〕|standard|true": "2f0d434a",
-  "架空峠 ロング・ワインディング(中斜面)〔道幅 3 台分〕|dynamic|false": "9ab741fb",
-  "架空峠 ロング・ワインディング(中斜面)〔道幅 3 台分〕|dynamic|true": "331688e7",
-  "架空峠 ロング・ワインディング(中斜面)〔道幅 3 台分〕|v2|false": "bc808194",
-  "架空峠 ロング・ワインディング(中斜面)〔道幅 3 台分〕|v2|true": "1e971536",
-  "舵角限界ベンチ R_out/R_min=0.95〔道幅 2 台分〕|standard|false": "528b5438",
-  "舵角限界ベンチ R_out/R_min=0.95〔道幅 2 台分〕|standard|true": "528b5438",
-  "舵角限界ベンチ R_out/R_min=0.95〔道幅 2 台分〕|dynamic|false": "98395377",
-  "舵角限界ベンチ R_out/R_min=0.95〔道幅 2 台分〕|dynamic|true": "bb72ddab",
-  "舵角限界ベンチ R_out/R_min=0.95〔道幅 2 台分〕|v2|false": "771115e0",
-  "舵角限界ベンチ R_out/R_min=0.95〔道幅 2 台分〕|v2|true": "b002c493"
+  "峠① 中速ヘアピン (緩い下り)〔道幅 3 台分〕|standard|false": "d4dece90",
+  "峠① 中速ヘアピン (緩い下り)〔道幅 3 台分〕|standard|true": "d4dece90",
+  "峠① 中速ヘアピン (緩い下り)〔道幅 3 台分〕|dynamic|false": "6986232c",
+  "峠① 中速ヘアピン (緩い下り)〔道幅 3 台分〕|dynamic|true": "6986232c",
+  "峠① 中速ヘアピン (緩い下り)〔道幅 3 台分〕|v2|false": "be74104b",
+  "峠① 中速ヘアピン (緩い下り)〔道幅 3 台分〕|v2|true": "863abf34",
+  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|standard|false": "9c969987",
+  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|standard|true": "9c969987",
+  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|dynamic|false": "a19b0820",
+  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|dynamic|true": "d51e6685",
+  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|v2|false": "89ac97c6",
+  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|v2|true": "505df66c",
+  "架空峠 ロング・ワインディング(中斜面)〔道幅 3 台分〕|standard|false": "1877b92e",
+  "架空峠 ロング・ワインディング(中斜面)〔道幅 3 台分〕|standard|true": "1877b92e",
+  "架空峠 ロング・ワインディング(中斜面)〔道幅 3 台分〕|dynamic|false": "ff887bca",
+  "架空峠 ロング・ワインディング(中斜面)〔道幅 3 台分〕|dynamic|true": "ff887bca",
+  "架空峠 ロング・ワインディング(中斜面)〔道幅 3 台分〕|v2|false": "5860fd12",
+  "架空峠 ロング・ワインディング(中斜面)〔道幅 3 台分〕|v2|true": "914a8585",
+  "舵角限界ベンチ R_out/R_min=0.95〔道幅 2 台分〕|standard|false": "dbf51c21",
+  "舵角限界ベンチ R_out/R_min=0.95〔道幅 2 台分〕|standard|true": "a9d02460",
+  "舵角限界ベンチ R_out/R_min=0.95〔道幅 2 台分〕|dynamic|false": "1f92d863",
+  "舵角限界ベンチ R_out/R_min=0.95〔道幅 2 台分〕|dynamic|true": "e376a93c",
+  "舵角限界ベンチ R_out/R_min=0.95〔道幅 2 台分〕|v2|false": "39b72f7a",
+  "舵角限界ベンチ R_out/R_min=0.95〔道幅 2 台分〕|v2|true": "44283a6d"
 };
 // 【BH3・2026-10-04】SOLO_LIVE の 5 本（トライアングル standard／v2・舵角限界ベンチ 0.95〔道幅 3.5 台分〕standard／dynamic／v2）を
 //   刻み直した（利用者承認）。この指紋には周回の数が入っていて、周回の数え方の是正（lap.js の【BH3】）で数だけが変わった:
@@ -686,31 +692,31 @@ const SOLO_RACE = {
 const SOLO_LIVE = {
   "オーバル|standard": "23d81ad7",
   "オーバル|dynamic": "2d403d9e",
-  "オーバル|v2": "c3ec7674",
+  "オーバル|v2": "2d10efbe",
   "丸の中の四角|standard": "3f3dd054",
   "丸の中の四角|dynamic": "92ec0b2a",
   "丸の中の四角|v2": "c139dd7f",
-  "トライアングル|standard": "e7b2b6ec",
-  "トライアングル|dynamic": "e16c3004",
-  "トライアングル|v2": "81538176",
-  "ツイスティ・レイアウト|standard": "6cf54317",
-  "ツイスティ・レイアウト|dynamic": "a13d27ad",
-  "ツイスティ・レイアウト|v2": "7a05d79e",
+  "トライアングル|standard": "4c21d9b4",
+  "トライアングル|dynamic": "151cb30b",
+  "トライアングル|v2": "037fd844",
+  "ツイスティ・レイアウト|standard": "e29a1c09",
+  "ツイスティ・レイアウト|dynamic": "d585f79d",
+  "ツイスティ・レイアウト|v2": "85d4774d",
   "峠③ 高速ヘアピン (大R下り)|standard": "31aa0e7e",
   "峠③ 高速ヘアピン (大R下り)|dynamic": "517a275c",
   "峠③ 高速ヘアピン (大R下り)|v2": "a77547c3",
   "競技サーキット (フルスケール)|standard": "8717ed38",
   "競技サーキット (フルスケール)|dynamic": "08cc75db",
   "競技サーキット (フルスケール)|v2": "7ee4f04f",
-  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|standard": "cc459389",
-  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|dynamic": "f3c47379",
-  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|v2": "cc20587a",
-  "架空峠 ロング・ワインディング(激坂)〔道幅 4.5 台分〕|standard": "ecc64200",
-  "架空峠 ロング・ワインディング(激坂)〔道幅 4.5 台分〕|dynamic": "697d602b",
-  "架空峠 ロング・ワインディング(激坂)〔道幅 4.5 台分〕|v2": "aa4c2e45",
-  "舵角限界ベンチ R_out/R_min=0.95〔道幅 3.5 台分〕|standard": "6b5e1d08",
-  "舵角限界ベンチ R_out/R_min=0.95〔道幅 3.5 台分〕|dynamic": "7e692a4f",
-  "舵角限界ベンチ R_out/R_min=0.95〔道幅 3.5 台分〕|v2": "1564a67c"
+  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|standard": "f5c99f7c",
+  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|dynamic": "fb3ed17f",
+  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|v2": "ab6109d6",
+  "架空峠 ロング・ワインディング(激坂)〔道幅 4.5 台分〕|standard": "e62c4b6f",
+  "架空峠 ロング・ワインディング(激坂)〔道幅 4.5 台分〕|dynamic": "a1d1fdec",
+  "架空峠 ロング・ワインディング(激坂)〔道幅 4.5 台分〕|v2": "c1ca0d41",
+  "舵角限界ベンチ R_out/R_min=0.95〔道幅 3.5 台分〕|standard": "469d2edc",
+  "舵角限界ベンチ R_out/R_min=0.95〔道幅 3.5 台分〕|dynamic": "c45e6cdc",
+  "舵角限界ベンチ R_out/R_min=0.95〔道幅 3.5 台分〕|v2": "4e61cdd9"
 };
 // 【BL6・2026-10-17】ライブの loop() の段取りを「1 フレームの sdt を loop の周期で刻み、区間ごとに loop() → 積分」に変えた（product の
 //   loopsched.js・wf_bg_live.mjs の liveTicks が呼ぶ）。V0 の 2 フレーム目（▶ 直後の長いフレーム＝sdt 0.15 s＝3 周期）だけが sdt > 1 周期で、
@@ -722,24 +728,11 @@ const SOLO_LIVE = {
 //   2 フレーム目も 0.05 にした列（全フレーム sdt ≤ 1 周期）では BL6 前と後の木の指紋が 27/27 一致・BL6 後 × V0 で変わるのは 12/27（残り
 //   15 本は 2 フレーム目を区間に分けても指紋が変わらなかった）。∴ 変わったのは sdt > 1 周期のフレームの段取りだけ（区間ごとの loop() と、
 //   区間ごとに働く積分の呼び出し単位の処理＝loopsched.js 冒頭）。
-const SOLO_LIVE_BL6 = {
-  "オーバル|v2": "2d10efbe",
-  "トライアングル|standard": "2dc26c53",
-  "トライアングル|v2": "21e4b017",
-  "ツイスティ・レイアウト|standard": "a3632d27",
-  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|standard": "241ee675",
-  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|dynamic": "9898780e",
-  "峠③ 高速ヘアピン (大R下り)〔道幅 3 台分〕|v2": "8a5ad19b",
-  "架空峠 ロング・ワインディング(激坂)〔道幅 4.5 台分〕|standard": "31cebc1a",
-  "架空峠 ロング・ワインディング(激坂)〔道幅 4.5 台分〕|dynamic": "a6d03baf",
-  "架空峠 ロング・ワインディング(激坂)〔道幅 4.5 台分〕|v2": "08b3fa82",
-  "舵角限界ベンチ R_out/R_min=0.95〔道幅 3.5 台分〕|dynamic": "166930ab",
-  "舵角限界ベンチ R_out/R_min=0.95〔道幅 3.5 台分〕|v2": "f7fb5ef5"
-};
+const SOLO_LIVE_BL6 = {};
 
 console.log(`\nE) 1 台走行の不変（改修前ツリーの値と突き合わせ: レース ${Object.keys(SOLO_RACE).length} 本・ライブ ${Object.keys(SOLO_LIVE).length} 本）`);
 {
-  const p = P.programs.PROGRAM_BY_KEY.py_normal_fr;
+  const p = P.programs.PROGRAM_BY_KEY.normal_fr;   // 2026-11: 探針は C 版 Apex Hunter (API 統一で本文の変わらない見本。下の注記)
   const bad = [];
   for (const [k, want] of Object.entries(SOLO_RACE)) {
     const [name, mode, rj] = k.split('|');
@@ -751,7 +744,7 @@ console.log(`\nE) 1 台走行の不変（改修前ツリーの値と突き合わ
   for (const [k, want0] of Object.entries(SOLO_LIVE)) {
     const want = (P.loopsched && SOLO_LIVE_BL6[k]) || want0;   // BL6 後の木は SOLO_LIVE_BL6 の値（上の注記）
     const [name, mode] = k.split('|');
-    const L = liveSetup(P, { name, n: 1, mode });
+    const L = liveSetup(P, { name, n: 1, mode, progKey: 'normal_fr' });   // 2026-11: 探針は C 版 Apex Hunter
     const parts = [];
     while (L.t < LIVE_SEC - 1e-9) {
       liveFrame(L, SDT.V0(L.frames));

@@ -245,7 +245,7 @@ void loop() {
   if (escRec > 0) { escRec = escRec - 1; RC_steer(CENTER); RC_drive(FORWARD, 90); cur = 90; return; }
 
   // [防御] 後方に追走車 → 約3秒防御を維持 (横に並ばれ後方レイが見失っても解かない)
-  int B = RC_read(BACK);
+  int B = sensor3.readRangeSingleMillimeters();   // 後方(任意装備)の生読取。未装備/範囲外は 8190 (RC_read(REAR) は卓上で 200mm 打ち切り=-3 になるため生値で 650mm を見る)
   if (B >= 0 && B < 650) defOn = 60; else if (defOn > 0) defOn = defOn - 1;
   defT = defT + 1;
   if (DEF_STYLE > 0 && defOn > 0) {
@@ -330,7 +330,7 @@ void loop() {
   if (C < ESC) { if (L > R) RC_steer(RIGHT); else RC_steer(LEFT); RC_drive(REVERSE, 170); return; }
 
   // [防御] 後方に追走車 → 約3秒防御を維持
-  int B = RC_read(BACK);
+  int B = sensor3.readRangeSingleMillimeters();   // 後方(任意装備)の生読取。未装備/範囲外は 8190 (RC_read(REAR) は卓上で 200mm 打ち切り=-3 になるため生値で 650mm を見る)
   if (B >= 0 && B < 650) defOn = 60; else if (defOn > 0) defOn = defOn - 1;
   defT = defT + 1;
   if (DEF_STYLE > 0 && defOn > 0) {
@@ -400,7 +400,7 @@ void loop() {
   if (C < ESC) { if (L > R) RC_steer(RIGHT); else RC_steer(LEFT); RC_drive(REVERSE, 170); prevPwm = 0; return; }
 
   // [防御] 後方に追走車 → 約3秒防御を維持
-  int B = RC_read(BACK);
+  int B = sensor3.readRangeSingleMillimeters();   // 後方(任意装備)の生読取。未装備/範囲外は 8190 (RC_read(REAR) は卓上で 200mm 打ち切り=-3 になるため生値で 650mm を見る)
   if (B >= 0 && B < 650) defOn = 60; else if (defOn > 0) defOn = defOn - 1;
   defT = defT + 1;
   if (DEF_STYLE > 0 && defOn > 0) {
@@ -1048,7 +1048,7 @@ void loop() {
   else RC_drive(FORWARD, pwm);
 
   // ---- 姿勢推定(研究): レンジフロー ----  距離は m に直す。範囲外/未装備は無効。
-  int B = RC_read(BACK);                 // 後方(任意装備)。未装備は -2
+  int B = RC_read(REAR);                 // 後方(任意装備)。未装備は -1 (フルスケールは打ち切り無し)
   double enc = RC_wheel_speed(REAR);     // 車輪面速度[m/s](任意装備)。未装備は -1
   double dL = L / 1000.0; double dC = C / 1000.0; double dR = R / 1000.0; double dB = B / 1000.0;
   t = t + 1;
@@ -1284,7 +1284,7 @@ def loop():
         elif okR==1:
             ovt=0-1
         if told==0 and ovt!=0:
-            Serial.println("traffic ahead: passing on the open side")
+            print("traffic ahead: passing on the open side")
             told=1
     # --- 操舵の向き(壁回避 → 抜き → センタリング)を決める。st=方位デッドレコニング用の意図方向 ---
     turning=1
@@ -1353,7 +1353,7 @@ def loop():
         if LAPB<1:
             LAPB=1
         phase=1
-        Serial.println("course learned: " + LAPB + " zones")
+        print("course learned:", LAPB, "zones")
 `;
 
 const COMP_LOCALIZE_CODE = `# Self-Locator — ToF×3 + 車輪エンコーダで「今コースのどこにいるか」を1次元ヒストグラムフィルタで推定する  [競技 / フルスケール・Python・要エンコーダ]  by Opus 4.8
@@ -1583,7 +1583,7 @@ def loop():
                     w[i]=0.0
                     i=i+1
                 lp=1
-                Serial.println("localizer ready: " + LAPBF + " bins (loop closed)")
+                print("localizer ready:", LAPBF, "bins (loop closed)")
             # 再アンカー: sl を「最小からの走行ぶん」へ (=真スタートから今までの距離)。信念もそこへ。
             sl=sl-mminSl
             bb=sl//BLF
@@ -1752,7 +1752,7 @@ def loop():
             betaEst=0.7*betaEst+0.3*braw
             betaN=betaN+1
         if (sc%10)==0:
-            Serial.println("pos=bin " + round(estb) + "/" + LAPBF + " conf=" + round(conf*100) + "%")
+            print("pos=bin", round(estb), "/", LAPBF, "conf=", round(conf*100), "%")
 `;
 
 // AS4: 上の 2 本 (Recon Racer / Self-Locator) の Arduino C++ 移植。地図・指紋・ヒストグラムを
@@ -2616,7 +2616,7 @@ def loop():
                     p=p+1
                 phase=1
                 armed=0
-                Serial.println("plan ready: " + LAPB + " zones (max curvature " + round(maxcr*100) + "%)")
+                print("plan ready:", LAPB, "zones (max curvature", round(maxcr*100), "%)")
     # ── 本番: 純オドメトリで毎周 sl-=LAPLEN 再アンカー。原点はスタート(tick0)のまま=地図と同一原点で
     #    整合(地図は phase0 の sl-from-start で構築・照会も同じ sl→整合。指紋シフトはしない)。骨格=
     #    エンコーダ距離で周回内高精度(AO10・0.30bin)、周回境界だけ LAPLEN で畳む(ドリフト有界)。──
@@ -2722,195 +2722,362 @@ def loop():
 //   Python: R<D_SIDE なら左・そうでなく L<D_SIDE なら右)。1 台・3 周の公式レース (出荷 8 コース × 3 エンジン × 2 規則＝48 通り) で
 //   毎 tick の全状態を比べると、FR 15・4WD 17・FF 18 通りが C 版と違う走りになる (BH2 の実測では、UI 既定のこの Python 版 FR は
 //   後退を一切指令しない)。注記を実態に合わせた。**実行文は 1 字も変えていない** (走りは不変)。
-const PY_FR_CODE = `# Apex Hunter (Python) — ノーマル FR 用  [卓上 Lv1 基準・Python 版]  by Opus 4.8
-# C 版「Apex Hunter」の土台 (下の (1)〜(3)) を、定数そのままに Python の書き方
-# (def setup/loop・global・RC_read) へ置き換えた入門サンプル。C 版の行き止まり脱出 (前が塞がったまま開かなければ後退して切り返す) は入れておらず、
-# 側方補正の条件も少し違う (C 版: 左右どちらかが近ければ「広い方」へ／この版: 右が近ければ左へ・左が近ければ右へ)。
-# ∴ 走りは C 版と同じとは限らない (同じ走りになるコースと、違う走りになるコースがある)。
-# ★学習の出発点★ FR は駆動(後輪)と操舵(前輪)が分かれるので最も素直に曲がる。
-# 全車に共通する土台ロジック(3つ):
-#   (1) 前方センサー C の空き具合で速度を3段に変える(直線=速い / 中速 / コーナー=遅い)
-#   (2) 前が詰まったら左右で「広い方」へ全力で曲げる
-#   (3) 側方の壁が近ければ離れる方向へ補正する
-# ※Python では RC_read(LEFT/CENTER/RIGHT) で前方3センサーを読む(C の sensor0/1/2 と同じ値)。
+const PY_FR_CODE = `# Wall Hugger (Python) — ノーマル FR 用  [卓上 Lv1 基準・Python 版]  by Fable 5.1
+# 実測 (v11.0.0・完走が定義される卓上 56 コース・ソロ走行・laps=3・rejoin=OFF): 50/56 完走 (C 版 Apex Hunter は 47/56)。
+# ★学習の出発点★ RumiCar の 3 つの ToF (左 +65°・中央・右 −65°) は 20 cm より先を見ません (RC_read は -3 を返す)。
+#   卓上コースの通路は 20 cm より広いので、真ん中を走ると左右とも -3 になり壁が見えません。
+#   そこで「右の壁に寄り、壁に沿って走る」のがこのプログラムの基本です (両側が見える狭い通路では左右の差で真ん中へ)。
+# 土台ロジック (4 つ):
+#   (1) 前方 C に壁が見えたら (20 cm 以内)、左右で「開いている方」へ切る。-3 (何もない) が最も開いている
+#   (2) 右の壁との距離を NEAR〜FARB に保つ (近ければ左へ・遠ければ右へ・ちょうどなら直進で全開)
+#   (3) 右の壁を見失ったら右へ切って探す。長く見えないときは半分の時間だけ切って大回り (同じ場所で円を描き続けない)
+#   (4) 前が ESC より近づいたら、開いている側へ鼻先が向くよう逆ハンで後退して切り返す (行き止まり脱出)
+# ※ FR は駆動 (後輪) と操舵 (前輪) が分かれるので素直に曲がる。曲げるときの速度 TURNV は全開の約 4 割 (110/255) で
+#   旋回半径が小さくなる (全開に近いほどアンダーステアで大回りになる)。
+# ※ -3 は数としては最も小さいので、比較の前に FAR (999) へ置き換える (RasPi・Zero2Cam・Arduino でも同じ書き方)。
 
-TOP=250        # 速度: 直線
-CRUISE=215     # 速度: 中速
-SLOW=130       # 速度: コーナー
-TCAP=195       # 旋回中の上限
-D_OPEN=620     # 判定距離[mm]: これより前が開けば TOP
-D_MID=405      # 判定距離[mm]: これより前が開けば CRUISE
-D_TURN=375     # 判定距離[mm]: これより前が詰まれば曲げる
-D_SIDE=180     # 判定距離[mm]: 側方がこれより近ければ離れる
-CONF=640       # 信頼区間[mm]: これを超える/範囲外(-3)の測距は「遠い/開放」とみなす
-OPEN=9999      # 開放を表す大きな値
+from RumiCar import *
+
+TOP = 240       # 速度: 壁に沿って安定しているとき (255 = 全開)
+CRUISE = 180    # 速度: 壁を探す・寄せる・真ん中へ寄せるとき
+TURNV = 110     # 速度: 前に壁が見えて曲げるとき (FR は 110 前後で最も小さく回れる)
+BACKV = 150     # 速度: 後退
+D_TURN = 200    # 前方がこれより近ければ曲げる [mm] (20 cm = RC_read が距離を返す上限なので「見えたら曲げる」)
+NEAR = 100      # 右の壁がこれより近ければ左へ [mm]
+FARB = 170      # 右の壁がこれより遠ければ右へ [mm]
+ESC = 80        # 前方がこれより近ければ後退して切り返す [mm]
+BACKT = 8       # 後退を続ける回数 (loop の回数。20 Hz なら 0.4 秒)
+SEEK = 4        # 壁を見失ってから全舵で右へ切り続ける回数。その後は半分の時間だけ切る
+FAR = 999       # -3 (20 cm 以内に何もない) を比較で「遠い」として扱う値
+
+back = 0        # 後退の残り回数
+bdir = CENTER   # 後退中の舵
+lost = 0        # 右の壁を見失ってからの回数
+
 
 def setup():
+    global back, lost
     RC_setup()
+    back = 0
+    lost = 0
+
 
 def loop():
-    L=RC_read(LEFT)    # 前方3センサー (C の sensor0/1/2 に対応)
-    C=RC_read(CENTER)
-    R=RC_read(RIGHT)
-    if L<0 or L>CONF:  # 信頼区間外/範囲外(-3) = 開放
-        L=OPEN
-    if C<0 or C>CONF:
-        C=OPEN
-    if R<0 or R>CONF:
-        R=OPEN
-    # (2)(3) 操舵: 前が詰まれば広い方へ、側方が近ければ離れる
-    turning=1
-    if C<D_TURN:
-        if L>R:
+    global back, bdir, lost
+    L = RC_read(LEFT)
+    C = RC_read(CENTER)
+    R = RC_read(RIGHT)
+    if L == -3:
+        L = FAR
+    if C == -3:
+        C = FAR
+    if R == -3:
+        R = FAR
+
+    # (4) 後退中: 舵を固定したまま下がる (毎回選び直すと左右にぶれて同じ場所を往復する)
+    if back > 0:
+        back = back - 1
+        RC_steer(bdir)
+        RC_drive(REVERSE, BACKV)
+        return
+    if C < ESC:
+        back = BACKT
+        if L < 120 or R < 120:
+            bdir = CENTER      # 横の壁が近いときは真っすぐ下がる (逆ハンだと後ろが壁に当たる)
+        elif L > R:
+            bdir = RIGHT       # 左が開いている → 右に切って下がると鼻先が左を向く
+        else:
+            bdir = LEFT
+        RC_steer(bdir)
+        RC_drive(REVERSE, BACKV)
+        return
+
+    # (1) 前に壁: 開いている方へ
+    if C < D_TURN:
+        if R > L:
+            RC_steer(RIGHT)
+        else:
+            RC_steer(LEFT)
+        RC_drive(FORWARD, TURNV)
+        return
+
+    # 両側に壁が見える狭い通路: 左右の差で真ん中へ
+    if L < FAR and R < FAR:
+        lost = 0
+        if L + 20 < R:
+            RC_steer(RIGHT)
+        elif R + 20 < L:
             RC_steer(LEFT)
         else:
+            RC_steer(CENTER)
+        RC_drive(FORWARD, CRUISE)
+        return
+
+    # (3) 右の壁が見えない: 右へ切って探す
+    if R == FAR:
+        lost = lost + 1
+        if lost <= SEEK or lost % 2 == 0:
             RC_steer(RIGHT)
-    elif R<D_SIDE:
+        else:
+            RC_steer(CENTER)
+        RC_drive(FORWARD, CRUISE)
+        return
+
+    # (2) 右の壁に沿う
+    lost = 0
+    if R < NEAR:
         RC_steer(LEFT)
-    elif L<D_SIDE:
+        RC_drive(FORWARD, CRUISE)
+    elif R > FARB:
         RC_steer(RIGHT)
+        RC_drive(FORWARD, CRUISE)
     else:
         RC_steer(CENTER)
-        turning=0
-    # (1) 速度: 前方が開けているほど速く
-    pwm=SLOW
-    if C>D_OPEN:
-        pwm=TOP
-    elif C>D_MID:
-        pwm=CRUISE
-    if turning==1 and pwm>TCAP:   # 旋回中は軽く抑え巻き込みを防ぐ
-        pwm=TCAP
-    RC_drive(FORWARD,pwm)
+        RC_drive(FORWARD, TOP)
 `;
 
-const PY_AWD_CODE = `# Traction Blitz (Python) — ノーマル 4WD 用  [卓上 Lv2 強みを使う・Python 版]  by Opus 4.8
-# C 版「Traction Blitz」の土台を、定数そのままに Python の書き方へ置き換えた入門サンプル。C 版の行き止まり脱出 (前が塞がったまま開かなければ後退して切り返す) は入れておらず、
-# 側方補正の条件も少し違う (C 版: 左右どちらかが近ければ「広い方」へ／この版: 右が近ければ左へ・左が近ければ右へ)。
-# ∴ 走りは C 版と同じとは限らない (同じ走りになるコースと、違う走りになるコースがある)。
-# ★引き出すロジック★ 4WD だけができる「コーナー出口で“誰より早く”フル加速」。
-#   前方距離 C の前回との差 dC を取り、前が開き出した瞬間(dC>0=立ち上がり)に全開へ。
-# 基準(FR)との違い: 速度3段は同じ。そこに「立ち上がり検知 → 即全開」を足しただけ。
-# ※Python で前回値を覚えるには module 変数 (prevC/started) を global で書き換える。
+const PY_AWD_CODE = `# Wall Hugger 4WD (Python) — ノーマル 4WD 用  [卓上 Lv2 強みを使う・Python 版]  by Fable 5.1
+# 実測 (v11.0.0・完走が定義される卓上 56 コース・ソロ走行・laps=3・rejoin=OFF): 53/56 完走 (C 版 Traction Blitz は 48/56)。
+# FR 版「Wall Hugger」の土台 (右の壁に沿う・前に壁が見えたら開いている方へ・見失ったら探す・詰まったら後退) はそのまま。
+# ★引き出すロジック★ 4WD は 4 輪で駆動するので、壁に沿って安定したら迷わず TOP まで加速してよい (トラクションがある)。
+#   弱点は「アクセルを踏んだまま曲げると前輪が押されて大回りになる」こと (実測の旋回半径: 全開 240 で約 1.3 m・70 まで抜くと約 0.7 m。
+#   FR は 0.8 m → 0.45 m)。∴ 曲げるときはアクセルを強く抜く (TURNV=70) ことで FR と同じ通路を通れる。
+# ★足したロジック★ (5) 切り始めたら HOLD 回は切り続ける。前方の扇は壁の端で見えたり見えなかったりするので、
+#   切ったり戻したりを繰り返すと曲がりきれない。4WD は切り始めてから曲がり始めるまでが遅いので、この「粘り」が効く。
+# ※ -3 は数としては最も小さいので、比較の前に FAR (999) へ置き換える (RasPi・Zero2Cam・Arduino でも同じ書き方)。
 
-TOP=235
-CRUISE=215
-SLOW=140
-TCAP=208
-D_OPEN=645
-D_MID=410
-D_TURN=386
-D_SIDE=178
-CONF=640       # 信頼区間[mm]: >CONF/範囲外(-3)=「遠い/開放」
-OPEN=9999
-EXIT=18        # 前方が1ループでこの[mm]以上開いたら=コーナー脱出 → 立ち上がり全開
-prevC=0        # 前回の前方距離 (差分=接近/開きの検知に使う)
-started=0
+from RumiCar import *
+
+TOP = 240       # 速度: 壁に沿って安定しているとき (255 = 全開)
+CRUISE = 180    # 速度: 壁を探す・寄せる・真ん中へ寄せるとき
+TURNV = 70      # 速度: 前に壁が見えて曲げるとき (4WD は強く抜くほど小さく回れる)
+BACKV = 150     # 速度: 後退
+D_TURN = 200    # 前方がこれより近ければ曲げる [mm] (20 cm = RC_read が距離を返す上限なので「見えたら曲げる」)
+NEAR = 100      # 右の壁がこれより近ければ左へ [mm]
+FARB = 170      # 右の壁がこれより遠ければ右へ [mm]
+ESC = 80        # 前方がこれより近ければ後退して切り返す [mm]
+BACKT = 6       # 後退を続ける回数 (loop の回数。20 Hz なら 0.3 秒)
+SEEK = 4        # 壁を見失ってから全舵で右へ切り続ける回数。その後は半分の時間だけ切る
+HOLD = 2        # (5) 前の壁で切り始めてから、壁が見えなくなっても切り続ける回数
+FAR = 999       # -3 (20 cm 以内に何もない) を比較で「遠い」として扱う値
+
+back = 0        # 後退の残り回数
+bdir = CENTER   # 後退中の舵
+lost = 0        # 右の壁を見失ってからの回数
+hold = 0        # 切り続ける残り回数
+hdir = CENTER   # 切り続ける向き
+
 
 def setup():
-    global prevC, started
+    global back, lost, hold
     RC_setup()
-    prevC=0
-    started=0
+    back = 0
+    lost = 0
+    hold = 0
+
 
 def loop():
-    global prevC, started
-    L=RC_read(LEFT)
-    C=RC_read(CENTER)
-    R=RC_read(RIGHT)
-    if L<0 or L>CONF:
-        L=OPEN
-    if C<0 or C>CONF:
-        C=OPEN
-    if R<0 or R>CONF:
-        R=OPEN
-    dC=0
-    if started==1:
-        dC=C-prevC     # dC>0 = 前方が開いてくる = コーナーの立ち上がり
-    prevC=C
-    started=1
-    turning=1
-    if C<D_TURN:
-        if L>R:
+    global back, bdir, lost, hold, hdir
+    L = RC_read(LEFT)
+    C = RC_read(CENTER)
+    R = RC_read(RIGHT)
+    if L == -3:
+        L = FAR
+    if C == -3:
+        C = FAR
+    if R == -3:
+        R = FAR
+
+    # (4) 後退中: 舵を固定したまま下がる (毎回選び直すと左右にぶれて同じ場所を往復する)
+    if back > 0:
+        back = back - 1
+        RC_steer(bdir)
+        RC_drive(REVERSE, BACKV)
+        return
+    if C < ESC:
+        back = BACKT
+        hold = 0
+        if L < 120 or R < 120:
+            bdir = CENTER      # 横の壁が近いときは真っすぐ下がる (逆ハンだと後ろが壁に当たる)
+        elif L > R:
+            bdir = RIGHT       # 左が開いている → 右に切って下がると鼻先が左を向く
+        else:
+            bdir = LEFT
+        RC_steer(bdir)
+        RC_drive(REVERSE, BACKV)
+        return
+
+    # (1) 前に壁: 開いている方へ。(5) 見えなくなっても HOLD 回は同じ向きに切り続ける
+    if C < D_TURN:
+        if R > L:
+            hdir = RIGHT
+        else:
+            hdir = LEFT
+        hold = HOLD
+        RC_steer(hdir)
+        RC_drive(FORWARD, TURNV)
+        return
+    if hold > 0:
+        hold = hold - 1
+        RC_steer(hdir)
+        RC_drive(FORWARD, TURNV)
+        return
+
+    # 両側に壁が見える狭い通路: 左右の差で真ん中へ
+    if L < FAR and R < FAR:
+        lost = 0
+        if L + 20 < R:
+            RC_steer(RIGHT)
+        elif R + 20 < L:
             RC_steer(LEFT)
         else:
+            RC_steer(CENTER)
+        RC_drive(FORWARD, CRUISE)
+        return
+
+    # (3) 右の壁が見えない: 右へ切って探す
+    if R == FAR:
+        lost = lost + 1
+        if lost <= SEEK or lost % 2 == 0:
             RC_steer(RIGHT)
-    elif R<D_SIDE:
+        else:
+            RC_steer(CENTER)
+        RC_drive(FORWARD, CRUISE)
+        return
+
+    # (2) 右の壁に沿う
+    lost = 0
+    if R < NEAR:
         RC_steer(LEFT)
-    elif L<D_SIDE:
+        RC_drive(FORWARD, CRUISE)
+    elif R > FARB:
         RC_steer(RIGHT)
+        RC_drive(FORWARD, CRUISE)
     else:
         RC_steer(CENTER)
-        turning=0
-    pwm=SLOW
-    if C>D_OPEN:
-        pwm=TOP
-    elif C>D_MID:
-        pwm=CRUISE
-    if turning==1 and pwm>TCAP:
-        pwm=TCAP
-    # ★立ち上がり全開★ コーナーを抜け前方が開き出したら、トラクションを信じて即フルパワー
-    if dC>EXIT and C>D_MID:
-        pwm=TOP
-    RC_drive(FORWARD,pwm)
+        RC_drive(FORWARD, TOP)
 `;
 
-const PY_FF_CODE = `# Steady Nose (Python) — ノーマル FF 用  [卓上 Lv3 弱点を補う・Python 版]  by Opus 4.8
-# C 版「Steady Nose」の土台を、定数そのままに Python の書き方へ置き換えた入門サンプル。C 版の行き止まり脱出 (前が塞がったまま開かなければ後退して切り返す) は入れておらず、
-# 側方補正の条件も少し違う (C 版: 左右どちらかが近ければ「広い方」へ／この版: 右が近ければ左へ・左が近ければ右へ)。
-# ∴ 走りは C 版と同じとは限らない (同じ走りになるコースと、違う走りになるコースがある)。
-# FF は前輪が「駆動」と「操舵」を兼ねる。曲げながら踏むと前輪が駆動に取られて曲がる力を失い
-# 外へ膨らむ(パワーアンダー)。
-# ★引き出すロジック(基準と“決定的に違う”点)★
-#   「操舵している間はアクセルを抜く」。前輪に“曲げる仕事”を専念させ、まっすぐで踏む。
-#   速度を前方距離だけでなく『今ハンドルを切っているか』で決めるのが核。これが FF の肝。
+const PY_FF_CODE = `# Wall Hugger FF (Python) — ノーマル FF 用  [卓上 Lv3 弱点を補う・Python 版]  by Fable 5.1
+# 実測 (v11.0.0・完走が定義される卓上 56 コース・ソロ走行・laps=3・rejoin=OFF): 48/56 完走 (C 版 Steady Nose は 47/56)。
+# FR 版「Wall Hugger」の土台 (右の壁に沿う・前に壁が見えたら開いている方へ・見失ったら探す・詰まったら後退) はそのまま。
+# ★補う弱点★ FF は前輪が駆動と操舵を兼ねるので、アクセルを踏んだまま曲げるとほとんど曲がらない
+#   (実測の旋回半径: 全開 240 で約 1.8 m・70 まで抜くと約 0.8 m。FR は 0.8 m → 0.45 m)。
+#   ∴ (a) 曲げるときはアクセルを抜く (TURNV=70)。(b) 切り始めたら HOLD 回は切り続ける (切ったり戻したりでは曲がりきれない)。
+#   (c) 右の壁には FR より近く寄る (NEAR/FARB を小さく)。大回りになる車ほど、曲がり始める位置を外側に取れないので、
+#       壁の近くを走って前方の壁を早めに (遠い位置で) 見つける。(d) 直線の TOP も少し抑える (曲げる前に落とす速度が小さくて済む)。
+# ※ -3 は数としては最も小さいので、比較の前に FAR (999) へ置き換える (RasPi・Zero2Cam・Arduino でも同じ書き方)。
 
-TOP=250
-CRUISE=205
-SLOW=120
-TURN_PWM=120   # 操舵中に抜く先の低PWM
-D_OPEN=600
-D_MID=440
-D_TURN=400
-D_SIDE=190
-CONF=640       # 信頼区間[mm]: >CONF/範囲外(-3)=「遠い/開放」
-OPEN=9999
+from RumiCar import *
+
+TOP = 220       # 速度: 壁に沿って安定しているとき (255 = 全開)
+CRUISE = 180    # 速度: 壁を探す・寄せる・真ん中へ寄せるとき
+TURNV = 70      # 速度: 前に壁が見えて曲げるとき (FF は抜かないと曲がらない)
+BACKV = 150     # 速度: 後退
+D_TURN = 200    # 前方がこれより近ければ曲げる [mm] (20 cm = RC_read が距離を返す上限なので「見えたら曲げる」)
+NEAR = 85       # 右の壁がこれより近ければ左へ [mm] (FR より壁に寄る)
+FARB = 150      # 右の壁がこれより遠ければ右へ [mm]
+ESC = 80        # 前方がこれより近ければ後退して切り返す [mm]
+BACKT = 8       # 後退を続ける回数 (loop の回数。20 Hz なら 0.4 秒)
+SEEK = 4        # 壁を見失ってから全舵で右へ切り続ける回数。その後は半分の時間だけ切る
+HOLD = 2        # (b) 前の壁で切り始めてから、壁が見えなくなっても切り続ける回数
+FAR = 999       # -3 (20 cm 以内に何もない) を比較で「遠い」として扱う値
+
+back = 0        # 後退の残り回数
+bdir = CENTER   # 後退中の舵
+lost = 0        # 右の壁を見失ってからの回数
+hold = 0        # 切り続ける残り回数
+hdir = CENTER   # 切り続ける向き
+
 
 def setup():
+    global back, lost, hold
     RC_setup()
+    back = 0
+    lost = 0
+    hold = 0
+
 
 def loop():
-    L=RC_read(LEFT)
-    C=RC_read(CENTER)
-    R=RC_read(RIGHT)
-    if L<0 or L>CONF:
-        L=OPEN
-    if C<0 or C>CONF:
-        C=OPEN
-    if R<0 or R>CONF:
-        R=OPEN
-    steering=1     # 1=今ハンドルを切っている, 0=まっすぐ
-    if C<D_TURN:
-        if L>R:
+    global back, bdir, lost, hold, hdir
+    L = RC_read(LEFT)
+    C = RC_read(CENTER)
+    R = RC_read(RIGHT)
+    if L == -3:
+        L = FAR
+    if C == -3:
+        C = FAR
+    if R == -3:
+        R = FAR
+
+    # (4) 後退中: 舵を固定したまま下がる (毎回選び直すと左右にぶれて同じ場所を往復する)
+    if back > 0:
+        back = back - 1
+        RC_steer(bdir)
+        RC_drive(REVERSE, BACKV)
+        return
+    if C < ESC:
+        back = BACKT
+        hold = 0
+        if L < 120 or R < 120:
+            bdir = CENTER      # 横の壁が近いときは真っすぐ下がる (逆ハンだと後ろが壁に当たる)
+        elif L > R:
+            bdir = RIGHT       # 左が開いている → 右に切って下がると鼻先が左を向く
+        else:
+            bdir = LEFT
+        RC_steer(bdir)
+        RC_drive(REVERSE, BACKV)
+        return
+
+    # (1) 前に壁: 開いている方へ。(b) 見えなくなっても HOLD 回は同じ向きに切り続ける
+    if C < D_TURN:
+        if R > L:
+            hdir = RIGHT
+        else:
+            hdir = LEFT
+        hold = HOLD
+        RC_steer(hdir)
+        RC_drive(FORWARD, TURNV)
+        return
+    if hold > 0:
+        hold = hold - 1
+        RC_steer(hdir)
+        RC_drive(FORWARD, TURNV)
+        return
+
+    # 両側に壁が見える狭い通路: 左右の差で真ん中へ
+    if L < FAR and R < FAR:
+        lost = 0
+        if L + 20 < R:
+            RC_steer(RIGHT)
+        elif R + 20 < L:
             RC_steer(LEFT)
         else:
+            RC_steer(CENTER)
+        RC_drive(FORWARD, CRUISE)
+        return
+
+    # (3) 右の壁が見えない: 右へ切って探す
+    if R == FAR:
+        lost = lost + 1
+        if lost <= SEEK or lost % 2 == 0:
             RC_steer(RIGHT)
-    elif R<D_SIDE:
+        else:
+            RC_steer(CENTER)
+        RC_drive(FORWARD, CRUISE)
+        return
+
+    # (2) 右の壁に沿う
+    lost = 0
+    if R < NEAR:
         RC_steer(LEFT)
-    elif L<D_SIDE:
+        RC_drive(FORWARD, CRUISE)
+    elif R > FARB:
         RC_steer(RIGHT)
+        RC_drive(FORWARD, CRUISE)
     else:
         RC_steer(CENTER)
-        steering=0
-    # ★FF の肝★ 操舵中はアクセルを抜き(前輪を操舵に専念)、まっすぐなら前方の空きで加速する。
-    if steering==1:
-        pwm=TURN_PWM
-    elif C>D_OPEN:
-        pwm=TOP
-    elif C>D_MID:
-        pwm=CRUISE
-    else:
-        pwm=SLOW
-    RC_drive(FORWARD,pwm)
+        RC_drive(FORWARD, TOP)
 `;
 
 const SPEC = [
@@ -2945,22 +3112,22 @@ const SPEC = [
     learns: '特殊トリガー(リフトオフ)の管理と技の切替の両立。',
   },
   {
-    key: 'py_normal_fr', name: 'Apex Hunter (Python)', label: 'ノーマル FR (Python)', level: 'Lv1 基準 (Python)',
+    key: 'py_normal_fr', name: 'Wall Hugger (Python)', label: 'ノーマル FR (Python)', level: 'Lv1 基準 (Python)',
     carType: 'normal_fr', lang: 'py', code: PY_FR_CODE,
-    strategy: 'C版 Apex Hunter の土台 (3段速度+広い方へ操舵+側方補正) を Python で書いた入門サンプル。定数は C版と同じですが、C版にある「行き止まり脱出 (後退して切り返す)」は入っておらず、側方補正の条件も少し違うので、走りは C版と同じとは限りません。',
-    learns: 'C で読んだ土台(3段速度+広い方へ操舵+側方補正)を Python の書き方(def/global/RC_read)で書く練習。',
+    strategy: 'RC_read が 20 cm より先を見ない (-3) 実機と同じ条件で走る Python の基準プログラム。右の壁に寄って沿い、前に壁が見えたら開いている方へ、見失ったら右へ切って探し、詰まったら後退して切り返す。',
+    learns: '20 cm の ToF で広い通路を走る土台 (壁に沿う・-3 を「遠い」に置き換える・両側が見えれば真ん中へ) を Python の書き方 (def/global/RC_read) で読む。',
   },
   {
-    key: 'py_normal_awd', name: 'Traction Blitz (Python)', label: 'ノーマル 4WD (Python)', level: 'Lv2 強みを使う (Python)',
+    key: 'py_normal_awd', name: 'Wall Hugger 4WD (Python)', label: 'ノーマル 4WD (Python)', level: 'Lv2 強みを使う (Python)',
     carType: 'normal_awd', lang: 'py', code: PY_AWD_CODE,
-    strategy: 'C版 Traction Blitz の土台を Python で書いた入門サンプル。定数は C版と同じですが、C版にある「行き止まり脱出 (後退して切り返す)」は入っておらず、側方補正の条件も少し違うので、走りは C版と同じとは限りません。',
-    learns: 'センサーの“差分(dC)”で立ち上がりを検知し早期加速。前回値を module 変数(global)で覚える Python の書き方。',
+    strategy: 'FR 版「Wall Hugger」の土台に、4WD の弱点 (踏んだまま曲げると大回り) を抑える「曲げるときはアクセルを強く抜く」と「切り始めたら数回は切り続ける (HOLD)」を足し、沿えたら迷わず全開にする。',
+    learns: '同じ土台でも車の物理 (旋回半径はアクセルで変わる) に合わせて定数と小さなロジックを足す。切り続ける回数を module 変数 (global) で覚える Python の書き方。',
   },
   {
-    key: 'py_normal_ff', name: 'Steady Nose (Python)', label: 'ノーマル FF (Python)', level: 'Lv3 弱点を補う (Python)',
+    key: 'py_normal_ff', name: 'Wall Hugger FF (Python)', label: 'ノーマル FF (Python)', level: 'Lv3 弱点を補う (Python)',
     carType: 'normal_ff', lang: 'py', code: PY_FF_CODE,
-    strategy: 'C版 Steady Nose の土台を Python で書いた入門サンプル。定数は C版と同じですが、C版にある「行き止まり脱出 (後退して切り返す)」は入っておらず、側方補正の条件も少し違うので、走りは C版と同じとは限りません。',
-    learns: '弱点(パワーアンダー)を避け、速度を“操舵中か”で決める個別ロジックを Python で書く練習。',
+    strategy: 'FR 版「Wall Hugger」の土台に、FF の弱点 (踏んだまま曲げるとほとんど曲がらない) を補う「曲げるときはアクセルを抜く」「切り続ける (HOLD)」「壁に近く寄る」「直線も少し抑える」を足す。',
+    learns: '弱点 (パワーアンダー) を補う個別ロジック。大回りになる車ほど壁の近くを走って前方の壁を早く見つける、という考え方を Python で読む。',
   },
   {
     key: 'showtime', name: 'Drift Showtime', label: 'ドリフト FR', carType: 'drift_fr', kind: 'show', code: SHOW_CODE,

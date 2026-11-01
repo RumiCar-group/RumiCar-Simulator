@@ -19,7 +19,8 @@
 //   C) 周回: 出荷「トライアングル」で、スタート位置と 6 台のグリッドの 5・6 番手（車体 1× とライブの既定の倍率）から、中心線の上の点を
 //      順に product の LapTracker へ与えて、1 周目を数えるまでの道のり（1 周に対する割合）・スタートが線の何 m／何車長先か・1 周の長さ、
 //      フィニッシュ線分と正方向が直交するコースの数を測り、説明の数字と一致。
-//   D) Python 版サンプル 3 本: C 版と違う走りになるレースが実際にあること（無くなったら注記が古い）・「C 版と同一」の記述が残っていない。
+//   D) Python 版の車種別プログラム 3 本（Wall Hugger・2026-11 API 統一）: 冒頭と physics_model に書いた完走数 NN/56 と C 版の完走数＝本番 runRace の実測、
+//      見本 3 言語（samples.js）の verifyHash が 56 コースで一致、physics_model の g ≈ 18 + 0.976·R が config の定数と一致。旧い主張が残っていない。
 //   E) 並べられる台数: レースガイドの「道幅の狭いコースでは、6台を並べられないことがあります (多くのコースは6台)」を、フィニッシュの
 //      ある出荷コース × 3 エンジンで、アプリの ▶ が台数を決める関数（fitguard.settleFitRatio・ライブの既定の車体の倍率・6 台を指定）を
 //      呼んだ実測と照合。以前の説明「ナローシケインは実態容量 4 台」は実測（6 台）と合っていなかった（BH6 の層 4 が毎回指摘）。
@@ -381,22 +382,51 @@ console.log('\nC) 周回の数え方（トライアングルの 1 周目）');
     ]); }
 }
 
-// ── D) Python 版サンプル ───────────────────────────────────────────────────────────────
-console.log('\nD) Python 版サンプル 3 本（C 版と同じ走りとは限らない）');
+// ── D) Python 版の車種別プログラムと見本（2026-11 API 統一・RC_read 200 mm 打ち切り） ─────────────────────────────────
+// BH6 時点の D は「Python 版 3 本は C 版の写しで後退が無く、走りは C 版と同じとは限らない」を見張っていた。API 統一で Python 版 3 本は
+// 別のアルゴリズム（右の壁に沿う Wall Hugger・後退あり）に書き直され、説明の主張は次の 3 つに変わった。
+//   D-1) 冒頭の注記と physics_model（ja/en）に書いた完走数 NN/56（Python 版 3 本と、比較に挙げた C 版 3 本）＝本番 runRace の実測
+//        （完走が定義される卓上 56 コース・ソロ・laps=3・rejoin=OFF・interact=true・既定エンジン）。走りや定数を変えたら赤＝説明も直す。
+//   D-2) samples.js の見本 3 本（C/Python/JavaScript）は 56 コースすべてで verifyHash が一致（samples.js 冒頭と physics_model の主張）。
+//   D-3) physics_model の `g ≈ 18 + 0.976·R` は config.js の SENSORS（dy=0.018）と視野コーン（65°+12.5° の sin）から出る値と一致。
+//   旧い主張（「走りは C 版と同じとは限らない」「C 版の土台を Python で」）が残っていない。
+console.log('\nD) Python 版の車種別プログラム（Wall Hugger）と見本 3 言語（RC_read 200 mm 打ち切り）');
 {
-  const spec = SPECS.find((s) => s.name === 'トライアングル');
-  const runOf = (key, mode) => { const p = programs.PROGRAM_BY_KEY[key]; return race.runRace({ course: courseMod.buildFromSpec(spec), regime: 'tabletop', laps: 3, field: [{ name: 'A', lang: p.lang || 'c', src: p.code, carType: p.carType }], crashRule: { rejoin: true, penaltySec: 3 }, interact: true, physics: mode, trace: true }); };
-  for (const [ck, pk] of [['normal_fr', 'py_normal_fr'], ['normal_awd', 'py_normal_awd'], ['normal_ff', 'py_normal_ff']]) {
-    const diff = ['dynamic', 'standard', 'v2'].filter((mode) => runOf(ck, mode).traceHash !== runOf(pk, mode).traceHash);
+  const RACE_COURSES = SPECS.map((spec) => ({ spec, course: (spec.noRace || spec.bench) ? null : courseMod.buildFromSpec(spec) })).filter((b) => b.course && b.course.finish);
+  ok(RACE_COURSES.length === 56, `完走が定義される卓上コースは 56（実測 ${RACE_COURSES.length}）`);
+  const soloRun = (course, lang, src, carType) => race.runRace({ course, regime: null, laps: 3, field: [{ name: 'A', lang, src, carType, rear: false, encoder: false }], crashRule: { rejoin: false, penaltySec: 3 }, interact: true });
+  const finishers = (lang, src, carType) => RACE_COURSES.reduce((n, { course }) => n + (soloRun(course, lang, src, carType).finishers.length ? 1 : 0), 0);
+  // D-1: 完走数。Python 版は冒頭 2 行目の「NN/56 完走 (C 版 <name> は MM/56)」、physics_model は「Wall Hugger(FR)**50/56**・4WD **53/56**・FF **48/56**」。
+  const pairs = [['py_normal_fr', 'normal_fr', 'FR'], ['py_normal_awd', 'normal_awd', '4WD'], ['py_normal_ff', 'normal_ff', 'FF']];
+  const got = {};
+  for (const [pk, ck] of pairs) {
     const p = programs.PROGRAM_BY_KEY[pk], c = programs.PROGRAM_BY_KEY[ck];
-    const noRev = !/REVERSE/.test(p.code.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')), cRev = /REVERSE/.test(c.code);
-    ok(diff.length >= 1 && noRev && cRev, `${pk}: C 版（後退あり）と違う走りになるレースがある（トライアングル・1 台・ペナルティ復帰の 3 エンジン中 ${diff.length} 本）・この版は後退を指令しない`);
-    const places = [[`programs.js ${pk} strategy`, p.strategy], [`prog.${pk}.strategy (ja)`, msg(`prog.${pk}.strategy`, 'ja')], [`programs.js ${pk} の冒頭の注記`, p.code.split('\n').slice(0, 6).join('\n')]];
-    const miss = places.filter(([, t]) => !/同じとは限(りません|らない)/.test(t)).map(([nm]) => nm);
-    const missEn = /does not always drive the same as the C version/.test(msg(`prog.${pk}.strategy`, 'en')) ? [] : [`prog.${pk}.strategy (en)`];
-    ok(miss.length + missEn.length === 0, `${pk}: 説明が「走りは C 版と同じとは限らない」と書いている（4 か所）${miss.length + missEn.length ? ' — 無い: ' + [...miss, ...missEn].join('・') : ''}`);
+    got[pk] = finishers(p.lang, p.code, p.carType); got[ck] = finishers(c.lang, c.code, c.carType);
+    const head = p.code.split('\n').slice(0, 3).join('\n');
+    claims(`${pk} の冒頭の注記の完走数（Python 版／C 版）`, [String(got[pk]), String(got[ck])],
+      [[`programs.js ${pk} 冒頭`, head, /(\d+)\/56 完走 \(C 版 [^は]+は (\d+)\/56\)/]]);
+    ok(/REVERSE/.test(p.code.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')), `${pk}: 後退（REVERSE）で切り返す（注記の「詰まったら後退」）`);
   }
-  forbid('「C 版と同一（同じ走り）」という記述が残っていない', /走りは C版と同一|完全に同一 \(=|走行挙動は C 版と同一|driving is identical to the C version/, [...DOC_TEXT, ...PROG_TEXT]);
+  claims('physics_model（ja/en）の Wall Hugger の完走数 FR/4WD/FF', [String(got.py_normal_fr), String(got.py_normal_awd), String(got.py_normal_ff)], [
+    ['docs/physics_model.md §12', MD, /Wall Hugger\(FR\)\*\*(\d+)\/56\*\*・4WD \*\*(\d+)\/56\*\*・FF \*\*(\d+)\/56\*\*/],
+    ['docs/physics_model.en.md §12', EN, /Wall Hugger \(FR\) \*\*(\d+)\/56\*\*, 4WD \*\*(\d+)\/56\*\*, FF \*\*(\d+)\/56\*\*/],
+  ]);
+  claims('physics_model（ja/en）の C 版の完走数 FR/4WD/FF', [String(got.normal_fr), String(got.normal_awd), String(got.normal_ff)], [
+    ['docs/physics_model.md §12', MD, /C 版 Apex Hunter 系は (\d+)\/(\d+)\/(\d+)\)/],
+    ['docs/physics_model.en.md §12', EN, /the C Apex Hunter family (\d+)\/(\d+)\/(\d+)\)/],
+  ]);
+  // D-2: 見本 3 言語の verifyHash 一致（56 コース）。
+  const { SAMPLES } = await import(u('samples.js'));
+  const mism = RACE_COURSES.filter(({ course }) => { const h = ['c', 'py', 'js'].map((l) => soloRun(course, l, SAMPLES[l], 'normal_fr').verifyHash); return !(h[0] === h[1] && h[1] === h[2]); }).map((b) => b.spec.name);
+  ok(mism.length === 0, `見本 3 言語（C/Python/JavaScript）の verifyHash が 56 コースすべてで一致${mism.length ? ' — 不一致: ' + mism.join('・') : ''}`);
+  ok(/verifyHash が 3 言語で全件一致/.test(SAMPLES.c.length ? fs.readFileSync(path.join(JS_DIR, 'samples.js'), 'utf8') : '') && /3 言語の見本は 56 コースすべてで `verifyHash` が一致/.test(MD) && /same `verifyHash` on all 56 courses/.test(EN),
+    '見本 3 言語の一致の主張が samples.js 冒頭・physics_model（ja/en）にある');
+  // D-3: 壁に平行なときの横距離 g = dy + sin(65°+12.5°)·R（扇の端が最近点）。
+  const right = config.SENSORS.find((x) => x.name === 'RIGHT');
+  const dyMm = Math.round(Math.abs(right.dy) * 1000), k = Math.sin(Math.abs(right.yaw) + config.SENSOR_FOV.halfRad).toFixed(3);
+  claims('physics_model（ja/en）の g ≈ dy + k·R の定数（dy[mm]・k）', [String(dyMm), k], [
+    ['docs/physics_model.md §12', MD, /g ≈ (\d+) \+ ([\d.]+)·R/], ['docs/physics_model.en.md §12', EN, /g ≈ (\d+) \+ ([\d.]+)·R/]]);
+  forbid('旧い主張（C 版の写し・「走りは C 版と同じとは限らない」）が残っていない', /走りは C ?版と同じとは限|C ?版 [A-Za-z ]+の土台を Python|does not always drive the same as the C version|走りは C版と同一|完全に同一 \(=|走行挙動は C 版と同一|driving is identical to the C version/, [...DOC_TEXT, ...PROG_TEXT]);
 }
 
 // ── E) 並べられる台数 ─────────────────────────────────────────────────────────────────────

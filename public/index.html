@@ -14,7 +14,7 @@
 </head>
 <body>
   <header>
-    <h1>RumiCar Simulator <span class="ver" id="appVer" data-i18n-title="appVer.title" title="バージョン">v10.5.0</span></h1>
+    <h1>RumiCar Simulator <span class="ver" id="appVer" data-i18n-title="appVer.title" title="バージョン">v11.0.0</span></h1>
     <label class="themesel" data-i18n-title="theme.title" title="画面テーマ (保存されます)"><span data-i18n="theme.label">テーマ</span>
       <select id="themeSel">
         <option value="green" data-i18n="theme.green">ライトグリーン (標準)</option>
@@ -107,10 +107,10 @@
       <ul class="api">
         <li data-i18n-html="usage.s7.steer"><code>RC_steer(LEFT / CENTER / RIGHT)</code> — 操舵 (3値・実機準拠)。<b>比例操舵サーボ(任意装備)</b>を選んだときだけ <code>RC_steer(方向, 0〜255)</code> で舵の強さも指定できる (未装備なら 0 を返して指令は変わらない)</li>
         <li data-i18n-html="usage.s7.drive"><code>RC_drive(FORWARD / REVERSE / FREE / BRAKE, pwm)</code> — 駆動 (pwm 0〜255)</li>
-        <li data-i18n-html="usage.s7.read1"><code>sensor0/1/2.readRangeSingleMillimeters()</code> (C++) / <code>get_distance()</code> (Python) — 測距 [mm] (左/中央/右)</li>
-        <li data-i18n-html="usage.s7.read2"><code>RC_read(LEFT/CENTER/RIGHT)</code> — 測距の別形 (範囲外は -3)</li>
-        <li data-i18n-html="usage.s7.conf"><b>信頼区間 (CONF)</b>: 内蔵サンプルは「これより遠い測距や範囲外 (-3) は信頼せず<b>開放とみなす</b>」しきい値 <code>CONF</code> を持ちます。実機 ToF は遠方が地面反射などで信頼できないためで、卓上は実スケール換算で約640mm、実機へ移すときは自機の搭載高に合わせて約250mmへ下げます (詳細は 🔬 物理モデル)。</li>
-        <li data-i18n-html="usage.s7.serial"><code>Serial.println(...)</code> / <code>print(...)</code> — シリアル出力、<code>delay(ms)</code> / <code>time.sleep(s)</code> — 待機</li>
+        <li data-i18n-html="usage.s7.read1"><code>RC_read(LEFT / CENTER / RIGHT / REAR)</code> — 測距 [mm]。実機のライブラリ (Arduino RumiCar-lib・RasPi RumiCar.py・Zero2Cam) と同じ名前・同じ値: 卓上は <b>0〜200</b> = 距離、<b>-3</b> = 20 cm より先には何もない (開けている)、<b>-1</b> = 読めない (後方センサー未装備も -1)、<b>-2</b> = 引数エラー。フルスケール (実車サイズ) は ToF の搭載位置が高いので打ち切らず現状のレンジのまま</li>
+        <li data-i18n-html="usage.s7.read2"><code>sensor0/1/2/3.readRangeSingleMillimeters()</code> (C++ / JavaScript のみ・Arduino の教材と同じ生の値) — 打ち切りなしの測距 [mm]。範囲外・未装備は実機準拠の 8190。Python には無い (Python は <code>RC_read</code> だけ)</li>
+        <li data-i18n-html="usage.s7.conf"><b>-3 の扱いと走り方</b>: -3 は数としては最も小さいので、比較の前に <code>if d == -3: d = 999</code> のように「遠い」へ置き換えます。卓上コースの通路は 20 cm より広く、真ん中を走ると左右とも -3 になるので、内蔵サンプル (Wall Hugger) は<b>右の壁に寄って沿い</b>、前に壁が見えたら開いている方へ切ります (両側が見える狭い通路では左右の差で真ん中へ)。C 版の車種別プログラム (Apex Hunter ほか) は生の値と信頼区間 <code>CONF</code> を使う従来の書き方のままです (詳細は 🔬 物理モデル)。</li>
+        <li data-i18n-html="usage.s7.serial"><code>Serial.println(...)</code> (C++ / JavaScript) / <code>print(...)</code> (Python) — シリアル出力、<code>delay(ms)</code> (C++ / JavaScript) / <code>time.sleep(s)</code> (Python) — 待機。Python には <code>RC_params()</code> (params.json の値。シミュレータでは空の dict) と <code>RC_state("名前")</code> (処理状態の名前。変わったときに出力) もあります</li>
       </ul>
       <h3 data-i18n="usage.s8.h">8. もっと詳しく (GitHub)</h3>
       <ul>
@@ -170,7 +170,7 @@
       <h3 data-i18n="spec.sensor.h">センサー</h3>
       <ul>
         <li data-i18n-html="spec.sensor.tof">ToF 距離センサー3基 (左 +65° / 中央 / 右 -65°)＋任意の後方1基。各基は 25° の視野コーン (FoV) で扇内の最近反射面を測ります (実機 VL53L0X 準拠)。計測レンジ 2,000 mm。</li>
-        <li data-i18n-html="spec.sensor.range">範囲外は <code>RC_read</code> 系で -3、生読取 (<code>readRangeSingleMillimeters</code> 等) は実機準拠の 8190 を返します。</li>
+        <li data-i18n-html="spec.sensor.range"><code>RC_read</code> は実機のライブラリと同じ値を返します: 卓上は 0〜200 mm・20 cm より先に何もなければ -3・読めなければ -1 (フルスケールは打ち切らず現状のレンジ)。生読取 (<code>readRangeSingleMillimeters</code>・C++/JavaScript のみ) は打ち切らず、範囲外は実機準拠の 8190 を返します。</li>
         <li data-i18n-html="spec.sensor.obstacle">「他車を障害物にする」ON のとき、他車の車体もセンサーに映り衝突対象になります。ただし峠でゴールした車・公式レースで完走/リタイアした車は映らず、当たりもしません (描画は残るのですり抜けて見えます)。</li>
       </ul>
       <h3 data-i18n="spec.exec.h">実行モデル</h3>
@@ -213,12 +213,7 @@
 
       <h3 data-i18n="sys.prog.h">プログラム API（学習側）</h3>
       <ul data-i18n-html="sys.prog.body">
-        <li>対応言語: <b>Arduino C++</b> と <b>Python</b> は教育用サブセットのインタープリタ、<b>JavaScript</b> はブラウザネイティブ実行 (<code>setup</code>/<code>loop</code> を定義)。</li>
-        <li><b>Arduino 系 API</b>: <code>RC_setup()</code> / <code>RC_steer(dir)</code>・<code>RC_steer(dir, 0〜255)</code> (第2引数は<b>比例操舵サーボ(任意装備)</b>を積んだときだけ有効・未装備は 0 を返す) / <code>RC_drive(dir, pwm)</code> / <code>RC_read(dir)</code> (前方ToF距離mm) / <code>RC_wheel_speed(axle)</code> (任意装備の車輪エンコーダ・未装備 −1) / <code>Serial.print()</code>・<code>println()</code> / <code>delay(ms)</code>。<code>dir</code> は <code>LEFT</code>/<code>CENTER</code>/<code>RIGHT</code>。</li>
-        <li><b>Raspberry Pi 系 API</b>: <code>rc_steer</code>/<code>rc_drive</code>/<code>rc_wheel_speed</code>/<code>rc_clear</code>、<code>read_one_sensor()</code>、<code>read_all_sensors()</code>、センサーオブジェクト <code>sensor0..sensor3</code> (各 <code>.readRangeSingleMillimeters()</code>/<code>.get_distance()</code>。<code>sensor3</code>＝後方・任意装備)、<code>time.sleep(sec)</code>。</li>
-        <li><b>共通の数学関数</b>: <code>abs/min/max/sqrt/floor/ceil/round</code>、研究用に <code>atan2/atan/sin/cos/hypot/pi</code> (純粋数学＝物理状態の肩代わりではない)。</li>
-        <li><b>範囲外コード</b>: <code>RC_read</code> 系は範囲外で <b>−3</b>、生読取 (<code>readRangeSingleMillimeters</code> 等) は実機準拠の <b>8190</b>。計測は前方3基 (左 +65°/中央/右 −65°)・レンジ 2,000 mm。</li>
-        <li>プログラムは GitHub <code>RumiCar-group/RumiCar</code> の community へ<b>別名で投稿</b> (プルリクエスト) して共有できます。</li>
+        <li>対応言語: <b>Arduino C++</b> と <b>Python</b> は教育用サブセットのインタープリタ、<b>JavaScript</b> はブラウザネイティブ実行 (<code>setup</code>/<code>loop</code> を定義)。</li><li><b>RumiCar API (全言語共通・実機のライブラリと同じ名前と値)</b>: <code>RC_setup()</code> / <code>RC_steer(dir)</code>・<code>RC_steer(dir, 0〜255)</code> (第2引数は<b>比例操舵サーボ(任意装備)</b>を積んだときだけ有効・未装備は 0 を返す) / <code>RC_drive(dir, 0〜255)</code> (FREE/REVERSE/FORWARD/BRAKE) / <code>RC_read(dir)</code> (ToF 距離 mm。卓上は 0〜200・-3=20 cm より先に何もない・-1=読めない・-2=引数エラー) / <code>RC_wheel_speed(FRONT/REAR)</code> (任意装備の車輪エンコーダ・未装備 −1)。<code>dir</code> は <code>LEFT</code>/<code>CENTER</code>/<code>RIGHT</code> (測距は <code>REAR</code>=後方・任意装備も)。</li><li><b>C++ / JavaScript だけ (Arduino と同じ)</b>: <code>Serial.print()</code>・<code>println()</code> / <code>delay(ms)</code> / <code>millis()</code> / センサーオブジェクト <code>sensor0..sensor3</code> (<code>.readRangeSingleMillimeters()</code>＝打ち切りなしの生の値。<code>sensor3</code>＝後方・任意装備)。</li><li><b>Python だけ (RasPi RumiCar.py / Zero2Cam と同じ)</b>: <code>print(...)</code> / <code>time.sleep(sec)</code> / <code>RC_params()</code> (params.json の値。シミュレータでは空の dict) / <code>RC_state("名前")</code>。<code>from RumiCar import *</code> と <code>import RumiCar</code> のどちらの書き方でも動きます。RasPi の形 (最上位の <code>while True:</code>) と Zero2Cam の形 (<code>def setup()</code>/<code>def loop()</code>) のどちらでも動きます。旧い別名 (<code>rc_*</code>・<code>read_one_sensor</code>・<code>get_distance</code>) は廃止しました。</li><li><b>共通の数学関数</b>: <code>abs/min/max/sqrt/floor/ceil/round</code>、研究用に <code>atan2/atan/sin/cos/hypot/pi</code> (純粋数学＝物理状態の肩代わりではない)。</li><li><b>範囲外コード</b>: <code>RC_read</code> は卓上で 200 mm を超えると <b>−3</b> (フルスケールは打ち切らず現状のレンジ)、生読取 (<code>readRangeSingleMillimeters</code>) は実機準拠の <b>8190</b>。計測は前方3基 (左 +65°/中央/右 −65°)・測距そのもののレンジは 2,000 mm (卓上)。</li><li>プログラムは GitHub <code>RumiCar-group/RumiCar</code> の community へ<b>別名で投稿</b> (プルリクエスト) して共有できます。</li>
       </ul>
 
       <h3 data-i18n="sys.ls.h">ブラウザ保存データ（localStorage）</h3>
@@ -401,7 +396,7 @@
         <li data-i18n-html="pm.s9.aniso"><b>卓上の摩擦の異方性は便宜的</b>な工夫(上記2)。実タイヤの物理ではありません。</li>
         <li data-i18n-html="pm.s9.pacejka">タイヤ曲線は<b>簡易 Pacejka</b>。温度・摩耗・路面の細かな差は持ちません (荷重感度はフルスケールだけ、旋回の左右荷重移動として軸単位で入れています。<code>docs/physics_model.md</code> §4)。→ 精密 v2 は輪ごとの荷重感度・路面属性 muDecay と、任意装備「タイヤ摩耗」(既定 OFF) のタイヤ熱・摩耗を持ちます (§13)。</li>
         <li data-i18n-html="pm.s9.rates">ユーザープログラムの <code>loop()</code> は 20Hz (sim 時間 1 秒あたり。画面が重く 1 フレームが長いときは 1 フレームで複数回・1 台 3 回まで呼び、物理もその区間ごとに積分する)、物理積分は 60Hz。ToF センサーは ±65°・3基、計測レンジは卓上2,000mm / フルスケール150m。</li>
-        <li data-i18n-html="pm.s9.cone"><b>ToF は 25° の視野コーン</b>で扇内の最近反射面を測ります (実機 VL53L0X 準拠・v3.50.0)。中心1本の直線ではないので、コーナーの角を掠めて壁の外へ抜けません (#27 の根治)。各サンプルは<b>信頼区間 (CONF)</b> を持ち、これを超える/範囲外の測距を「遠い/開放」とみなします (卓上は実スケール換算で約640mm、実機移行時は搭載高に合わせ約250mmへ下げ速度も落とす)。詳細は <code>docs/physics_model.md</code> §12。</li>
+        <li data-i18n-html="pm.s9.cone"><b>ToF は 25° の視野コーン</b>で扇内の最近反射面を測ります (実機 VL53L0X 準拠・v3.50.0)。中心1本の直線ではないので、コーナーの角を掠めて壁の外へ抜けません (#27 の根治)。学習 API <code>RC_read</code> は実機のライブラリと同じく卓上で 200 mm を超える測距を打ち切り -3 (開けている) を返します (v11.0.0・中スケールは長さ相似で 400 mm・フルスケールは打ち切り無し)。測距そのものと C++/JavaScript の生読取は打ち切りません。生読取を使う C 版の車種別プログラムは<b>信頼区間 (CONF)</b> を持ち、これを超える/範囲外の測距を「遠い/開放」とみなします (卓上は実スケール換算で約640mm、実機移行時は搭載高に合わせ約250mmへ下げ速度も落とす)。詳細は <code>docs/physics_model.md</code> §12。</li>
         <li data-i18n-html="pm.s9.optics"><b>光の当たり方は既定では理想化</b>しています。実機の有効測距は「標的から返る<b>信号の強さ</b>」で決まり、信号は <i>反射率 × cos(入射角) ÷ 距離²</i> に比例します (上流ライブラリの <code>setSignalRateLimit</code> が実際にこのしきい値)。既定はこれを無視して「扇内の最近反射面」を必ず返しますが、ツールバーの <b>ToF 光学モデル(実機相当)</b> を ON にすると実機と同じ判定になり、①斜めから見た壁・暗い他車・扇を埋めない小さな標的は<b>早く測れなくなり (-3)</b> ②扇内に複数の面があると<b>信号加重で混ざり</b> ③カバーガラスのクロストークで<b>遠方が少し短めに出ます</b>。決定論(乱数なし)なので「センサーノイズ」とは独立に試せます。公式レースは強制 OFF。詳細は <code>docs/physics_model.md</code> §12。</li>
       </ul>
 
@@ -783,7 +778,7 @@
           <span class="fleet-title" data-i18n="fleet.title">車両 (横に並べて同時比較)</span>
           <label class="chk"><input type="checkbox" id="optInteract" checked> <span data-i18n="fleet.interact">他車を障害物にする</span></label>
           <label class="chk" data-i18n-title="fleet.recover.title" title="壁に当たっても恒久停止せず、後退して切り返し自動復帰します。前の車に阻まれて1.2秒(シム時間)動けないときも同じく切り返します。向きが逆のまま車長の5倍ぶん逆走した車は、その場で進行方向へ向け直します(出荷の周回コースと峠で働きます)。既定ON=クラッシュしても走り続けるので同じ時間で多く走れ、失敗は走行軌跡で分かります。OFF(恒久停止=ラップタイム計測向け)にすると保存され次回も維持されます"><input type="checkbox" id="optRecover" checked> <span data-i18n="fleet.recover">衝突で自動復帰(切り返し)</span></label>
-          <label class="chk" data-i18n-title="fleet.rear.title" title="任意装備の後方センサーを有効化(実機はI2Cアドレス確保済で追加可能)。RC_read(BACK)/sensor3 が使え、追走車の察知などに使えます"><input type="checkbox" id="optRear"> <span data-i18n="fleet.rear">後方センサー(任意)</span></label>
+          <label class="chk" data-i18n-title="fleet.rear.title" title="任意装備の後方センサーを有効化(実機はI2Cアドレス確保済で追加可能)。RC_read(REAR)/sensor3 が使え、追走車の察知などに使えます (未装備のとき RC_read(REAR) は -1)"><input type="checkbox" id="optRear"> <span data-i18n="fleet.rear">後方センサー(任意)</span></label>
           <label class="chk" data-i18n-title="fleet.encoder.title" title="任意装備の車輪エンコーダを有効化(実機は車輪に追加可能)。RC_wheel_speed(FRONT/REAR) で前/後軸の車輪面速度[m/s]が読め、前後の差からスリップ率が分かる。競技(フルスケール)のトラクション制御/ABS に使う"><input type="checkbox" id="optEncoder"> <span data-i18n="fleet.encoder">車輪エンコーダ(任意)</span></label>
           <label class="chk" data-i18n-title="fleet.noise.title" title="実機(VL53L0X)相当の測距ノイズと時々の欠測(タイムアウト)を ToF に注入する。ONにすると前方3センサー(後方有効時は後方も)の値が距離に応じて揺れ、時々無効値(範囲外)になる。学習プログラムが読む値にも効くので『simで動く=実機でも頑健か』を試せる。既定OFF=理想値"><input type="checkbox" id="optNoise"> <span data-i18n="fleet.noise">センサーノイズ(実機相当)</span></label>
           <label class="chk" data-i18n-title="fleet.optics.title" title="実機(VL53L0X)相当の『光の当たり方』をモデル化する(opt-in・既定OFF・決定論)。実機の有効測距は『標的から返ってくる信号の強さ』で決まり、信号は 反射率×cos(入射角)÷距離² に比例する。ONにすると①斜めから見た壁や暗い他車は早く測れなくなる(-3)②扇の中に複数の面があると信号加重で混ざる(意図した標的以外からの反射)③カバーガラスのクロストークで遠方が少し短めに出る。ノイズ(ばらつき)とは独立の『系統誤差』なので、両方ONにすると重なる。既定OFF=扇内最近反射面(理想)"><input type="checkbox" id="optOptics"> <span data-i18n="fleet.optics">ToF 光学モデル(実機相当)</span></label>
