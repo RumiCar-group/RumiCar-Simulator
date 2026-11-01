@@ -20,11 +20,11 @@
   "canonicalNode": {
     "node": "22.22.1",
     "v8": "12.4.254.21-node.35",
-    "resultSha256": "33882c1d4091a0e4693fad6ad5edc82520b488ce1564ab86d4442aee1a02824d",
-    "pinnedAt": "2026-10-17",
+    "resultSha256": "c3432cf78e44fa775a7a634b65f4d0cb9938e7896c30b4f99c2a8a3253714896",
+    "pinnedAt": "2026-11-01",
     "eventId": "official-sample-circuit",
-    "appVersion": "v10.5.0",
-    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=e9f1da0b 照合で検証済。理由: BM7 v10.5.0 版バンプ（APP_VERSION が engineFingerprint 経由で resultSha256 を変える・AQ-1。走行物理は無改変・verifyHash e9f1da0b 不変）"
+    "appVersion": "v11.0.0",
+    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=e9f1da0b 照合で検証済。理由: BN v11.0.0 版バンプ（学習 API 統一。APP_VERSION が engineFingerprint/engineVer 経由で resultSha256 を変える・AQ-1。走行物理は無改変・verifyHash e9f1da0b 不変）。resultSha256 は node/v8 を含まない決定論の値なので Node 22.23.4 の環境で計算して書き込み、node/v8 の pin は正準サーバーの 22.22.1 のまま据え置き（--pin を正準サーバーで走らせれば同じ sha になる）"
   },
   "history": [
     {

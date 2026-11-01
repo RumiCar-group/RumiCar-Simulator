@@ -5,7 +5,7 @@
 //   ② ON: (a) 保持窓内の分散=0 (b) 更新間隔[物理tick]=round(physicsHz/hz) 全窓一致
 //          (c) 1 反復内 100 回読み平均の sd/単発 sd=1.00±0.05 (平均化エクスプロイト閉塞)。
 //   ③ 公式レース強制 OFF: hold ON でも verifyHash 不変 (= f0)。
-import { SENSOR_HOLD, SENSOR_NOISE, SIM, CONST } from './public/js/config.js';
+import { SENSOR_HOLD, SENSOR_NOISE, SIM, CONST, RC_READ_RANGE } from './public/js/config.js';
 import { Car } from './public/js/physics.js';
 import { readAll } from './public/js/sensors.js';
 import { buildApi } from './public/js/api.js';
@@ -58,17 +58,26 @@ SENSOR_HOLD.on = false; SENSOR_NOISE.on = false;
   Math.random = () => { randCount++; return realRand(); };
   const env = buildApi(world);
   const expect = readAll(car, walls, []).map(s => s.mm);   // 独立再計算 (本番 readAll)
-  let allEq = true;
+  // 2026-11 API 統一: RC_read は卓上で RC_READ_RANGE.maxMm (200) を超える測距を -3 に打ち切る (正本と同じ値)。生読取
+  //   sensorN.readRangeSingleMillimeters() は打ち切らない (負は 8190)。両方の読取口を本番 readAll と突き合わせる。
+  const cut = RC_READ_RANGE.maxMm;
+  const expectApi = expect.map((v) => (cut > 0 && v > cut ? -3 : v));
+  const expectRaw = expect.map((v) => (v < 0 ? 8190 : v));
+  const sensors = [env.sensor0, env.sensor1, env.sensor2];
+  let allEq = true, allEqRaw = true;
   for (let tk = 0; tk < 12; tk++) {
     world._sensGen++; world._simMs += 1000 / SIM.loopHz;
     // 1 反復内で複数回読む典型ループ (L/C/R を各 3 回)。
     for (let r = 0; r < 3; r++) {
       const got = [env.RC_read(env.LEFT), env.RC_read(env.CENTER), env.RC_read(env.RIGHT)];
-      for (let i = 0; i < 3; i++) if (got[i] !== expect[i]) allEq = false;
+      for (let i = 0; i < 3; i++) if (got[i] !== expectApi[i]) allEq = false;
+      const raw = sensors.map((sn) => sn.readRangeSingleMillimeters());
+      for (let i = 0; i < 3; i++) if (raw[i] !== expectRaw[i]) allEqRaw = false;
     }
   }
   Math.random = realRand;
-  chk(allEq, `OFF 既定の全読み値が本番 readAll と byte 一致 (期待 ${expect.join('/')})`);
+  chk(allEq, `OFF 既定の RC_read 全読み値が本番 readAll＋打ち切り ${cut}mm と byte 一致 (期待 ${expectApi.join('/')}・readAll ${expect.join('/')})`);
+  chk(allEqRaw, `OFF 既定の生読取 sensorN.readRangeSingleMillimeters() が本番 readAll と byte 一致 (期待 ${expectRaw.join('/')})`);
   chk(randCount === 0, `乱数非消費 0 回 (実測 ${randCount})`);
 }
 
@@ -84,7 +93,7 @@ const period = Math.max(1, Math.round(SIM.physicsHz / SENSOR_HOLD.hz));
   let prevRef = null; const resampleTicks = []; const mmByTick = [];
   for (let tk = 0; tk <= 40; tk++) {
     world._simMs = tk * dt;
-    env.read_all_sensors();               // refresh 発火 (本番読取口)
+    env.RC_read(env.LEFT); env.RC_read(env.CENTER); env.RC_read(env.RIGHT);   // refresh 発火 (本番読取口。2026-11: read_all_sensors は廃止)
     if (world._sensors !== prevRef) { resampleTicks.push(tk); prevRef = world._sensors; }
     mmByTick.push(world._sensors[1].mm);
   }
@@ -109,6 +118,8 @@ console.log('\n[② ON: 多数回読み平均の sd 比 (エクスプロイト�
   const M = 3000, READS = 100;
   const dt = 1000 / SIM.physicsHz;
   // HOLD ON: 各窓の先頭 tick で 100 回読む → 全て保持値 → avg==single → sd 比 1.00。
+  // 2026-11 API 統一: この姿勢の中央 1160mm は RC_read だと 200mm 打ち切りで -3 になる (分散 0=測れない) ので、同じ refresh 経路の
+  //   生読取 sensor1.readRangeSingleMillimeters() (打ち切り無し) で保持窓の統計を測る。
   SENSOR_HOLD.on = true; SENSOR_NOISE.on = true; SENSOR_NOISE.dropout = 0;
   const carH = new Car({ x: pose.x, y: pose.y, theta: pose.theta });
   const worldH = makeWorld(carH);
@@ -117,7 +128,7 @@ console.log('\n[② ON: 多数回読み平均の sd 比 (エクスプロイト�
   for (let m = 0; m < M; m++) {
     worldH._simMs = m * period * dt;         // 各試行=新しい保持窓 (新ノイズ)
     let s = 0, first = null;
-    for (let r = 0; r < READS; r++) { const v = envH.RC_read(envH.CENTER); if (first === null) first = v; s += v; }
+    for (let r = 0; r < READS; r++) { const v = envH.sensor1.readRangeSingleMillimeters(); if (first === null) first = v; s += v; }
     avgH.push(s / READS); sglH.push(first);
   }
   const ratioHold = sd(avgH) / sd(sglH);
@@ -130,7 +141,7 @@ console.log('\n[② ON: 多数回読み平均の sd 比 (エクスプロイト�
   for (let m = 0; m < M; m++) {
     worldN._sensGen++;                       // 各試行=新 tick (NOISE ON は毎読取で再測=新ノイズ)
     let s = 0, first = null;
-    for (let r = 0; r < READS; r++) { const v = envN.RC_read(envN.CENTER); if (first === null) first = v; s += v; }
+    for (let r = 0; r < READS; r++) { const v = envN.sensor1.readRangeSingleMillimeters(); if (first === null) first = v; s += v; }
     avgN.push(s / READS); sglN.push(first);
   }
   const ratioNoHold = sd(avgN) / sd(sglN);

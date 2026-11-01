@@ -143,15 +143,18 @@ function poseWatch(M, course, slots, st) {
     };
   });
 }
-const pyField = (M, n) => { const p = M.programs.PROGRAM_BY_KEY.py_normal_fr; return Array.from({ length: n }, (_, i) => ({ name: 'C' + i, lang: p.lang, src: p.code, carType: p.carType })); };
+// 探針の見本。既定は Python 版 Wall Hugger (py_normal_fr・2026-11 API 統一で RC_read 200 mm 打ち切りに合わせて書き直したもの)。B11 の治具は
+//   「走りの成り行きに頼らず」向きを回すので、自分では逆向きにならない C 版 Apex Hunter (normal_fr) を使う (Wall Hugger は前 80 mm で後退して
+//   切り返すため、精密 v2 のオーバルで自分でも 1 回逆向きになり、向き直しが 3 回でなく 4 回になった＝治具の前提に合わない)。
+const pyField = (M, n, key = 'py_normal_fr') => { const p = M.programs.PROGRAM_BY_KEY[key]; return Array.from({ length: n }, (_, i) => ({ name: 'C' + i, lang: p.lang, src: p.code, carType: p.carType })); };
 
 // 公式レース 1 本を 3 つの測定つきで走らせる。
-function raceCell(M, course, { regime = 'tabletop', n, mode, rejoin = true, grid = null, recon = null, maxSec, trace = false, poke = null }) {
+function raceCell(M, course, { regime = 'tabletop', n, mode, rejoin = true, grid = null, recon = null, maxSec, trace = false, poke = null, probeProg = 'py_normal_fr' }) {
   M.config.SENSOR_NOISE.on = false;
   const prog = progressObserver(course), wind = course.touge ? null : windObserver(M, course);
   const st = { events: 0, bad: [], at: [], lapInc: 0 };
   let inst = false; const lapsPrev = [], mainEv = [];
-  const spec = { course, regime, laps: 3, field: pyField(M, n), crashRule: { rejoin, penaltySec: 3 }, interact: true, physics: mode, trace, report: true,
+  const spec = { course, regime, laps: 3, field: pyField(M, n, probeProg), crashRule: { rejoin, penaltySec: 3 }, interact: true, physics: mode, trace, report: true,
     probe: (tick, slots) => {
       if (poke) poke(tick, slots);   // 治具が本番の途中で車の姿勢を作り込む口（B11）。ふだんは null
       if (!inst) { inst = true; poseWatch(M, course, slots, st); slots.forEach((s, i) => { lapsPrev[i] = s.lap.laps; mainEv[i] = { arm: 0, rt: 0, m: s.car._marshal || 0, m0: s.car._marshal || 0 }; }); }
@@ -745,13 +748,13 @@ function checkB(M, { races = true } = {}) {
     const oval = CM.buildFromSpec(specOf('オーバル'));
     const g = [{ x: oval.start.x, y: oval.start.y, theta: oval.start.theta + Math.PI }];
     for (const mode of MODES) {
-      const a = raceCell(M, oval, { n: 1, mode, grid: g });
+      const a = raceCell(M, oval, { n: 1, mode, grid: g, probeProg: 'normal_fr' });
       const e = a.mainEv[0], pen = a.r.finishers.length ? a.r.finishers[0].penaltiesSec : null;
       t(a.fin === 1 && e.m - e.m0 >= 1 && pen === 3 * (e.arm + (e.m - e.m0)), `B11 ${mode} 逆向きの発走: 完走し、ペナルティ ${pen} 秒 = 3 ×（切り返し ${e.arm}＋向き直し ${e.m - e.m0}）`);
-      const b = raceCell(M, oval, { n: 1, mode, grid: g, recon: { laps: 1 } });
+      const b = raceCell(M, oval, { n: 1, mode, grid: g, recon: { laps: 1 }, probeProg: 'normal_fr' });
       const e2 = b.mainEv[0], pen2 = b.r.finishers.length ? b.r.finishers[0].penaltiesSec : null;
       t(b.fin === 1 && e2.m0 === 0 && e2.m - e2.m0 >= 1 && pen2 === 3 * (e2.arm + (e2.m - e2.m0)), `B11 ${mode} 試走つき: 本番の開始時点の回数 ${e2.m0}・ペナルティ ${pen2} 秒 = 3 ×（本番の切り返し ${e2.arm}＋向き直し ${e2.m - e2.m0}）`);
-      const c = raceCell(M, oval, { n: 1, mode, grid: g, rejoin: false, maxSec: 40 });
+      const c = raceCell(M, oval, { n: 1, mode, grid: g, rejoin: false, maxSec: 40, probeProg: 'normal_fr' });
       t(c.marshal[0] === 0, `B11 ${mode} リタイア規則: 向きを直さない（回数 ${c.marshal[0]}）`);
       const rep = a.r.report && a.r.report[0];
       t(rep && rep.marshalCount === e.m - e.m0 && rep.crashCount === e.arm + (e.m - e.m0), `B11 ${mode} レポート: 向き直し ${rep && rep.marshalCount} 回・ペナルティの回数 ${rep && rep.crashCount}＝切り返し ${e.arm}＋向き直し ${e.m - e.m0}`);
@@ -765,7 +768,7 @@ function checkB(M, { races = true } = {}) {
         if (m > seen) { seen = m; due = flips < 2 ? tick + 300 : -1; }
         if (due >= 0 && tick >= due && !(c.recoverT > 0) && !c.crashed && !slots[0].lap.finished) { c.theta += Math.PI; c.halt(); flips++; due = -1; }
       };
-      const a = raceCell(M, oval, { n: 1, mode, grid: g, poke });
+      const a = raceCell(M, oval, { n: 1, mode, grid: g, poke, probeProg: 'normal_fr' });
       const e = a.mainEv[0], rep = a.r.report[0], pen = a.r.finishers.length ? a.r.finishers[0].penaltiesSec : null;
       t(flips === 2 && e.m - e.m0 === 3 && a.fin === 1 && rep.marshalCount === 3 && rep.crashCount === e.arm + 3 && pen === 3 * rep.crashCount, `B11 ${mode} 向き直し 3 回の走り（逆向きの発走＋途中で 2 回向きを回す）: 毎回数える（向きを回した ${flips} 回・向き直し ${e.m - e.m0} 回・完走 ${a.fin}・ペナルティの回数 ${rep.crashCount}＝切り返し ${e.arm}＋向き直し ${rep.marshalCount}・${pen == null ? '未完走' : pen + ' 秒'}）`);
     }
@@ -778,27 +781,27 @@ function checkB(M, { races = true } = {}) {
 //   改修前は同じセルで数十〜数百車長（C1 455・C2 360・C3 47・C4 39・ライブ 250／277）。D) の母集団では、精密 v2 で壁を抜けて走路の外へ
 //   出た車（改修前からの未決・向きを直さない）だけが上限を超える（改修後 1 台）。
 const BACK_MAX = 15;
-// 対象外の指紋（改修前の木 607dd2c で取った値。--root で改修前の木を指しても同じ値になる＝対象外は 1 ビットも変わらない）
+// 対象外の指紋。BH5 時点は改修前の木 607dd2c で取った値（--root で改修前の木を指しても同じ値＝対象外は 1 ビットも変わらない）。
+// 【BN・2026-11-01・API 統一 v11.0.0】探針 py_normal_fr を Wall Hugger へ書き直したので、新しい探針で現在の木の値を刻み直した（向き直しが
+//   0 回のセルの回帰の見張り。1 台走行の物理が改修前の木と 1 ビットも違わないことは wf_bg2_stall.mjs E 章が、本文の変わらない C 版 Apex Hunter
+//   で改修前の木と突き合わせて証明する）。ライブ 3 本は BL6 後の木の値（loopsched.js のある木）。
 const FROZEN = {
-  '投稿コースの写し|公式レース 動力学 6 台 ペナルティ復帰': '80772d99/145ceb8a',
-  '投稿コースの写し|公式レース 精密 v2 6 台 ペナルティ復帰': '74d799c8/b9602478',
-  'モダン・レイアウト|公式レース 動力学 6 台 リタイア規則': 'e679bd1f/1e473a24',
-  '四角の中の丸|公式レース 精密 v2 6 台 リタイア規則': '6a367aab/bbc3e465',
-  'モダン・レイアウト（中心線なしの写し）|公式レース 動力学 6 台 ペナルティ復帰': '885732fd/399d6e93',
-  '投稿コースの写し|ライブ 動力学 6 台': 'dcbdffaa',
-  'モダン・レイアウト|ライブ 動力学 6 台 自動復帰 OFF': 'd31cd2aa',
-  '四角の中の丸|ライブ 精密 v2 6 台 自動復帰 OFF': '788c6201',
+  '投稿コースの写し|公式レース 動力学 6 台 ペナルティ復帰': '3aaf5f2c/6cdabcf1',
+  '投稿コースの写し|公式レース 精密 v2 6 台 ペナルティ復帰': 'b5158c15/ee32b4b3',
+  'モダン・レイアウト|公式レース 動力学 6 台 リタイア規則': '95e119e7/976d2b11',
+  '四角の中の丸|公式レース 精密 v2 6 台 リタイア規則': 'acf479ee/6bf1eddc',
+  'モダン・レイアウト（中心線なしの写し）|公式レース 動力学 6 台 ペナルティ復帰': 'a328b8bc/784ab6d3',
+  '投稿コースの写し|ライブ 動力学 6 台': '2168fef3',
+  'モダン・レイアウト|ライブ 動力学 6 台 自動復帰 OFF': 'cccde6f9',
+  '四角の中の丸|ライブ 精密 v2 6 台 自動復帰 OFF': '96e23445',
 };
 // 【BL6・2026-10-17】ライブの 3 本は、ライブの loop() の段取り（product の loopsched.js・wf_bg_live.mjs の liveTicks）を変えた BL6 後の木では
 //   下の値で照合する（loopsched.js の無い木＝--root で BL6 前の木は上の値のまま）。liveCell の 2 フレーム目（sdt 0.15 s＝3 周期）だけが
 //   sdt > 1 周期で、是正後は 0.05 s ごとに loop() → 積分 を 3 回。実測（2026-10-17・internal docs/stage_bl/bl6/logs/evidence_bh5_*.txt）:
 //   --root fee6e7a（BL6 前）は上の 3 本と一致・2 フレーム目も 0.05 にした写しでは BL6 前と後の木で 3 本とも同じ値（bdf7a987・ff7f48fc・
 //   136d6c16）＝変わったのは sdt > 1 周期のフレームの段取りだけ。
-const FROZEN_LIVE_BL6 = {
-  '投稿コースの写し|ライブ 動力学 6 台': 'e994324a',
-  'モダン・レイアウト|ライブ 動力学 6 台 自動復帰 OFF': '2764fd44',
-  '四角の中の丸|ライブ 精密 v2 6 台 自動復帰 OFF': '76e54de8',
-};
+// 2026-11: FROZEN をそのまま BL6 後の木の値で刻んだので、この分岐表は空（BL6 前の木は --root では C) が走らず照合しない）。
+const FROZEN_LIVE_BL6 = {};
 function checkC(M, say) {
   const v = [];
   const t = (cond, msg) => { if (say) ok(cond, msg); if (!cond) v.push(msg); };
@@ -815,9 +818,11 @@ function checkC(M, say) {
   // C2 四角の中の丸（annulus）動力学 6 台
   { const a = raceCell(M, M.course.buildFromSpec(specOf('四角の中の丸')), { n: 6, mode: 'dynamic' });
     t(a.fin >= 5 && Math.max(...a.back) <= BACK_MAX * L, `C2 四角の中の丸 動力学 6 台 ペナルティ復帰: 完走 ${a.fin}/6（≥ 5）・後退量 ${fmt(a.back)} 車長（≤ ${BACK_MAX}）`); post('C2', a); }
-  // C3 ツイスティ・レイアウト 精密 v2 1 台（改修前: 切り返しの後に反転して 25 秒逆走）
-  { const a = raceCell(M, M.course.buildFromSpec(specOf('ツイスティ・レイアウト')), { n: 1, mode: 'v2' });
-    t(a.fin === 1 && a.marshal[0] >= 1 && a.back[0] <= BACK_MAX * L, `C3 ツイスティ・レイアウト 精密 v2 1 台: 完走 ${a.fin}/1・向き直し ${a.marshal[0]} 回（≥ 1）・後退量 ${fmt(a.back)} 車長（≤ ${BACK_MAX}）`); post('C3', a); }
+  // C3 1 台で逆走して向きを直され、完走する代表セル。BH5 時点は ツイスティ・レイアウト 精密 v2（旧 Python 版 Apex Hunter が切り返しの後に反転して
+  //   25 秒逆走した）。2026-11 API 統一で探針が Wall Hugger になり、同じセルは向き直し 5 回・完走 0（DNF）になったので、56 コース × 3 エンジンの
+  //   走査（向き直し ≥ 1 かつ完走）から コンパクト・レイアウト 精密 v2（向き直し 1 回・完走）へ替えた。
+  { const a = raceCell(M, M.course.buildFromSpec(specOf('コンパクト・レイアウト')), { n: 1, mode: 'v2' });
+    t(a.fin === 1 && a.marshal[0] >= 1 && a.back[0] <= BACK_MAX * L, `C3 コンパクト・レイアウト 精密 v2 1 台: 完走 ${a.fin}/1・向き直し ${a.marshal[0]} 回（≥ 1）・後退量 ${fmt(a.back)} 車長（≤ ${BACK_MAX}）`); post('C3', a); }
   // C4 峠（道幅 3 台分）精密 v2 6 台
   { const a = raceCell(M, M.course.buildFromSpec(specOf('峠① 中速ヘアピン (緩い下り)〔道幅 3 台分〕')), { n: 6, mode: 'v2' });
     t(Math.max(...a.back) <= BACK_MAX * L, `C4 峠①〔道幅 3 台分〕精密 v2 6 台: 完走 ${a.fin}/6・後退量 ${fmt(a.back)} 車長（≤ ${BACK_MAX}）`); post('C4', a); }

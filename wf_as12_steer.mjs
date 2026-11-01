@@ -70,7 +70,7 @@ console.log('\n=== A: 学習 API の後方互換と装備ゲート (本番 build
   // A3: 本番インタプリタ経由 (C / Python / JS)。引数不足が undefined で届くことを実測で固定する。
   const CASES = [
     ['C', 'c', 'void setup(){} void loop(){ RC_steer(LEFT); }', 'void setup(){} void loop(){ RC_steer(LEFT, 128); }', CONST.LEFT, 128],
-    ['Python', 'py', 'def setup():\n  pass\ndef loop():\n  rc_steer(RIGHT)\n', 'def setup():\n  pass\ndef loop():\n  rc_steer(RIGHT, 60)\n', CONST.RIGHT, 60],
+    ['Python', 'py', 'def setup():\n  pass\ndef loop():\n  RC_steer(RIGHT)\n', 'def setup():\n  pass\ndef loop():\n  RC_steer(RIGHT, 60)\n', CONST.RIGHT, 60],   // 2026-11 API 統一: rc_steer の別名は廃止
     ['JS', 'js', 'function setup(){} function loop(){ RC_steer(CENTER); }', 'function setup(){} function loop(){ RC_steer(CENTER, 255); }', CONST.CENTER, 255],
   ];
   for (const [label, lang, src1, src2, dir, amt] of CASES) {

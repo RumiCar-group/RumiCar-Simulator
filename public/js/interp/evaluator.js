@@ -503,7 +503,14 @@ export class Interp {
       case 'index': {
         const o = this.evalExpr(node.obj, scope);
         if (o === null) throw this.rt('noneIndex');   // BK4: py の None（null）に添字（python3 は TypeError: 'NoneType' object is not subscriptable）
-        return o[this.pyIndex(o, this.evalExpr(node.idx, scope))];
+        const k = this.pyIndex(o, this.evalExpr(node.idx, scope));
+        // 2026-11 API 統一: py の dict に無い鍵の読み取りは行番号付きの実行時エラー interp.err.keyError（python3 は KeyError）。
+        //   RC_params() はシミュレータでは空の dict なので、params.json の値を使うプログラム（Zero2Cam の drive.py）が黙って値なし
+        //   （速度 0・比較が常に偽）で走り続けないため。代入 `d[k] = v`（lref）と list・str の添字は従来どおり。
+        if (this.lang === 'py' && o != null && typeof o === 'object' && !Array.isArray(o) && !Object.prototype.hasOwnProperty.call(o, k)) {
+          throw this.rt('keyError', { key: pyRepr(k, false) });
+        }
+        return o[k];
       }
       case 'call': return this.evalCall(node, scope);
       // BK3: f-string の置換フィールド（parser_py の fmt の節）。書式指定は文字列の式（入れ子のフィールドを含む）。
@@ -532,7 +539,11 @@ export class Interp {
       const fn = obj == null ? undefined : obj[callee.name];
       if (typeof fn !== 'function') throw this.rt('notMethod', { name: callee.name });
       // BK4 層4 F7: py の Serial.print／println も print と同じく pyStr（True／False／None）。是正前は "true"／""（None は null）。C は従来どおり。
+      //   （2026-11 API 統一で Python の環境から Serial は外した＝py でここに来ることは無いが、環境を差し替えた呼び出しのため残す。）
       if (this.lang === 'py' && obj === this.host.Serial) return fn.apply(obj, args.map((v) => (v === undefined ? v : pyStr(v))));
+      // 2026-11 API 統一: py のシム時刻は time.time()／time.monotonic()（millis()／micros() は Python の環境に無い）。BK1 H1 の StepLimit の
+      //   ヒント（時刻は loop() 1 回の中では進まない）は py でもこの 2 つで出す（値は変えない）。
+      if (this.lang === 'py' && obj === this.host.time && (callee.name === 'time' || callee.name === 'monotonic')) this.timeRead = true;
       return this.callHost(fn, obj, args);
     }
     if (callee.t === 'var') {
@@ -639,6 +650,12 @@ function pyStr(v) {
   if (v === true) return 'True';
   if (v === false) return 'False';
   if (v === null) return 'None';
+  // 2026-11 API 統一: dict（list でない object）は python3 の表示 {'a': 1, 'b': 'x'}（鍵は repr・値は文字列なら repr・それ以外は pyStr）。
+  //   是正前はプロトタイプ付きの {} が "[object Object]"、Object.create(null) の dict（py のリテラル）は JS の TypeError だった
+  //   （RC_params() が dict を返すので print(RC_params()) で露出する）。list は従来どおり（1,2＝未是正の差）。
+  if (typeof v === 'object' && !Array.isArray(v) && (Object.getPrototypeOf(v) === null || Object.getPrototypeOf(v) === Object.prototype)) {
+    return '{' + Object.keys(v).map((k) => pyRepr(k, false) + ': ' + (typeof v[k] === 'string' ? pyRepr(v[k], false) : pyStr(v[k]))).join(', ') + '}';
+  }
   return '' + v;
 }
 // repr（`!r`）。文字列だけ python3 の repr（引用符の選び方・エスケープ・表示できない文字）。それ以外は pyStr（list の repr〔[1, 'a']〕は

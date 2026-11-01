@@ -3,6 +3,7 @@
 import { parseC } from './interp/parser_c.js';
 import { parsePy } from './interp/parser_py.js';
 import { Interp } from './interp/evaluator.js';
+import { pythonEnv } from './api.js';
 
 function isTrueLiteral(cond) {
   return cond && ((cond.t === 'bool' && cond.v === true) || (cond.t === 'num' && cond.v !== 0));
@@ -12,7 +13,9 @@ export function buildController(src, lang, hostEnv) {
   if (lang === 'js') return buildJs(src, hostEnv);
 
   const ast = (lang === 'c') ? parseC(src) : parsePy(src);
-  const interp = new Interp(hostEnv);
+  // 2026-11 API 統一: Python には正本 (RasPi RumiCar.py) と同じ名前だけを見せる (Arduino 固有の Serial/delay/millis/sensorN と
+  //   Raspberry Pi 系の旧別名 rc_* は無い)。C は buildApi の env をそのまま (Arduino と同じ名前)。
+  const interp = new Interp(lang === 'py' ? pythonEnv(hostEnv) : hostEnv);
   interp.load(ast);
 
   const line = () => interp.curLine;   // 直近に実行した行 (実行位置ハイライト用)

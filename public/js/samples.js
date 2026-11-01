@@ -1,102 +1,234 @@
-// ボード/言語別の既定サンプル (RumiCar 壁回避アルゴリズム)。
-// 前方が空いていれば直進、前方が詰まれば開いている方へ、側方が近ければ離れる。
+// ボード/言語別の既定サンプル (RumiCar 壁沿い走行アルゴリズム "Wall Hugger")。3 言語とも同じロジック・同じ定数
+// (本番フロー runRace で卓上 56 コースの verifyHash が 3 言語で全件一致することを確認済み・2026-11)。
+// RumiCar の ToF は 20 cm より先を見ない (RC_read は -3) ので、右の壁に寄って沿い、前に壁が見えたら開いている方へ、
+// 右の壁を見失ったら右へ切って探し、詰まったら後退して切り返す。c は Arduino RumiCar-lib、py は RasPi RumiCar.py の形 (最上位の
+// while True:。Zero2Cam は def setup()/def loop() の形が要るので py_normal_fr を見る)、js はシミュレータ専用。回数で数える定数
+// (BACKT・SEEK) は loop の周期 (シムは 20 Hz) に依存するので、周期の違う実機では見直す。-1 (読めない) は置き換えず「近い」扱い (安全側)。
 export const SAMPLES = {
-  c: `// Arduino C++ 風 (Arduino Nano / Raspberry Pi Pico)
+  c: `// Arduino C++ (Arduino Nano / Raspberry Pi Pico)。RumiCar-lib の API。
+// RC_read(LEFT/CENTER/RIGHT) は 0〜200 = 距離[mm]・-1 = 読めない・-3 = 20 cm 以内に何もない (開けている)。
+// 通路は 20 cm より広いので、真ん中では左右とも -3 になる。∴ 右の壁に寄って沿う (両側が見えれば左右の差で真ん中へ)。
+// -3 は数としては最も小さいので、比較の前に FAR (999) へ置き換える。-1 (読めない) はそのまま＝「近い」扱い (安全側)。
+int TOP = 240;      // 速度: 壁に沿って安定しているとき (255 = 全開)
+int CRUISE = 180;   // 速度: 壁を探す・寄せるとき
+int TURNV = 110;    // 速度: 前に壁が見えて曲げるとき (抜くほど小さく回れる)
+int BACKV = 150;    // 速度: 後退
+int NEAR = 100;     // 右の壁がこれより近ければ左へ [mm]
+int FARB = 170;     // 右の壁がこれより遠ければ右へ [mm]
+int ESC = 80;       // 前方がこれより近ければ後退して切り返す [mm]
+int BACKT = 8;      // 後退を続ける回数 (20 Hz なら 0.4 秒)
+int SEEK = 4;       // 壁を見失ってから全舵で切り続ける回数 (その後は半分の時間だけ切って大回り)
+int FAR = 999;
+
+int back = 0;       // 後退の残り回数
+int bdir = CENTER;  // 後退中の舵
+int lost = 0;       // 右の壁を見失ってからの回数
+
 void setup() {
   RC_setup();
 }
 
-// 信頼区間[mm]: >CONF/範囲外(-3) の測距は「遠い/開放」とみなす。実機 VL53L0X は地面拘束で ~250mm 超を
-// 信頼しにくいが、本シム卓上は実機模型より広いので ~640mm を既定に。★実機は自機に合わせ下げ+減速。
-int CONF = 640, OPEN = 9999;
-
 void loop() {
-  int s0 = sensor0.readRangeSingleMillimeters(); if (s0 < 0 || s0 > CONF) s0 = OPEN; // 左(信頼区間外=開放)
-  int s1 = sensor1.readRangeSingleMillimeters(); if (s1 < 0 || s1 > CONF) s1 = OPEN; // 中央
-  int s2 = sensor2.readRangeSingleMillimeters(); if (s2 < 0 || s2 > CONF) s2 = OPEN; // 右
-  Serial.println(s1);
+  int L = RC_read(LEFT);
+  int C = RC_read(CENTER);
+  int R = RC_read(RIGHT);
+  if (L == -3) L = FAR;
+  if (C == -3) C = FAR;
+  if (R == -3) R = FAR;
+  Serial.print(L); Serial.print(" "); Serial.print(C); Serial.print(" "); Serial.println(R);
 
-  // 前方の空き具合で速度を変える (十分開けていれば全開 240)。
-  // ※ ドリフト FR/4WD: 旋回中に強くアクセル (目安 PWM220 以上) で滑り出す (FR=リアが流れる / 4WD=車体ごと流れる)
-  // ※ ドリフト FF: 高速旋回中にアクセルを緩める (240→120) とリアだけ滑り出す
-  if (s1 < 250)      RC_drive(FORWARD, 120);
-  else if (s1 < 600) RC_drive(FORWARD, 230);
-  else               RC_drive(FORWARD, 240);
-
-  // 操舵
-  if (s1 < 350) {                 // 前方に壁 → 開いている方へ
-    if (s0 > s2) RC_steer(LEFT);
-    else         RC_steer(RIGHT);
-  } else if (s2 < 180) {          // 右が近い → 左へ
-    RC_steer(LEFT);
-  } else if (s0 < 180) {          // 左が近い → 右へ
-    RC_steer(RIGHT);
-  } else {                        // 前方も側方も空き → 直進
-    RC_steer(CENTER);
+  if (back > 0) {                 // 後退中: 舵を固定して下がる
+    back = back - 1;
+    RC_steer(bdir);
+    RC_drive(REVERSE, BACKV);
+    return;
   }
+  if (C < ESC) {                  // 詰まった: 開いている側へ鼻先が向くよう逆ハンで後退
+    back = BACKT;
+    if (L < 120 || R < 120) bdir = CENTER;
+    else if (L > R) bdir = RIGHT;
+    else bdir = LEFT;
+    RC_steer(bdir);
+    RC_drive(REVERSE, BACKV);
+    return;
+  }
+  if (C < 200) {                  // 前に壁 (20 cm 以内): 開いている方へ
+    if (R > L) RC_steer(RIGHT); else RC_steer(LEFT);
+    RC_drive(FORWARD, TURNV);
+    return;
+  }
+  if (L < FAR && R < FAR) {       // 両側に壁 (狭い通路): 左右の差で真ん中へ
+    lost = 0;
+    if (L + 20 < R) RC_steer(RIGHT);
+    else if (R + 20 < L) RC_steer(LEFT);
+    else RC_steer(CENTER);
+    RC_drive(FORWARD, CRUISE);
+    return;
+  }
+  if (R == FAR) {                 // 右の壁が見えない: 右へ切って探す
+    lost = lost + 1;
+    if (lost <= SEEK || lost % 2 == 0) RC_steer(RIGHT); else RC_steer(CENTER);
+    RC_drive(FORWARD, CRUISE);
+    return;
+  }
+  lost = 0;                       // 右の壁に沿う
+  if (R < NEAR)      { RC_steer(LEFT);   RC_drive(FORWARD, CRUISE); }
+  else if (R > FARB) { RC_steer(RIGHT);  RC_drive(FORWARD, CRUISE); }
+  else               { RC_steer(CENTER); RC_drive(FORWARD, TOP); }
 }
 `,
-  py: `# Python 風 (Raspberry Pi Zero)
-# 信頼区間[mm]: >CONF/範囲外(-3) の測距は「遠い/開放」とみなす。実機 VL53L0X は地面拘束で ~250mm 超を
-# 信頼しにくいが、本シム卓上は実機模型より広いので ~640mm を既定に。★実機は自機に合わせ下げ+減速。
-CONF = 640
-OPEN = 9999
+  py: `# Python (Raspberry Pi Zero / Zero 2 W)。RumiCar ライブラリの API は Arduino 版と同じ名前・同じ値。
+# RC_read(LEFT/CENTER/RIGHT) は 0〜200 = 距離[mm]・-1 = 読めない・-3 = 20 cm 以内に何もない (開けている)。
+# 通路は 20 cm より広いので、真ん中では左右とも -3 になる。∴ 右の壁に寄って沿う (両側が見えれば左右の差で真ん中へ)。
+# -3 は数としては最も小さいので、比較の前に FAR (999) へ置き換える。-1 (読めない) はそのまま＝「近い」扱い (安全側)。
+from RumiCar import *
+
+TOP = 240       # 速度: 壁に沿って安定しているとき (255 = 全開)
+CRUISE = 180    # 速度: 壁を探す・寄せるとき
+TURNV = 110     # 速度: 前に壁が見えて曲げるとき (抜くほど小さく回れる)
+BACKV = 150     # 速度: 後退
+NEAR = 100      # 右の壁がこれより近ければ左へ [mm]
+FARB = 170      # 右の壁がこれより遠ければ右へ [mm]
+ESC = 80        # 前方がこれより近ければ後退して切り返す [mm]
+BACKT = 8       # 後退を続ける回数 (20 Hz なら 0.4 秒)
+SEEK = 4        # 壁を見失ってから全舵で切り続ける回数 (その後は半分の時間だけ切って大回り)
+FAR = 999
+
+back = 0        # 後退の残り回数
+bdir = CENTER   # 後退中の舵
+lost = 0        # 右の壁を見失ってからの回数
+
+RC_setup()
 while True:
-    s0 = sensor0.get_distance()  # 左
-    s1 = sensor1.get_distance()  # 中央
-    s2 = sensor2.get_distance()  # 右
-    if s0 < 0 or s0 > CONF:      # 信頼区間外/範囲外=開放
-        s0 = OPEN
-    if s1 < 0 or s1 > CONF:
-        s1 = OPEN
-    if s2 < 0 or s2 > CONF:
-        s2 = OPEN
-    print(s1)
+    L = RC_read(LEFT)
+    C = RC_read(CENTER)
+    R = RC_read(RIGHT)
+    if L == -3:
+        L = FAR
+    if C == -3:
+        C = FAR
+    if R == -3:
+        R = FAR
+    print(L, C, R)
 
-    # 前方の空き具合で速度を変える (十分開けていれば全開 240)。
-    # ※ ドリフト FR/4WD: 旋回中に強くアクセル (目安 PWM220 以上) で滑り出す (FR=リアが流れる / 4WD=車体ごと流れる)
-    # ※ ドリフト FF: 高速旋回中にアクセルを緩める (240→120) とリアだけ滑り出す
-    if s1 < 250:
-        rc_drive(FORWARD, 120)
-    elif s1 < 600:
-        rc_drive(FORWARD, 230)
-    else:
-        rc_drive(FORWARD, 240)
-
-    # 操舵
-    if s1 < 350:                 # 前方に壁 → 開いている方へ
-        if s0 > s2:
-            rc_steer(LEFT)
+    if back > 0:                    # 後退中: 舵を固定して下がる
+        back = back - 1
+        RC_steer(bdir)
+        RC_drive(REVERSE, BACKV)
+        continue
+    if C < ESC:                     # 詰まった: 開いている側へ鼻先が向くよう逆ハンで後退
+        back = BACKT
+        if L < 120 or R < 120:
+            bdir = CENTER
+        elif L > R:
+            bdir = RIGHT
         else:
-            rc_steer(RIGHT)
-    elif s2 < 180:               # 右が近い → 左へ
-        rc_steer(LEFT)
-    elif s0 < 180:               # 左が近い → 右へ
-        rc_steer(RIGHT)
-    else:                        # 前方も側方も空き → 直進
-        rc_steer(CENTER)
+            bdir = LEFT
+        RC_steer(bdir)
+        RC_drive(REVERSE, BACKV)
+        continue
+    if C < 200:                     # 前に壁 (20 cm 以内): 開いている方へ
+        if R > L:
+            RC_steer(RIGHT)
+        else:
+            RC_steer(LEFT)
+        RC_drive(FORWARD, TURNV)
+        continue
+    if L < FAR and R < FAR:         # 両側に壁 (狭い通路): 左右の差で真ん中へ
+        lost = 0
+        if L + 20 < R:
+            RC_steer(RIGHT)
+        elif R + 20 < L:
+            RC_steer(LEFT)
+        else:
+            RC_steer(CENTER)
+        RC_drive(FORWARD, CRUISE)
+        continue
+    if R == FAR:                    # 右の壁が見えない: 右へ切って探す
+        lost = lost + 1
+        if lost <= SEEK or lost % 2 == 0:
+            RC_steer(RIGHT)
+        else:
+            RC_steer(CENTER)
+        RC_drive(FORWARD, CRUISE)
+        continue
+    lost = 0                        # 右の壁に沿う
+    if R < NEAR:
+        RC_steer(LEFT)
+        RC_drive(FORWARD, CRUISE)
+    elif R > FARB:
+        RC_steer(RIGHT)
+        RC_drive(FORWARD, CRUISE)
+    else:
+        RC_steer(CENTER)
+        RC_drive(FORWARD, TOP)
 `,
-  js: `// JavaScript (シミュレータ専用)
+  js: `// JavaScript (シミュレータ専用)。API は Arduino 版と同じ名前・同じ値 (setup/loop を定義する)。
+// RC_read(LEFT/CENTER/RIGHT) は 0〜200 = 距離[mm]・-1 = 読めない・-3 = 20 cm 以内に何もない (開けている)。
+// 通路は 20 cm より広いので、真ん中では左右とも -3 になる。∴ 右の壁に寄って沿う (両側が見えれば左右の差で真ん中へ)。
+// -3 は数としては最も小さいので、比較の前に FAR (999) へ置き換える。-1 (読めない) はそのまま＝「近い」扱い (安全側)。
+const TOP = 240;      // 速度: 壁に沿って安定しているとき (255 = 全開)
+const CRUISE = 180;   // 速度: 壁を探す・寄せるとき
+const TURNV = 110;    // 速度: 前に壁が見えて曲げるとき (抜くほど小さく回れる)
+const BACKV = 150;    // 速度: 後退
+const NEAR = 100;     // 右の壁がこれより近ければ左へ [mm]
+const FARB = 170;     // 右の壁がこれより遠ければ右へ [mm]
+const ESC = 80;       // 前方がこれより近ければ後退して切り返す [mm]
+const BACKT = 8;      // 後退を続ける回数 (20 Hz なら 0.4 秒)
+const SEEK = 4;       // 壁を見失ってから全舵で切り続ける回数 (その後は半分の時間だけ切って大回り)
+const FAR = 999;
+
+let back = 0;         // 後退の残り回数
+let bdir = CENTER;    // 後退中の舵
+let lost = 0;         // 右の壁を見失ってからの回数
+
 function setup() {
   RC_setup();
 }
 
-// 信頼区間[mm]: >CONF/範囲外(-3) の測距は「遠い/開放」とみなす(実機 VL53L0X は地面拘束で ~250mm 超を
-// 信頼しにくいが、本シム卓上は実機模型より広いので ~640mm を既定。★実機は自機に合わせ下げ+減速)。
-const CONF = 640, OPEN = 9999;
 function loop() {
-  let s0 = sensor0.readRangeSingleMillimeters(); if (s0 < 0 || s0 > CONF) s0 = OPEN;
-  let s1 = sensor1.readRangeSingleMillimeters(); if (s1 < 0 || s1 > CONF) s1 = OPEN;
-  let s2 = sensor2.readRangeSingleMillimeters(); if (s2 < 0 || s2 > CONF) s2 = OPEN;
-  // ドリフト FR/4WD は旋回中に強くアクセル (目安 PWM220 以上) で滑り出す。ドリフト FF はコーナー進入の
-  // アクセルオフ (240→120) でリアが流れる。
-  if (s1 < 250)      RC_drive(FORWARD, 120);
-  else if (s1 < 600) RC_drive(FORWARD, 230);
-  else               RC_drive(FORWARD, 240);
-  if (s1 < 350) { if (s0 > s2) RC_steer(LEFT); else RC_steer(RIGHT); }
-  else if (s2 < 180) RC_steer(LEFT);
-  else if (s0 < 180) RC_steer(RIGHT);
-  else RC_steer(CENTER);
+  let L = RC_read(LEFT), C = RC_read(CENTER), R = RC_read(RIGHT);
+  if (L === -3) L = FAR;
+  if (C === -3) C = FAR;
+  if (R === -3) R = FAR;
+  Serial.println(L + " " + C + " " + R);
+
+  if (back > 0) {                 // 後退中: 舵を固定して下がる
+    back--;
+    RC_steer(bdir);
+    RC_drive(REVERSE, BACKV);
+    return;
+  }
+  if (C < ESC) {                  // 詰まった: 開いている側へ鼻先が向くよう逆ハンで後退
+    back = BACKT;
+    bdir = (L < 120 || R < 120) ? CENTER : (L > R ? RIGHT : LEFT);
+    RC_steer(bdir);
+    RC_drive(REVERSE, BACKV);
+    return;
+  }
+  if (C < 200) {                  // 前に壁 (20 cm 以内): 開いている方へ
+    RC_steer(R > L ? RIGHT : LEFT);
+    RC_drive(FORWARD, TURNV);
+    return;
+  }
+  if (L < FAR && R < FAR) {       // 両側に壁 (狭い通路): 左右の差で真ん中へ
+    lost = 0;
+    if (L + 20 < R) RC_steer(RIGHT);
+    else if (R + 20 < L) RC_steer(LEFT);
+    else RC_steer(CENTER);
+    RC_drive(FORWARD, CRUISE);
+    return;
+  }
+  if (R === FAR) {                // 右の壁が見えない: 右へ切って探す
+    lost++;
+    RC_steer(lost <= SEEK || lost % 2 === 0 ? RIGHT : CENTER);
+    RC_drive(FORWARD, CRUISE);
+    return;
+  }
+  lost = 0;                       // 右の壁に沿う
+  if (R < NEAR)      { RC_steer(LEFT);   RC_drive(FORWARD, CRUISE); }
+  else if (R > FARB) { RC_steer(RIGHT);  RC_drive(FORWARD, CRUISE); }
+  else               { RC_steer(CENTER); RC_drive(FORWARD, TOP); }
 }
 `,
 };

@@ -17,8 +17,7 @@ import { DYN, applyRegime, DynCar } from './public/js/physics_dyn.js';
 import { CAR, CONST, REGIMES, PHYSICS, setPhysicsMode, TIRE_SETS, TIRE_DEFAULT } from './public/js/config.js';
 import { buildFromSpec } from './public/js/course.js';
 import { runRace } from './public/js/race_engine.js';
-import { PROGRAMS } from './public/js/programs.js';
-import { SAMPLES } from './public/js/samples.js';
+import { PROGRAMS, PROGRAM_BY_KEY } from './public/js/programs.js';
 
 const DT = 1 / 60, R2D = 180 / Math.PI;
 let pass = 0, fail = 0;
@@ -112,16 +111,20 @@ console.log('C. slip タイヤ (疑似ドリフト環境が成立・§10.2 slip)
   ok(launchSpin('normal_awd', 'slip') > 0.15 && awd.slideSec > 0, `C3 AWD: 発進空転${launchSpin('normal_awd','slip').toFixed(2)}>0.15 ∧ スライドする(${awd.slideSec.toFixed(2)}s>0・FR より安定=正直)`);
 }
 
-// ── D. slip オーバル完走 (③ 運転可能=氷ではない・基本サンプル SAMPLES.c で crash≤1) ────────────
-// 「運転可能=氷ではない」= 適切な車で基本の壁回避サンプルがオーバルを制御下で周回できる。最も安定な
+// ── D. slip オーバル完走 (③ 運転可能=氷ではない・基本の壁回避プログラム (C 版の車種別プログラム) で crash≤1) ──
+// 「運転可能=氷ではない」= 適切な車で基本の壁回避プログラムがオーバルを制御下で周回できる。最も安定な
 // 駆動 (normal_awd=4輪均等) で crash≤1 完走を示す。FR は slip でリアが破れる (=drift 向きの本領=氷ではなく
 // 逆に滑りすぎる) ので参考記録に留める (grip 前提のプログラムを slip へ載せると過剰駆動＝AN と同型の教訓)。
-console.log('D. slip でオーバル完走 (③ 運転可能=氷ではない・基本サンプル SAMPLES.c)');
+// 【BN・2026-11-01・API 統一 v11.0.0】探針を SAMPLES.c から C 版の車種別プログラム (normal_awd=Traction Blitz・normal_fr=Apex Hunter・
+//   生読取＋CONF のまま本文も走りも不変) へ替えた。SAMPLES.c は RC_read の 200 mm 打ち切りに合わせた「Wall Hugger」(壁を探すのに全舵で
+//   切る・前 80 mm で後退) になり、slip (μ0=0.2) × v2 の AWD では壁探しで滑って発進地点で切り返しを繰り返し完走しない (実測 crash 1・
+//   finishers 0・物理は不変＝探針の変更)。Traction Blitz は AWD/slip で crash 0 完走 (実測)。
+console.log('D. slip でオーバル完走 (③ 運転可能=氷ではない・基本の壁回避プログラム=C 版の車種別プログラム)');
 {
   applyRegime('tabletop');
   const courses = (await import('./public/data/courses.json', { with: { type: 'json' } })).default;
   const oval = buildFromSpec(courses.find(c => c.name === 'オーバル'));
-  const fieldOf = (ct, tire) => [{ name: 'T', lang: 'c', src: SAMPLES.c, carType: ct, tire }];
+  const fieldOf = (ct, tire) => [{ name: 'T', lang: 'c', src: PROGRAM_BY_KEY[ct].code, carType: ct, tire }];
   const race = (ct, tire) => runRace({ report: true, course: oval, regime: 'tabletop', physics: 'v2', laps: 2, field: fieldOf(ct, tire), crashRule: { rejoin: true, penaltySec: 0 }, interact: false });
   const cc = (r) => r.report ? r.report[0].crashCount : 0;
   const rN = race('normal_awd', 'normal');

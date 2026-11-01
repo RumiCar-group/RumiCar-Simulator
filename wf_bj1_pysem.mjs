@@ -344,16 +344,18 @@ for (const lang of ['py', 'c']) {
 // ── E) 出荷サンプルの AST 指紋 ───────────────────────────────────────────────
 console.log('\nE) 出荷サンプルの AST 指紋（本文が同じなら AST も同じ＝インタプリタの改修が出荷サンプルの解釈を変えていない）');
 // [見本, 本文の sha256 先頭 16 桁, parsePy/parseC の JSON の sha256]。BJ1 是正前 HEAD ba977c1 と是正後で全件一致した値（2026-10-11）。
+// 2026-11 API 統一（v11.0.0）で本文を変えた見本（py_normal_fr/awd/ff＝Wall Hugger へ書き直し・drift_fr/awd/ff の後方の生読取・comp_estimate の REAR・
+//   recon_racer/comp_localize/strategist の Serial→print・SAMPLES 3 本＝Wall Hugger）は新しい本文で刻み直した（_pins 相当の同じ式で実測）。
 const AST_PIN = [
   ['PROGRAMS:normal_fr', 'd244897d62418fde', '3ba1d12415e30aacd6e250cc943ac2635b1d5e91242a382c5de3b12088236f36'],
   ['PROGRAMS:normal_awd', 'ae7a6827aea6fb4e', 'd0d1b94a58cf05ae5f0aca2845b143327bdb1f78a286a7ee406f52d0707ae782'],
   ['PROGRAMS:normal_ff', '65d50c348f206469', '5aeaccafe4c802cf7248863550bfca7ce8597e2cdc677c245c7185007648cef7'],
-  ['PROGRAMS:drift_fr', '48d14ef3fe0c033b', '5d0620b7c4272758208f7e0b807d22772fc4e1ae1129ca4f69da923bd413ba51'],
-  ['PROGRAMS:drift_awd', '21e1acc8f018baaf', '50d5a74b41cc28fe10ea367ee54842496e250a590e2bae2116dd54d7b675d778'],
-  ['PROGRAMS:drift_ff', '544f34db7f304966', '87bb07436bb200038861452dff08c948198e7f0df3ea6f22b8c02dd302fac2a6'],
-  ['PROGRAMS:py_normal_fr', 'f396c38a3f52336a', '807d52601db83ca492bd233f0d4d36b27e08e7108815adbed826d3ea278f9756'],
-  ['PROGRAMS:py_normal_awd', '523b166d80607b28', '0457e8f9dfcd5b57475f76e01c210a08354be74c187daf2c407ba763fc7842b0'],
-  ['PROGRAMS:py_normal_ff', 'fc5fa0d92e3c5064', 'bae0df6c7f861b1b9247c953ac6fe43c893fcd3ca7cba09941a37daf517a7f82'],
+  ['PROGRAMS:drift_fr', '8a8356198710859a', 'cb9868d86d2fa84bc830a5f2a11c20e7eab8fd9207693cc156e314d73abc171c'],
+  ['PROGRAMS:drift_awd', 'da5f99dd07cfd68d', 'be2408f544d093af593d4f3eebeaf2726b093bd987d9540181327a6733d3e654'],
+  ['PROGRAMS:drift_ff', '5890e388bc949846', '2fa73da56fe5ff332d10cd967cb909cd9aa8597b447bd40dc850393ba61c4d99'],
+  ['PROGRAMS:py_normal_fr', 'f6027d32f4f874aa', '584ae1f64d18bd3531edf4a4070ec81a8a727775b86058dde01b70b6b0597f5e'],
+  ['PROGRAMS:py_normal_awd', '9ab223e24ac21a74', 'efd04b170f3817ab28d94011e0e9517cb8c84b0172938d18501b4f0c535bf446'],
+  ['PROGRAMS:py_normal_ff', '36d373b65cd5dd4c', 'cbc137a36b37dcd49de4251f1b5a0e82cc329bc4228161d9a453ec71c2379e4c'],
   ['PROGRAMS:showtime', '0f8a2e2aae35fcd2', 'af3071a3885ab9b31ba6ae4e242e7ccf01fa3320ba8fdd16a1cbf3710a137e43'],
   ['PROGRAMS:zerocounter', '5d05f115101384fc', '939eb1ff2345d7bad7a33a81879f16045f4b6a7cacccbf4d7c1f29028ed8eadc'],
   ['PROGRAMS:comp_demo', '9b3eb17e92379dcd', '2bbbcff16ed01fa7c3d3c6c6ab3eec9d448a437aceb02b8efac73fc60da1f06f'],
@@ -362,15 +364,15 @@ const AST_PIN = [
   ['PROGRAMS:comp_circuit', 'b48e13fa730b7921', '8ce41932717cf449f4cc72eb93f07fb55fe3c825420f201ec58bf45f9b3a0631'],
   ['PROGRAMS:comp_drift', 'c351cf25a89271fb', '8fd400867b57c7dadd4db7529dcc9fab94497d6cb064a09ef8dca0b4e71de023'],
   ['PROGRAMS:comp_slip', 'e2dcf2c8ba532115', 'a87bdad11c8aafa6b2754f80deec57d66f1bf54158b423b4e004ee56d6a7edcf'],
-  ['PROGRAMS:comp_estimate', '3348d2470fe4a13b', '2afa12ddc6a3154e4fb80c7044ecdaf0ea023aa6fd41661ba21a221227080443'],
-  ['PROGRAMS:recon_racer', 'af4b66a8266f098d', '49c99fd1d0883bc2b5060ce6bfb3515a80f55302316fd3fc27a645c6057e8f2f'],
-  ['PROGRAMS:comp_localize', '80e0b98546681e0a', '59b184a208ad313fb63976586e1742581482e39226270e31fbd4d8b12fd082b5'],
+  ['PROGRAMS:comp_estimate', '1df573aea76f21dd', '78fa07769f6793ba71cbbaa20acf3111318c24746ea800cce80206be19f8c344'],
+  ['PROGRAMS:recon_racer', '3a93b8cadb57648b', '08a0f0401c6bd7d34e5ca43429fef9a250e1d11c403e9bd7d27019972b2bfe8a'],
+  ['PROGRAMS:comp_localize', '5cef3fc7e18b84da', 'a5f5d9847166444b6808fdc6b8d3c0fa673a11b5eaea1792637437d481aa10b7'],
   ['PROGRAMS:recon_racer_c', '221af979a07b1799', '3b8b4aea60cdfd1f7626bad2477bd34716765ec8631254ecfc32ad01ad5bf9d4'],
   ['PROGRAMS:comp_localize_c', '5589ae03a02759bf', '2d17083effcb920d7538bd5074ea2bb376d5df2a5e680297ba32d71885780038'],
-  ['PROGRAMS:strategist', '65c5a79ac2b9b3a6', '46a10790758b689a168ef2002d179041707b7dbbf9d8bb1d08ec51b1432b9ba2'],
-  ['SAMPLES:c', 'cf1c46a02d4ec84b', '255d4a2baed889e4ac225673d6bec73f3b0059f8296dfa50c2137f3133736f26'],
-  ['SAMPLES:py', '6f4e54b528d8874e', 'db26605e1f4ae4c7911ce1439fc2165dd2a4e493fab12ec20aa3163705a47f44'],
-  ['SAMPLES:js', 'be1d87d6719a5d3b', null],   // BJ2: js はパーサ非経由（new Function）＝本文の指紋だけ（2026-10-11・bf780f8 で実測）
+  ['PROGRAMS:strategist', 'd59a841e26cb9832', '66a15cb883c3a07da53d050ad5f9ebca667eb95927cad211d441537bc531f11a'],
+  ['SAMPLES:c', '2a4bb41e3dbaa897', '65f5bbe22d128402aa2f8a86e18462a4fb0c85e0595640cfca62f4a2ab9c209c'],
+  ['SAMPLES:py', 'b1549c518cb907f5', '9b598c0df3f3c27da590b0b33d3104d6b149c055564a33f7a14826ba32a73c98'],
+  ['SAMPLES:js', '1c94f453307cf88f', null],   // BJ2: js はパーサ非経由（new Function）＝本文の指紋だけ（2026-10-11・bf780f8 で実測）
 ];
 {
   const pin = new Map(AST_PIN.map(([k, s, a]) => [k, { src16: s, ast: a }]));
@@ -609,13 +611,13 @@ function runSlot(code, ticks, each) {
   checkPy3('G-3 Model B の continue', asPy3(src, 6), ['1', '3', '5']);
 }
 {
-  const src = 'n = 0\nwhile True:\n  n += 1\n  rc_drive(FORWARD, 100 + n)\n  rc_steer(LEFT)\n  if n == 3:\n    break\n  print(n)';
+  const src = 'n = 0\nwhile True:\n  n += 1\n  RC_drive(FORWARD, 100 + n)\n  RC_steer(LEFT)\n  if n == 3:\n    break\n  print(n)';   // 2026-11 API 統一: rc_* の別名は廃止＝正本の RC_* で書く
   const cmd = (s) => J([s.car.driveDir, s.car.pwm, s.car.steer, s.car.steerAmt]);
   let atBreak = null; const after = [];
   const { logs, slot, vars } = runSlot(src, 23, (s, k) => { if (k === 2) atBreak = cmd(s); else if (k > 2) after.push(cmd(s)); });
   ok(slot.running === true && J(logs) === J(['1', '2']) && vars.n === 3 && after.length === 20 && after.every((c) => c === atBreak) && slot.car.pwm === 103,
     `G-3 Model B の break で以降の tick は無動作: running=${slot.running}・ログ ${J(logs)}・n=${vars.n}・pwm=${slot.car.pwm}・break 後 20 tick の指令が break 時と同じ ${after.filter((c) => c === atBreak).length}/20（期待 true・["1","2"]・3・103・20/20）`);
-  checkPy3('G-3 Model B の break（python3 は 23 回の for で n=3 のまま）', asPy3(src, 23).replace(/rc_drive\(FORWARD, 100 \+ n\)\n  rc_steer\(LEFT\)\n  /, '') + '\nprint(n)', ['1', '2', '3']);
+  checkPy3('G-3 Model B の break（python3 は 23 回の for で n=3 のまま）', asPy3(src, 23).replace(/RC_drive\(FORWARD, 100 \+ n\)\n  RC_steer\(LEFT\)\n  /, '') + '\nprint(n)', ['1', '2', '3']);
 }
 { // C の Model B（トップレベルの while (1)）でも同じ。
   const r = run('int n = 0;\nwhile (1) {\n  n++;\n  if (n == 2) break;\n  Serial.println(n);\n}', 'c', 5);
@@ -630,7 +632,7 @@ function runSlot(code, ticks, each) {
   checkPy3('G-3 Model B の break の後ろの文', asPy3(src, 5), ['after 2']);
 }
 {
-  const src = 'while True:\n  rc_drive(FORWARD, 200)\n  break\nrc_drive(BRAKE, 0)';
+  const src = 'while True:\n  RC_drive(FORWARD, 200)\n  break\nRC_drive(BRAKE, 0)';
   const cmd = (s) => J([s.car.driveDir, s.car.pwm]);
   const after = [];
   const { logs, slot } = runSlot(src, 21, (s, k) => { if (k > 0) after.push(cmd(s)); });

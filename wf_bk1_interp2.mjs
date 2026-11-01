@@ -394,16 +394,16 @@ const STEP_OLD_JA = '評価ステップ上限超過 (無限ループの可能性
 ok(msgJa('interp.err.stepLimit') === STEP_OLD_JA && msgEn('interp.err.stepLimit') === STEP_OLD_EN, 'E 従来の stepLimit の文言（ja/en）はカタログで是正前のまま');
 // [ラベル, 言語, 本文, tick 数, tick ごとのシム時刻 ms, 行, ヒント付きか]
 const STEP = [
-  ['py の t = millis() → while millis() - t < 100: pass（probe）', 'py', 't = millis()\nwhile millis() - t < 100:\n    pass\nprint(1)', 1, 50, 3, true],
+  // 2026-11 API 統一: Python の環境に millis()／micros() は無い（正本に無い名前）。py の時刻は time.time()／time.monotonic() で、ヒントも同じ条件で出る。
+  ['py の t = time.time() → while time.time() - t < 0.1: pass（probe）', 'py', 't = time.time()\nwhile time.time() - t < 0.1:\n    pass\nprint(1)', 1, 50, 3, true],
   ['C の while (millis() - t < 100) {}（probe）', 'c', 'void setup(){\n  unsigned long t = millis();\n  while (millis() - t < 100) { }\n  print(1);\n}\nvoid loop(){}', 1, 50, 3, true],
-  ['py の micros() のビジーウェイト', 'py', 't = micros()\nwhile micros() - t < 100000:\n    pass', 0, 0, 3, true],
-  ['Model A の loop() の中の millis() のビジーウェイト（1 tick）', 'py', 'def loop():\n  t = millis()\n  while millis() - t < 100:\n    pass', 1, 50, 4, true],
+  ['py の time.monotonic() のビジーウェイト', 'py', 't = time.monotonic()\nwhile time.monotonic() - t < 0.1:\n    pass', 0, 0, 3, true],
+  ['Model A の loop() の中の time.time() のビジーウェイト（1 tick）', 'py', 'def loop():\n  t = time.time()\n  while time.time() - t < 0.1:\n    pass', 1, 50, 4, true],
   ['millis() を呼ばない無限ループ（py）', 'py', 'n = 0\nwhile n >= 0:\n    n += 1', 0, 0, 3, false],
   ['millis() を呼ばない無限ループ（C の loop()・AP17 の②b）', 'c', 'void setup(){} void loop(){ while(1){ int x=1; } }', 1, 0, 1, false],
-  ['前の tick だけで millis() を呼んだ（2 tick 目の無限ループはヒント無し）', 'py', 'n = 0\ndef loop():\n  global n\n  n += 1\n  if n == 1:\n    t = millis()\n  if n == 2:\n    while True:\n      pass', 2, 50, 9, false],
-  ['setup() だけで millis() を呼んだ（loop() の無限ループはヒント無し）', 'py', 'def setup():\n  t = millis()\ndef loop():\n  while True:\n    pass', 1, 50, 5, false],
+  ['前の tick だけで time.time() を呼んだ（2 tick 目の無限ループはヒント無し）', 'py', 'n = 0\ndef loop():\n  global n\n  n += 1\n  if n == 1:\n    t = time.time()\n  if n == 2:\n    while True:\n      pass', 2, 50, 9, false],
+  ['setup() だけで time.time() を呼んだ（loop() の無限ループはヒント無し）', 'py', 'def setup():\n  t = time.time()\ndef loop():\n  while True:\n    pass', 1, 50, 5, false],
   ['利用者が定義した millis()（ホストの時刻ではない）', 'py', 'def millis():\n  return 0\nwhile millis() < 100:\n  pass', 0, 0, 4, false],
-  ['time.time() はヒントの対象外（PLAN は millis()／micros()）', 'py', 't = time.time()\nwhile time.time() - t < 1:\n  pass', 0, 0, 3, false],
 ];
 for (const [label, lang, code, ticks, simMs, line, hint] of STEP) {
   const { ja, en } = runBoth(code, lang, ticks, simMs);
@@ -414,9 +414,13 @@ for (const [label, lang, code, ticks, simMs, line, hint] of STEP) {
   ok(ja.key === 'interp.err.stepLimit' && ja.line === line && ja.err === wantJa && en.err === wantEn && !JP_RE.test(en.err || '') && extra,
     `E ${label} → stepLimit（行 ${line}）${hint ? '・末尾にヒント' : '・ヒント無し＝是正前と同一'}（実 ja ${J(ja.err)}）`);
 }
-{ // millis() の値（時刻の進み方）は変えない: Model A で tick ごとに 50 ms 進め、loop() の中の 2 回の millis() は同じ値。
-  const r = run('def loop():\n  a = millis()\n  b = millis()\n  print(a, b)', 'py', 3, 50);
-  ok(!r.err && J(r.out) === J(['50 50', '100 100', '150 150']), `E millis() の値は従来どおり（loop() 1 回の中で一定・tick ごとに進む）→ ${r.err ? 'ERR ' + r.err : J(r.out)}`);
+{ // 時刻の進み方は変えない: Model A で tick ごとに 50 ms 進め、loop() の中の 2 回の time.time() は同じ値（py の時刻は秒。2026-11 API 統一で millis() は C だけ）。
+  const r = run('def loop():\n  a = time.time()\n  b = time.time()\n  print(a, b)', 'py', 3, 50);
+  ok(!r.err && J(r.out) === J(['0.05 0.05', '0.1 0.1', '0.15 0.15']), `E time.time() の値は従来どおり（loop() 1 回の中で一定・tick ごとに進む）→ ${r.err ? 'ERR ' + r.err : J(r.out)}`);
+  const c = run('void loop(){ unsigned long a = millis(); unsigned long b = millis(); print(a, b); }', 'c', 3, 50);
+  ok(!c.err && J(c.out) === J(['50 50', '100 100', '150 150']), `E C の millis() の値は従来どおり（loop() 1 回の中で一定・tick ごとに進む）→ ${c.err ? 'ERR ' + c.err : J(c.out)}`);
+  const m = run('t = millis()', 'py', 0, 0);
+  ok(!!m.err && /millis/.test(m.err), `E py の millis() は未定義の関数（Python の環境に無い・2026-11 API 統一）→ ${m.err ? 'ERR ' + m.err : J(m.out)}`);
 }
 { // fleet の tickSlot（本番の ▶ 走行の 1 tick）: 実行時エラーのログにヒントが載り、車は止まる（running: true→false・ログ 1 行）。
   const logs = [];
@@ -436,14 +440,15 @@ console.log('\nF) 出荷 23 本（PROGRAMS）— runRace の verifyHash／traceH
 const PIN = [
   ['normal_fr', '244e0d4a/91bd6835/839'], ['normal_awd', 'b2093638/814c6019/783'], ['normal_ff', 'd86310de/4513b630/1015'],
   ['drift_fr', '8f9fa3bc/c0fbdfac/1031'], ['drift_awd', 'a0463b46/2d5e52b8/772'], ['drift_ff', '076b0abc/0201fd47/1045'],
-  ['py_normal_fr', '244e0d4a/91bd6835/839'], ['py_normal_awd', 'b2093638/814c6019/783'], ['py_normal_ff', 'd86310de/4513b630/1015'],
+  // 2026-11 API 統一（v11.0.0）: Python 版 3 本は Wall Hugger へ書き直したので新しい本文の値で刻み直した（他 20 本は e65643e のまま一致＝処理系の改修は出荷の走りを変えていない）。
+  ['py_normal_fr', '965d2b76/3a3ae45b/729'], ['py_normal_awd', '7373ac10/2bde90d5/795'], ['py_normal_ff', '86b94fe2/95a09e02/1011'],
   ['showtime', '0811e6e8/7ec08755/1191'], ['zerocounter', '60c9df98/a9b1c82b/1200'], ['comp_demo', '8941d86a/03af9170/1200'],
   ['comp_launch', '8941d86a/2d57e001/1200'], ['comp_brake', '8941d86a/006dd0d1/1200'], ['comp_circuit', 'cbf8c3d6/a5beb586/1200'],
   ['comp_drift', 'b1c6f992/dcdf6e9f/1200'], ['comp_slip', 'b1c6f992/dcdf6e9f/1200'], ['comp_estimate', 'cbf8c3d6/a5beb586/1200'],
   ['recon_racer', 'cbf8c3d6/0c1c56a8/1200'], ['comp_localize', 'cbf8c3d6/0c1c56a8/1200'], ['recon_racer_c', 'cbf8c3d6/0c1c56a8/1200'],
   ['comp_localize_c', 'cbf8c3d6/0c1c56a8/1200'], ['strategist', 'cbf8c3d6/77c1c829/1200'],
 ];
-const OUT_PIN = '129131c7aedd7e18';   // e65643e で採った値
+const OUT_PIN = '1c4f1ad4fc28c136';   // e65643e で採った値 129131c7aedd7e18 → 2026-11 API 統一（py_normal_fr/awd/ff の本文・recon_racer/comp_localize/strategist の Serial.println→print）で刻み直し
 {
   // 呼び出しの入れ子の最大を数える（観測だけ・返り値と例外はそのまま）。是正前の木には depth が無いので数えない。
   let maxDepth = 0;
@@ -894,8 +899,11 @@ gVals('I-3', [
   const want = ['true', 'false', 'true', 'false', '5', '7', 'Infinity', 'false', 'true', '2'];
   ok(!r.err && J(r.out) === J(want), `I-3 C は従来どおり → ${r.err ? 'ERR ' + r.err : J(r.out)}（期待 ${J(want)}＝是正前と同じ）`);
   // 層4 F7: py の Serial.print／println も print と同じ表示（python3 に Serial は無い＝定数だけで判定）。
-  const s = run('Serial.println(True, None)\nSerial.print(False)\nSerial.println(1, "a")', 'py');
-  ok(!s.err && J(s.out) === J(['True None', 'False', '1 a']), `I-3 py の Serial.println(True, None)・Serial.print(False) → ${s.err ? 'ERR ' + s.err : J(s.out)}（期待 ["True None","False","1 a"]・是正前 ["true 0","false","1 a"]・4a23b63 ["true ","false","1 a"]）`);
+  // 2026-11 API 統一: Python の環境に Serial は無い（print を使う）。pyStr の表示は print で見る。
+  const s = run('print(True, None)\nprint(False)\nprint(1, "a")', 'py');
+  ok(!s.err && J(s.out) === J(['True None', 'False', '1 a']), `I-3 py の print(True, None)・print(False) → ${s.err ? 'ERR ' + s.err : J(s.out)}（期待 ["True None","False","1 a"]・是正前の Serial.println は ["true 0","false","1 a"]・4a23b63 ["true ","false","1 a"]）`);
+  const sx = run('Serial.println(1)', 'py');
+  ok(!!sx.err && /Serial/.test(sx.err), `I-3 py の Serial は未定義（Python の環境に無い・2026-11 API 統一）→ ${sx.err ? 'ERR ' + sx.err : J(sx.out)}`);
 }
 // I-4 (6) list／tuple の ==／!= は要素ごと（入れ子・長さ違い・要素の型違い）。`in` も同じ規則。`is` は未対応のまま（構文エラー）。
 //   層4 F2: list と tuple は等しくない（python3 と同じ。tuple は評価器の TUPLES の印・dict.items() の組も tuple）。残る差: dict の == は同一性のまま。
