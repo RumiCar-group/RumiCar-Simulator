@@ -1137,10 +1137,20 @@ export function tickSlot(slot, others) {
   slot.world._sensGen = (slot.world._sensGen || 0) + 1;  // AP5: 他車エッジ更新後に tick 世代を進め、この tick の初回 refresh を強制再測 (前 tick の測距キャッシュを無効化)
   // AP8: この loop 反復の開始シム時刻を確定する。前反復ぶんの周期 (1/loopHz + 前反復 delay) を加算＝
   //   millis() がシム時刻由来で単調増加 (wallclock 非依存=決定論)。_pendingDelay は下で 0 に戻す前に読む。
-  slot.world._simMs = (slot.world._simMs || 0) + 1000 / SIM.loopHz + (slot.world._pendingDelay || 0);
+  //   Stage BO: 前の反復が loop() の直下の delay で区切った回なら周期を足さない（loopPeriodAfter と同じ考え方を ms で。区切りの無い回は是正前と同じ式）。
+  slot.world._simMs = (slot.world._simMs || 0) + (slot.world._loopPaused ? 0 : 1000 / SIM.loopHz) + (slot.world._pendingDelay || 0);
   slot.world._pendingDelay = 0;
-  try { slot.controller.tick(); }
+  slot.world._loopPaused = false;
+  try { slot.world._loopPaused = slot.controller.tick() === true; }
   catch (e) { slot.world.log(t('sim.runtimeErr', { e: (e.message || e) })); slot.running = false; }
+}
+
+// Stage BO: loop() を 1 回呼んだ (tickSlot) 後、次に呼ぶまでの sim 時間 [s]。是正前と同じ「周期 1/loopHz＋その回の delay」。ただしその回が
+//   loop()／while True: の本体の直下の delay()／time.sleep() で区切った回 (world._loopPaused・runner.js) なら周期を足さず delay の分だけ
+//   (実機の delay と同じく待った後すぐ続きを実行する)。race_engine.js・main.js (loopsched.js liveLoopRearm)・tickSlot の millis() の時刻が使う。
+//   式の順は是正前の `(1 / SIM.loopHz) + (world._pendingDelay || 0) / 1000` と同じ (区切りの無い回は同じ double)。
+export function loopPeriodAfter(world) {
+  return (world && world._loopPaused ? 0 : (1 / SIM.loopHz)) + ((world && world._pendingDelay) || 0) / 1000;
 }
 
 // 各車の車体エッジ。干渉ON時に他車を「障害物」としてセンサー/衝突に渡す。

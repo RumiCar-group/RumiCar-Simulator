@@ -1,7 +1,12 @@
 // 車両運動モデル (自転車モデル) と衝突判定。
 import { CAR, CONST, TRAIL, CAR_TYPE_BY_KEY, CAR_TYPE_DEFAULT, MASS_REF, MASS, gForward, STEER_DEFAULT, steerTargetOf } from './config.js';
+import * as configNS from './config.js';
 import { segIntersect } from './geom.js';
 import { wallsNear } from './contact_v2.js';
+// BO: config.js の steerAdvance は Stage BO で足した名前なので名前付き import しない (古い config.js がキャッシュに残っても起動する＝BA1 の規則)。
+//   無ければ旧式 (強さは目標舵角にだけ効き、舵の速さは一定) で進める。
+const steerAdvance = (typeof configNS.steerAdvance === 'function') ? configNS.steerAdvance
+  : (cur, tgt, maxd) => cur + Math.max(-maxd, Math.min(maxd, tgt - cur));
 
 export class Car {
   constructor(start) {
@@ -73,7 +78,7 @@ export class Car {
   _stepSteering(dt) {
     const tgt = this.steerTarget;
     const maxd = CAR.steerRate * dt;
-    this.steerAngle += Math.max(-maxd, Math.min(maxd, tgt - this.steerAngle));
+    this.steerAngle = steerAdvance(this.steerAngle, tgt, maxd, this.steerSet, this.steerAmt);   // BO: 強さは外へ切る速さにも効く (config.js)
   }
 
   // 縦方向: 目標速度への加減速。駆動方式の荷重/トラクション状態を返す。

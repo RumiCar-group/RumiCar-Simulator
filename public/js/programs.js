@@ -663,7 +663,7 @@ void loop() {
     return;
   }
   if (phase == 2) {                   // ② トラクション制御ローンチ
-    int pwm = (gs + 5) / 110 * 255;   // 「接地速度+5m/s」を狙う (110=フルスケール最高速)
+    int pwm = (int)((gs + 5) / 110 * 255 + 0.5);   // 「接地速度+5m/s」を狙う (110=フルスケール最高速)。+0.5 で四捨五入 (RC_drive は 0 方向へ切り捨てる＝Arduino の int と同じ)
     RC_drive(FORWARD, pwm);           //   → 駆動力が摩擦ピーク内に収まりスリップしない
     odo = odo + gs / 20;
     if (t > 50) { Serial.println(odo); RC_setup(); odo = 0; t = 0; phase = 3; }
@@ -698,7 +698,7 @@ void loop() {
   RC_steer(CENTER);
 
   if (phase == 0) {                   // 助走 (TC で 18m/s まで)
-    int pwm = (gs + 5) / 110 * 255;
+    int pwm = (int)((gs + 5) / 110 * 255 + 0.5);   // +0.5 で四捨五入 (RC_drive は 0 方向へ切り捨てる＝Arduino の int と同じ)
     RC_drive(FORWARD, pwm);
     if (gs > 18) { phase = 1; odo = 0; }
     return;
@@ -710,7 +710,7 @@ void loop() {
     return;
   }
   if (phase == 2) {                   // 助走 (再び)
-    int pwm = (gs + 5) / 110 * 255;
+    int pwm = (int)((gs + 5) / 110 * 255 + 0.5);   // +0.5 で四捨五入 (RC_drive は 0 方向へ切り捨てる＝Arduino の int と同じ)
     RC_drive(FORWARD, pwm);
     if (gs > 18) { phase = 3; odo = 0; }
     return;
@@ -2710,14 +2710,14 @@ def loop():
         if brake==1:
             RC_drive(BRAKE,BRK)
         else:
-            RC_drive(FORWARD,pwm)
+            RC_drive(FORWARD,int(pwm+0.5))   # pwm は加速ガバナで小数になる。+0.5 で四捨五入 (RC_drive は 0 方向へ切り捨てる＝RasPi の int() と同じ)
 `;
 
 // ── 卓上 Lv1〜3 の Python 版「Wall Hugger」(2026-11 API 統一・v11.0.0) ──────────────────────────────
 // RC_read が 20 cm より先を見ない (-3) 正本 (RasPi RumiCar.py / Zero2Cam / Arduino RumiCar-lib) と同じ条件で走る Python のプログラム。
 // C 版 (Apex Hunter ほか・生読取 sensorN.readRangeSingleMillimeters()＋信頼区間 CONF) とは別のアルゴリズム (右の壁に沿う)。
-// Zero2Cam の形 (def setup()/def loop()) で、RumiCar ライブラリの API だけで書く (RasPi で動かすときは末尾に setup() と
-// while True: loop() を足す。回数で数える定数 BACKT/SEEK/HOLD は loop の周期に依存するので、周期が違う環境では見直す)。
+// Zero2Cam の形 (def setup()/def loop()) で、RumiCar ライブラリの API だけで書く (RasPi RumiCar.py 0.6.0 以降は
+// `python3 RumiCar.py <このファイル>` でそのまま動く。シム・RasPi・Zero2Cam とも loop は 20 Hz で、回数で数える定数 BACKT/SEEK/HOLD はこの周期が前提)。
 // 完走数・3 言語の見本との一致・旋回半径の定数は wf_bh6_docs.mjs の D 章が本番 runRace で実測照合する (数字を変えたら赤)。
 // 【BH6・2026-10-05 の旧注記】旧 Python 版 (C 版の土台の移植) は C 版と走りが同じとは限らなかった — 旧版の記録。本版は別物。
 const PY_FR_CODE = `# Wall Hugger (Python) — ノーマル FR 用  [卓上 Lv1 基準・Python 版]  by Fable 5.1

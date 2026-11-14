@@ -607,10 +607,11 @@ export const SUSP_SETS = ['quasi', 'soft', 'balanced', 'stiff'];
 export const SUSP_DEFAULT = 'quasi';
 
 // ── 操舵サーボの分解能 (任意装備・Stage AS12) ───────────────────────────────────
-// 実機 RumiCar の操舵は **3値 (LEFT/CENTER/RIGHT)** で、これは D-1 (AO_spec §0) が定める
-// 学習 API 表面の不変条件そのもの。ここで足すのは「実機に **比例操舵サーボ** を増設したら
-// どうなるか」を試せる **任意装備** で、**既定 'tri' は 1 バイトも変えない** (下の早期 return が
-// 旧式と同一式・同一 double を通る)。後方センサー/車輪エンコーダ/ギア比/サス自由度と同じ扱い。
+// 実機 RumiCar の操舵は **方向 (LEFT/CENTER/RIGHT)** で、これは D-1 (AO_spec §0) が定める学習 API の基本。
+// ここで足すのは「実機に **比例操舵サーボ** を増設したらどうなるか」を試せる **任意装備** (後方センサー/車輪エンコーダ/
+// ギア比/サス自由度と同じ扱い)。Stage BO (v11.0.0): 正本 RumiCar-lib v0.6.0 の RC_steer(direc, ipwm = 255) に合わせ、
+// 既定の車 'tri' (DC モーター) も強さを受け付ける (目標舵角＝全舵×s/255・外へ切る速さも ×s/255＝下の steerAdvance)。
+// 比例サーボ 'prop' との違いは舵の速さだけ (サーボは強さに依らず steerRate)。強さを省いた呼び出しと 255 は旧式と同一式・同一 double。
 //
 // **3値でも中間舵角自体は作れる**: サーボは目標角へ steerRate [rad/s] で追従するだけなので、
 // 3値指令を小刻みにオン/オフすれば平均化されて中間角になる (physics.js `_stepSteering` の
@@ -625,11 +626,12 @@ export const STEER_SETS = ['tri', 'prop'];
 export const STEER_DEFAULT = 'tri';
 
 // 舵指令 → 目標舵角 [rad]。mx = その車のフル舵角 (CAR.maxSteer ×driftSteerMul 等・呼び側が決める)。
-//   set!=='prop' または amt==null (= 既定の3値) → **旧式と厳密に同一** (早期 return・byte 不変)。
-//   set==='prop' かつ amt!=null → 0..255 を フル舵 mx への比 amt/255 として掛ける。
-// amt=255 のとき 255/255 は IEEE754 で厳密に 1.0、`mx*1` も厳密恒等ゆえ **「全舵」は3値と bit 一致**。
+//   amt==null (= RC_steer(方向) の1引数・既定) → **旧式と厳密に同一** (早期 return・byte 不変)。
+//   amt!=null (= RC_steer(方向, 強さ) の2引数) → 0..255 を フル舵 mx への比 amt/255 として掛ける。装備に依らず同じ
+//   (Stage BO: 既定の車 'tri' も第2引数を受け付ける。正本 RumiCar-lib v0.6.0 の RC_steer(direc, ipwm = 255))。
+// amt=255 のとき 255/255 は IEEE754 で厳密に 1.0、`mx*1` も厳密恒等ゆえ **「全舵」は1引数と bit 一致**。
 export function steerTargetOf(steer, mx, set, amt) {
-  if (set !== 'prop' || amt == null) {
+  if (amt == null) {
     if (steer === CONST.LEFT) return mx;
     if (steer === CONST.RIGHT) return -mx;
     return 0;
@@ -638,6 +640,28 @@ export function steerTargetOf(steer, mx, set, amt) {
   if (steer === CONST.LEFT) return mx * k;
   if (steer === CONST.RIGHT) return -mx * k;
   return 0;
+}
+
+// 1 物理ステップぶん実舵角 cur を目標 tgt へ進める [rad]。maxd = steerRate × dt (その車・その領域の舵の速さ)。
+//   既定の車 ('tri') の操舵は DC モーター＋戻しばね (実機 RumiCar)。RC_steer(方向, 強さ s) はモーターへの信号の割合 s/255
+//   (スローデケイ) なので、**中央から外へ切る向きの速さは s/255 倍** (信号が弱いほどゆっくり切れる) にし、中央へ戻る向き
+//   (ばね・強さを下げたとき・CENTER) は従来の速さのまま。中央をまたぐ 1 ステップは、中央までを従来の速さ・残りを s/255 倍で進む。
+//   比例操舵サーボ ('prop'・任意装備) はサーボが目標角へ一定の速さで動くので強さに依らず従来の速さ。
+//   set==='prop'・amt==null (1引数)・amt≥255 は **旧式 `cur + clamp(tgt − cur, ±maxd)` と同一式** (byte 不変)。
+export function steerAdvance(cur, tgt, maxd, set, amt) {
+  if (set === 'prop' || amt == null || amt >= 255) return cur + Math.max(-maxd, Math.min(maxd, tgt - cur));
+  const diff = tgt - cur;
+  if (diff === 0) return cur;
+  const dir = diff > 0 ? 1 : -1;
+  let x = cur, rem = maxd;
+  if (x !== 0 && (x > 0 ? 1 : -1) !== dir) {       // 中央へ向かう部分 (ばね) は従来の速さ
+    const step = Math.min(Math.abs(x), Math.abs(diff), rem);
+    x += dir * step; rem -= step;
+    if (Math.abs(tgt - x) === 0 || rem <= 0) return x;
+  }
+  const out = rem * (amt / 255);                   // 外へ切る部分 (モーター) は s/255 倍の速さ
+  const left = tgt - x;
+  return x + Math.max(-out, Math.min(out, left));
 }
 
 // ── 路面種別 (コース任意属性・Stage AV1) ────────────────────────────────────────

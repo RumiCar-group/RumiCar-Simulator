@@ -216,6 +216,10 @@ const GATES = [
   //   実ブラウザは browser/check_bl1_moderate.mjs・check_bl2_runview.mjs・check_bl3_rankorder.mjs・check_bl4_escape.mjs・check_bl5_a11y.mjs・check_bl6_loop.mjs。
   //   所要は本ホスト実測 約 27 秒（単独・2026-10-17。BL1 時点の記載は約 1.5 秒・BL5 の wf_run_all の実測は 26.2 秒）。
   'wf_bl1_ui.mjs',
+  // Stage BO (v11.0.0): RC_steer の強さ (第2引数) を既定の車でも受け付ける・値の扱いを正本 (RasPi RumiCar.py 0.6.0 の表) に合わせる・
+  //   loop() の直下の delay()／time.sleep() で区切る。A) 正本の表との照合 (RC_steer 240・RC_drive 90・RC_state 12 通り)・B) 操舵の法則
+  //   (3 エンジン×卓上/フルスケール・1 引数と 255 の bit 一致)・C) delay の区切り・D) Exercise-2.5／3.3 (C・Python) を本番 runRace で・E) BA1。
+  'wf_bo1_steer.mjs',
 ].map((name) => ({ name, args: [] }));
 
 // official_result は決定論2回照合→result.json 再検証→Node pin 照合の複合ゲート (AP20)。

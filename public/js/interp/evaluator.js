@@ -16,6 +16,9 @@ class ContinueSignal { constructor(line) { this.line = line; } }
 const ERR_PREFIX = 'interp.err.';
 // BL7 fix2: 引数を 1 つだけ取る組込関数の印（api.js が len・random.choice に付ける・値＝文言の {fn}）。callHost が py・C の呼び出しで数える。
 export const ONE_ARG = Symbol('oneArg');
+// Stage BO: ホスト環境（api.js）がこの印の関数で、その回に積まれた delay の合計 [ms]（world._pendingDelay）を返す（Interp.runSegment が
+//   loop() の直下の delay()／time.sleep() で区切るかを決める）。印は列挙されない＝プログラムの名前にならない。
+export const PENDING_DELAY = Symbol('pendingDelay');
 export class RuntimeError extends Error {
   constructor(sub, params, line, kind) {
     let msg = t('interp.err.' + sub, params || {});
@@ -153,6 +156,55 @@ export class Interp {
     catch (e) { throw this.stackErr(e) || this.outside(e, false); }
   }
   stackErr(e) { return isStackOverflow(e) ? new RuntimeError('recursionStack', { n: this.depth }, this.curLine, 'recursion') : null; }
+
+  // Stage BO: loop()／while True: の本体の直下の delay()（C）／time.sleep()（py）で、その回の実行を区切る（実機の delay と同じく
+  //   待ってから続きを実行する）。区切るのは (1) 本体の直下の式の文で、(2) C は `delay(…)`（同名のユーザー関数が無いとき）・py は `time.sleep(…)`
+  //   の呼び出しそのもので、(3) その文が待ち（api.js の world._pendingDelay）を増やし、(4) 本体の最後の文でないとき。if／for の中・関数の中・
+  //   式の一部の delay は従来どおり（その回の loop() の後に待つ）。本体の最後の delay も従来どおり（周期＋待ち）。区切った後は
+  //   runner の tick() が真を返し、スケジューラ（fleet.js loopPeriodAfter・loopsched.js liveLoopRearm・race_engine.js）は周期を足さずに
+  //   待ちの分だけ後で同じ本体の続きを呼ぶ。区切りの無いプログラム（出荷の見本はすべて）は是正前と同じ文を同じ順に実行する。
+  isPauseStmt(s) {
+    if (!s || s.t !== 'exprstmt' || !s.expr || s.expr.t !== 'call') return false;
+    const c = s.expr.callee;
+    if (this.lang === 'py') return c.t === 'member' && c.name === 'sleep' && c.obj && c.obj.t === 'var' && c.obj.name === 'time';
+    return c.t === 'var' && c.name === 'delay' && !this.funcs.delay;
+  }
+  pendingDelay() { const f = this.host[PENDING_DELAY]; return typeof f === 'function' ? f() : 0; }
+  // stmts を frame.i から実行する。区切ったら true（frame.i は次の文）、最後まで実行したら false。
+  runSegment(stmts, scope, frame) {
+    while (frame.i < stmts.length) {
+      const s = stmts[frame.i++];
+      const pause = frame.i < stmts.length && this.isPauseStmt(s);
+      const before = pause ? this.pendingDelay() : 0;
+      this.execStmt(s, scope);
+      if (pause && this.pendingDelay() > before) return true;
+    }
+    return false;
+  }
+  // Model A: loop() の呼び出し 1 回分の記録（ローカル変数のスコープと次に実行する文）。区切っても同じスコープで続ける。
+  loopFrame(name) { return { fn: this.funcs[name], scope: { vars: Object.create(null), parent: this.global }, i: 0 }; }
+  // loop() を frame の続きから実行する。callUser と同じ扱い（段数・return・スタック切れ・関数の直下の break／continue）。区切ったら true。
+  runLoopFrame(frame) {
+    if (this.depth >= SIM.maxCallDepth) throw this.rt('recursion', { n: this.depth });
+    this.depth++;
+    try { return this.runSegment(frame.fn.body, frame.scope, frame); }
+    catch (e) {
+      if (e instanceof ReturnSignal) return false;
+      if (isStackOverflow(e)) throw new RuntimeError('recursionStack', { n: this.depth }, this.curLine, 'recursion');
+      throw this.outside(e, this.has('loop'));
+    }
+    finally { this.depth--; }
+  }
+  // Model B: while True: の本体を frame の続きから 1 回分実行する（execLoopPass と同じ扱い）。戻り値 'pause'（区切った）・'next'（この回を
+  //   終えた・continue を含む）・'break'（ループを抜けた）。
+  runPassFrame(stmts, frame) {
+    try { return this.runSegment(stmts, this.global, frame) ? 'pause' : 'next'; }
+    catch (e) {
+      if (e instanceof ContinueSignal) return 'next';
+      if (e instanceof BreakSignal) return 'break';
+      throw this.stackErr(e) || this.outside(e, false);
+    }
+  }
   // BJ3: Model B（トップレベルの while True:）の本体を 1 回走らせる。continue＝この回を終える（false）・break＝ループを
   //   抜ける（true を返す。runner が以降の tick を無動作にする＝人間判断②）。return は関数の外＝エラー。
   execLoopPass(stmts) {

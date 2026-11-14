@@ -46,23 +46,20 @@ console.log('\n=== A: 学習 API の後方互換と装備ゲート (本番 build
     const world = { car, walls: [], log: (m) => logs.push(String(m)), _sensors: [], _others: [], _sensGen: 0, _simMs: 0 };
     return { car, world, env: buildApi(world), logs };
   };
-  // A1: 未装備 (既定) — 1引数は従来どおり / 2引数は失敗して指令不変
+  // A1: 未装備 (既定) — 1引数は従来どおり。Stage BO (v11.0.0) で契約を変更: 2引数も受け付ける (正本 RumiCar-lib v0.6.0 の
+  //   RC_steer(direc, ipwm = 255))。AS12 当時は「未装備で2引数は 0 を返して指令不変＋ログ」だった。新しい契約の詳細は wf_bo1_steer.mjs。
   {
     const { car, env, logs } = mk();
     ok(env.RC_steer(CONST.LEFT) === 1 && car.steer === CONST.LEFT && car.steerAmt === null, 'A1 未装備 1引数 RC_steer(LEFT)=1・steerAmt=null (従来どおり)');
-    const before = car.steer;
-    ok(env.RC_steer(CONST.RIGHT, 128) === 0, 'A1 未装備 2引数は 0 (失敗) を返す');
-    ok(car.steer === before && car.steerAmt === null, 'A1 未装備 2引数は舵指令を一切変えない (サイレント全舵にならない)');
-    ok(logs.length === 1 && /RC_steer/.test(logs[0]), 'A1 未装備 2引数は理由をログへ出す (沈黙截断の禁止)');
-    env.RC_steer(CONST.RIGHT, 200); env.RC_steer(CONST.LEFT, 10);
-    ok(logs.length === 1, 'A1 ログは one-shot (20Hz でログが溢れない)');
+    ok(env.RC_steer(CONST.RIGHT, 128) === 1 && car.steer === CONST.RIGHT && car.steerAmt === 128, 'A1 未装備 2引数も受け付ける (BO: RC_steer(RIGHT,128)=1・steerAmt=128)');
+    ok(logs.length === 0, 'A1 未装備 2引数でログを出さない (BO: 旧 log.steer.needProp は廃止)');
     ok(env.RC_steer(99) === 0 && env.RC_steer(99, 100) === 0, 'A1 不正方向は引数の数によらず 0');
   }
   // A2: 装備あり — 0..255 が フル舵への比・clamp・1引数で3値へ復帰
   {
     const { car, world, env } = mk(); world.steerSet = 'prop'; car.steerSet = 'prop';
     ok(env.RC_steer(CONST.RIGHT, 128) === 1 && car.steer === CONST.RIGHT && car.steerAmt === 128, 'A2 装備 2引数 RC_steer(RIGHT,128)=1・steerAmt=128');
-    env.RC_steer(CONST.LEFT, 300); ok(car.steerAmt === 255, 'A2 装備 clamp 上 300→255 (RC_drive の pwm と同じ clampPwm)');
+    env.RC_steer(CONST.LEFT, 300); ok(car.steerAmt === null, 'A2 装備 clamp 上 300→255＝1引数と同じ null (BO: 255 は steerAmt=null に正規化)');
     env.RC_steer(CONST.LEFT, -5); ok(car.steerAmt === 0, 'A2 装備 clamp 下 −5→0');
     env.RC_steer(CONST.LEFT, 128);
     ok(env.RC_steer(CONST.LEFT) === 1 && car.steerAmt === null, 'A2 装備でも 1引数呼びは steerAmt=null へ戻す (3値へ復帰=指令が残らない)');
@@ -78,24 +75,26 @@ console.log('\n=== A: 学習 API の後方互換と装備ゲート (本番 build
       ok(car.steerAmt === null && car.steer === dir, `A3 ${label} 1引数呼び → steer=指定・steerAmt=null (既存21プログラムの非退行)`); }
     { const { car, world, env } = mk(); world.steerSet = 'prop'; car.steerSet = 'prop';
       const c = buildController(src2, lang, env); c.setup(); c.tick();
-      ok(car.steerAmt === amt && car.steer === dir, `A3 ${label} 2引数呼び(装備あり) → steerAmt=${amt}`); }
+      const wantP = (dir === CONST.CENTER || amt === 255) ? null : amt;   // BO: CENTER は強さを無視・255 は1引数と同じ
+      ok(car.steerAmt === wantP && car.steer === dir, `A3 ${label} 2引数呼び(装備あり) → steerAmt=${wantP}`); }
     { const { car, env, logs } = mk(); const c = buildController(src2, lang, env); c.setup(); c.tick();
-      ok(car.steerAmt === null && car.steer === CONST.CENTER && logs.length === 1, `A3 ${label} 2引数呼び(未装備) → 指令不変＋ログ1件`); }
+      const want = (dir === CONST.CENTER || amt === 255) ? null : amt;   // BO: CENTER は強さを無視・255 は1引数と同じ
+      ok(car.steerAmt === want && car.steer === dir && logs.length === 0, `A3 ${label} 2引数呼び(未装備) → BO: 受け付ける (steerAmt=${want})`); }
   }
 }
 
 // ============================================================================
 console.log('\n=== B: 既定 (3値) の byte 不変 ===');
 {
-  // B1: steerTargetOf の恒等 — 既定 tri は旧式 (steer===LEFT?mx:steer===RIGHT?-mx:0) と同一 double。
+  // B1: steerTargetOf の恒等 — 強さ未指定 (amt=null＝1引数) は装備に依らず旧式 (steer===LEFT?mx:steer===RIGHT?-mx:0) と同一 double。
+  //   BO (v11.0.0): 既定 tri も amt を受け付けるので、AS12 当時の「tri は amt があっても旧式」は amt=null と amt=255 に限る。
   const mx = CAR.maxSteer;
   const old = (s) => (s === CONST.LEFT ? mx : s === CONST.RIGHT ? -mx : 0);
   let bad = 0, n = 0;
-  for (const s of [CONST.LEFT, CONST.CENTER, CONST.RIGHT, 99]) for (const amt of [null, 0, 1, 128, 254, 255]) {
-    n++; if (!Object.is(steerTargetOf(s, mx, 'tri', amt), old(s))) bad++;
-    n++; if (!Object.is(steerTargetOf(s, mx, 'prop', null), old(s))) bad++;   // 装備しても指令が3値なら同一
+  for (const s of [CONST.LEFT, CONST.CENTER, CONST.RIGHT, 99]) for (const set of ['tri', 'prop']) for (const amt of [null, 255]) {
+    n++; if (!Object.is(steerTargetOf(s, mx, set, amt), old(s))) bad++;
   }
-  ok(bad === 0, `B1 既定 tri (と prop×amt=null) は旧式と同一 double: ${n - bad}/${n}`);
+  ok(bad === 0, `B1 強さ未指定・255 は装備に依らず旧式と同一 double: ${n - bad}/${n}`);
   // B2: 255 = フル舵の bit 一致 (255/255 は IEEE754 で厳密 1.0・mx*1 は厳密恒等)
   ok(Object.is(steerTargetOf(CONST.LEFT, mx, 'prop', 255), mx) && Object.is(steerTargetOf(CONST.RIGHT, mx, 'prop', 255), -mx),
      'B2 連続舵 amt=255 は3値の全舵と bit 一致 (255/255=1.0 厳密・mx×1 厳密恒等)');
@@ -361,12 +360,15 @@ console.log('\n=== F: 本番 runRace (実データ・本番フロー) ===');
 {
   const oval = buildFromSpec({ name: 'オーバル', kind: 'track', shape: 'ellipse', rx: 1.2, ry: 0.75, width: 0.55 });
   // 同一の制御則。舵の出し方だけが違う (3値=不感帯つき bang-bang / 連続=比例)。
+  // BO: v11.0.0 の RC_read 200 mm 打ち切り (BN) の後、読めない値・-3 を 30000 に置き換えていたため a は ±255 か 0 にしかならず、
+  //   連続舵の中間の強さ (1〜254) を一度も出していなかった (BO の実測: 装備の有無で traceHash が一致)。打ち切り値の少し先 (300) に置き換え、
+  //   a が -100〜100 の中間の強さになるようにした (2引数の効き方を実際に通す)。
   const SRC = (prop) => `
 int TOP=180;
 void setup(){}
 void loop(){
   int L=RC_read(LEFT), R=RC_read(RIGHT);
-  if (L<0) L=30000; if (R<0) R=30000;
+  if (L<0) L=300; if (R<0) R=300;
   int a = (L - R) / 3;
   if (a > 255) a = 255;
   if (a < -255) a = -255;
@@ -382,11 +384,11 @@ void loop(){
     crashRule: { rejoin: true, penaltySec: 3 }, interact: false, ...extra });
   const r3 = race(SRC(false), 'tri');
   const rP = race(SRC(true), 'prop');
-  const rX = race(SRC(true), 'tri');       // 連続舵プログラム × 未装備
+  const rX = race(SRC(true), 'tri');       // 連続舵プログラム × 未装備 (BO: 既定の車も強さを受け付ける＝DC モーターの効き方で走る)
   ok(r3.finishers.length === 1, `F1 3値プログラム×3値装備は完走 (best ${r3.finishers[0] ? Math.round(r3.finishers[0].bestLapMs) : '-'}ms)`);
   ok(rP.finishers.length === 1, `F1 連続舵プログラム×連続装備は完走 (best ${rP.finishers[0] ? Math.round(rP.finishers[0].bestLapMs) : '-'}ms)`);
-  ok(rX.finishers.length === 0, `F2 連続舵プログラム×**未装備** は完走できない (装備しないと効かない=DNF ${rX.dnf[0] && rX.dnf[0].reason})`);
-  ok(rP.traceHash !== rX.traceHash, 'F2 装備の有無で軌跡が変わる (結果要約でなく実態=traceHash で測る・AS4 の教訓)');
+  ok(rX.finishers.length === 1, `F2 連続舵プログラム×**未装備** も完走する (BO: 既定の車も RC_steer の強さを受け付ける・best ${rX.finishers[0] ? Math.round(rX.finishers[0].bestLapMs) : '-'}ms)`);
+  ok(rP.traceHash !== rX.traceHash, 'F2 装備の有無で軌跡が変わる (BO: 既定の車は外へ切る速さも強さ倍・比例サーボは一定の速さ。実態=traceHash で測る)');
   // F3: 決定論 — 同一 spec 2回で trace/verify 一致
   const rP2 = race(SRC(true), 'prop');
   ok(rP.traceHash === rP2.traceHash && rP.verifyHash === rP2.verifyHash, 'F3 連続舵つきレースは決定論 (2回で traceHash/verifyHash 一致)');
@@ -417,7 +419,7 @@ console.log('\n=== G: 3エンジン共通 (standard / dynamic / v2) ===');
     const c = mkCar(eng, true); c.steer = CONST.LEFT; c.steerAmt = 128;
     const d = mkCar(eng, false); d.steer = CONST.LEFT; d.steerAmt = 128;
     ok(c.steerTarget > 0 && c.steerTarget < a.steerTarget * 0.99, `G2 ${eng}: 装備すると中間舵角が作れる (${(c.steerTarget * deg).toFixed(2)}° < 全舵 ${(a.steerTarget * deg).toFixed(2)}°)`);
-    ok(Object.is(d.steerTarget, a.steerTarget), `G2 ${eng}: **未装備**なら steerAmt が付いていても3値のまま (物理側でも装備を見る=多重防御)`);
+    ok(Object.is(d.steerTarget, c.steerTarget), `G2 ${eng}: BO: **未装備**でも同じ強さなら目標舵角は同じ (違いは舵の速さ・wf_bo1_steer)`);
     // G3: 実走で 3 エンジンとも軌跡が変わる
     const run = (prop) => { const car = mkCar(eng, prop); car.driveDir = CONST.FORWARD; car.pwm = 200;
       for (let i = 0; i < 300; i++) { car.steer = CONST.LEFT; car.steerAmt = prop ? 100 : null; car.step(DT); }

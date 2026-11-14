@@ -11,8 +11,9 @@
 //   T2 選ぶとログに ja の説明が出る／既定へ戻すと既定の文言が出る
 //   T3 en でも英語の文言が出る (ja 固定文言でない)
 //   T4 **配信中のモジュール**で物理が実際に変わる — 3エンジンすべてで効く (tire/gear/susp と違い v2 専用でない)
-//      ＋ 255=全舵が3値と bit 一致 ＋ 未装備なら steerAmt が付いていても3値のまま (多重防御)
-//   T5 学習 API の到達性: 配信物の buildApi で未装備の2引数呼びが 0 を返しログが1回出る (沈黙截断の禁止)
+//      ＋ 255=全舵が3値と bit 一致 ＋ Stage BO (v11.0.0): 未装備でも同じ強さなら同じ目標舵角 (違いは舵の速さ)
+//   T5 学習 API の到達性: 配信物の buildApi で未装備の2引数呼びも受け付ける (Stage BO・正本 RumiCar-lib v0.6.0。
+//      AS12 当時は 0 を返しログが1回出る契約だった)
 //   T6 HUD の刻印: 非既定を選んだときだけ注記へ装備が出る (既定では 1 文字も増えない)
 //   T7 共有 URL: 既定は hash に載らず、非既定だけが載って**リロードで復元**される (5箇所の通し経路)
 //   T8 物理解説 (📖) と 使い方 (RC_steer の項) に配信されている
@@ -39,7 +40,7 @@ const logText = () => page.locator('#log').innerText();
   });
   ok('T1-a #optSteer の選択肢が配信 config の STEER_SETS と一致', JSON.stringify(uiOpts) === JSON.stringify(wl.sets), `UI=${uiOpts} / config=${wl.sets}`);
   const v = await page.locator('#optSteer').inputValue();
-  ok('T1-b 既定は tri (=実機準拠の3値=従来と同じ)', v === wl.def && v === 'tri', `steerSet=${v}`);
+  ok('T1-b 既定は tri (=実機準拠の DC モーター・従来と同じ選択肢)', v === wl.def && v === 'tri', `steerSet=${v}`);
 }
 
 // ── T2/T3: 選択のログが i18n で出る ──────────────────────────────────────
@@ -56,7 +57,7 @@ await setLang(page, 'ja');
   await page.selectOption('#optSteer', 'tri');
   await page.waitForTimeout(300);
   const added = (await logText()).slice(before.length);
-  ok('T2-b 既定へ戻すと既定の文言が出る', /3値/.test(added), `追加ログ="${added.trim().slice(0, 80)}"`);
+  ok('T2-b 既定へ戻すと既定の文言が出る', /操舵サーボ.*DCモーター/.test(added), `追加ログ="${added.trim().slice(0, 80)}"`);
 }
 await setLang(page, 'en');
 await page.waitForTimeout(300);
@@ -89,7 +90,7 @@ await page.waitForTimeout(200);
       const full = mk(eng, 'tri'); full.steer = cfg.CONST.LEFT; full.steerAmt = null;
       const q255 = mk(eng, 'prop'); q255.steer = cfg.CONST.LEFT; q255.steerAmt = 255;
       const half = mk(eng, 'prop'); half.steer = cfg.CONST.LEFT; half.steerAmt = 128;
-      const sham = mk(eng, 'tri'); sham.steer = cfg.CONST.LEFT; sham.steerAmt = 128;   // 未装備なのに amt が付いている
+      const sham = mk(eng, 'tri'); sham.steer = cfg.CONST.LEFT; sham.steerAmt = 128;   // 未装備 (BO: 既定の車も強さを受け付ける)
       const drive = (set, amt) => { const c = mk(eng, set); c.driveDir = cfg.CONST.FORWARD; c.pwm = 200;
         for (let i = 0; i < 300; i++) { c.steer = cfg.CONST.LEFT; c.steerAmt = amt; c.step(DT); }
         return { x: c.x, y: c.y }; };
@@ -97,7 +98,7 @@ await page.waitForTimeout(200);
       out[eng] = {
         bit255: Object.is(q255.steerTarget, full.steerTarget),
         half: half.steerTarget > 0 && half.steerTarget < full.steerTarget * 0.99,
-        shamSame: Object.is(sham.steerTarget, full.steerTarget),
+        shamSame: Object.is(sham.steerTarget, half.steerTarget),
         moved: Math.hypot(a.x - b.x, a.y - b.y),
       };
     }
@@ -107,7 +108,7 @@ await page.waitForTimeout(200);
     const p = probe[eng];
     ok(`T4-a ${eng}: amt=255 は3値の全舵と bit 一致`, p.bit255 === true, `bit255=${p.bit255}`);
     ok(`T4-b ${eng}: 装備すると中間舵角が作れる`, p.half === true, `half=${p.half}`);
-    ok(`T4-c ${eng}: **未装備**なら amt が付いていても3値のまま (物理側でも装備を見る=多重防御)`, p.shamSame === true, `shamSame=${p.shamSame}`);
+    ok(`T4-c ${eng}: BO: 未装備でも同じ強さなら目標舵角は同じ (違いは舵の速さ)`, p.shamSame === true, `shamSame=${p.shamSame}`);
     ok(`T4-d ${eng}: 実走で連続舵が効く (300 step 後の位置差)`, p.moved > 1e-3, `Δ=${p.moved.toExponential(2)} m`);
   }
 }
@@ -123,17 +124,18 @@ await page.waitForTimeout(200);
       return { car, world, env: apiMod.buildApi(world), logs }; };
     const un = mk();
     const r1 = un.env.RC_steer(cfg.CONST.LEFT);           // 1引数 = 従来どおり
-    const r2 = un.env.RC_steer(cfg.CONST.RIGHT, 128);     // 未装備の2引数 = 失敗
+    const r2 = un.env.RC_steer(cfg.CONST.RIGHT, 128);     // 未装備の2引数 (BO: 受け付ける)
+    const unAmt2 = un.car.steerAmt;
     un.env.RC_steer(cfg.CONST.RIGHT, 200); un.env.RC_steer(cfg.CONST.LEFT, 10);
     const eq = mk(); eq.world.steerSet = 'prop'; eq.car.steerSet = 'prop';
     const r3 = eq.env.RC_steer(cfg.CONST.RIGHT, 128);
     eq.env.RC_steer(cfg.CONST.RIGHT);                      // 1引数で3値へ復帰
-    return { r1, r2, r3, unSteer: un.car.steer, unAmt: un.car.steerAmt, logs: un.logs.length,
+    return { r1, r2, r3, unAmt2, unSteer: un.car.steer, unAmt: un.car.steerAmt, logs: un.logs.length,
              eqAmt: eq.car.steerAmt, eqLeft: cfg.CONST.LEFT };
   });
-  ok('T5-a 配信物: 1引数 RC_steer は従来どおり 1 を返す', api.r1 === 1 && api.unSteer === api.eqLeft && api.unAmt === null, `r1=${api.r1}`);
-  ok('T5-b 配信物: 未装備の2引数は 0 を返し指令を変えない', api.r2 === 0 && api.unAmt === null, `r2=${api.r2} amt=${api.unAmt}`);
-  ok('T5-c 配信物: 未装備の理由がログへ 1 回だけ出る (沈黙截断の禁止・20Hz で溢れない)', api.logs === 1, `ログ ${api.logs} 件`);
+  ok('T5-a 配信物: 1引数 RC_steer は従来どおり 1 を返す', api.r1 === 1, `r1=${api.r1}`);
+  ok('T5-b 配信物: BO: 未装備の2引数も受け付ける (1 を返し強さを設定)', api.r2 === 1 && api.unAmt2 === 128, `r2=${api.r2} amt=${api.unAmt2}`);
+  ok('T5-c 配信物: 正しい引数では警告ログを出さない', api.logs === 0, `ログ ${api.logs} 件`);
   ok('T5-d 配信物: 装備すれば 2引数が通り、1引数で3値へ復帰する', api.r3 === 1 && api.eqAmt === null, `r3=${api.r3} amt(復帰後)=${api.eqAmt}`);
 }
 
@@ -196,7 +198,7 @@ await page.waitForTimeout(200);
     return { pm: pm ? pm.textContent.length : 0, usage: us ? us.textContent : '' };
   });
   ok('T8-a 物理解説 (📖) に「連続舵」の Q&A が配信されている', doc.pm > 100, `本文 ${doc.pm} 文字`);
-  ok('T8-b 使い方の RC_steer 項が第2引数と装備の条件を説明している', /0.*255/.test(doc.usage) && /比例操舵サーボ|proportional/i.test(doc.usage), `"${doc.usage.slice(0, 70)}"`);
+  ok('T8-b 使い方の RC_steer 項が第2引数 (強さ 0〜255・省くと全舵) を説明している', /0.*255/.test(doc.usage) && /強さ|strength/i.test(doc.usage) && /全舵|full lock/i.test(doc.usage), `"${doc.usage.slice(0, 70)}"`);
 }
 
 // ── T9: エラー 0 ──────────────────────────────────────────────────────

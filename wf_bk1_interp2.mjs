@@ -1025,7 +1025,10 @@ gVals('I-8', [
   // 層4 F8: 実機 API に None は引数エラー（RC_read は -2・RC_drive／RC_steer は 0 を返して何もしない）。是正前は None が数の 0＝LEFT／FREE と同じ。
   //   数の組込関数（int・abs・math.*）は 0 として計算（§9 の残る差）。python3 に RC_* は無い＝定数だけで判定。
   const a = run('print(RC_read(None), RC_drive(None, 100), RC_steer(None), int(None), abs(None))', 'py');
-  ok(!a.err && J(a.out) === J(['-2 0 0 0 0']), `I-8 実機 API と数の組込関数に None（層4 F8）→ ${a.err ? 'ERR ' + a.err : J(a.out)}（期待 ["-2 0 0 0 0"]・是正前は RC_read(None) が RC_read(LEFT) と同じ・RC_drive(None, 100) が 1）`);
+  // Stage BO（v11.0.0）: 正本 RasPi RumiCar.py と同じく、方向の誤り（None）は最初の 1 回だけログに警告する（正本は stderr）。出力の最後の行が print の値。
+  const aw = (a.out || []).slice(0, -1);
+  ok(!a.err && J((a.out || []).slice(-1)) === J(['-2 0 0 0 0']) && aw.length === 2 && /RC_drive\(None\)/.test(aw[0]) && /RC_steer\(None\)/.test(aw[1]),
+    `I-8 実機 API と数の組込関数に None（層4 F8）→ ${a.err ? 'ERR ' + a.err : J(a.out)}（期待 RC_drive(None)・RC_steer(None) の警告 2 行と ["-2 0 0 0 0"]・是正前は RC_read(None) が RC_read(LEFT) と同じ・RC_drive(None, 100) が 1）`);
 }
 
 // ── J) BK5 C 定石（static・キャスト・数値接尾辞・カンマ演算子と for の複数の宣言子・%=・閉じていない /*）──────────────────────────
