@@ -346,6 +346,8 @@ console.log('\nE) 出荷サンプルの AST 指紋（本文が同じなら AST �
 // [見本, 本文の sha256 先頭 16 桁, parsePy/parseC の JSON の sha256]。BJ1 是正前 HEAD ba977c1 と是正後で全件一致した値（2026-10-11）。
 // 2026-11 API 統一（v11.0.0）で本文を変えた見本（py_normal_fr/awd/ff＝Wall Hugger へ書き直し・drift_fr/awd/ff の後方の生読取・comp_estimate の REAR・
 //   recon_racer/comp_localize/strategist の Serial→print・SAMPLES 3 本＝Wall Hugger）は新しい本文で刻み直した（_pins 相当の同じ式で実測）。
+// Stage BO（v11.0.0）: RC_drive の速さが四捨五入から 0 方向への切り捨て（正本の int）になったので、小数の速さを渡していた 3 本
+//   （comp_launch・comp_brake の (int)(… + 0.5)・strategist の int(pwm+0.5)）に四捨五入を書き足して刻み直した（走りは是正前と traceHash・verifyHash が一致）。
 const AST_PIN = [
   ['PROGRAMS:normal_fr', 'd244897d62418fde', '3ba1d12415e30aacd6e250cc943ac2635b1d5e91242a382c5de3b12088236f36'],
   ['PROGRAMS:normal_awd', 'ae7a6827aea6fb4e', 'd0d1b94a58cf05ae5f0aca2845b143327bdb1f78a286a7ee406f52d0707ae782'],
@@ -359,8 +361,8 @@ const AST_PIN = [
   ['PROGRAMS:showtime', '0f8a2e2aae35fcd2', 'af3071a3885ab9b31ba6ae4e242e7ccf01fa3320ba8fdd16a1cbf3710a137e43'],
   ['PROGRAMS:zerocounter', '5d05f115101384fc', '939eb1ff2345d7bad7a33a81879f16045f4b6a7cacccbf4d7c1f29028ed8eadc'],
   ['PROGRAMS:comp_demo', '9b3eb17e92379dcd', '2bbbcff16ed01fa7c3d3c6c6ab3eec9d448a437aceb02b8efac73fc60da1f06f'],
-  ['PROGRAMS:comp_launch', '5f172ea5fe07e98c', 'c177d3632b1b1bf040bfc3fa6a63849391783b0a39f2b222fcce6af13f09383f'],
-  ['PROGRAMS:comp_brake', '94134e0e900d062e', '14c65463a8c5bb2dae1e7ebd2681ae28723f61a66eb3601056eb9c0de3543517'],
+  ['PROGRAMS:comp_launch', '91268f297d48d0d6', '04f1a3f4fce78528eaf46d27f12d9ac4a0a8e33055438553bf6177b5d1fc9455'],
+  ['PROGRAMS:comp_brake', '0d5e4c53db1dc0cf', '3e4fef418cb47f966abf32075a93e90d47f800bdfe3fb42d271fb8983d9d3592'],
   ['PROGRAMS:comp_circuit', 'b48e13fa730b7921', '8ce41932717cf449f4cc72eb93f07fb55fe3c825420f201ec58bf45f9b3a0631'],
   ['PROGRAMS:comp_drift', 'c351cf25a89271fb', '8fd400867b57c7dadd4db7529dcc9fab94497d6cb064a09ef8dca0b4e71de023'],
   ['PROGRAMS:comp_slip', 'e2dcf2c8ba532115', 'a87bdad11c8aafa6b2754f80deec57d66f1bf54158b423b4e004ee56d6a7edcf'],
@@ -369,7 +371,7 @@ const AST_PIN = [
   ['PROGRAMS:comp_localize', '5cef3fc7e18b84da', 'a5f5d9847166444b6808fdc6b8d3c0fa673a11b5eaea1792637437d481aa10b7'],
   ['PROGRAMS:recon_racer_c', '221af979a07b1799', '3b8b4aea60cdfd1f7626bad2477bd34716765ec8631254ecfc32ad01ad5bf9d4'],
   ['PROGRAMS:comp_localize_c', '5589ae03a02759bf', '2d17083effcb920d7538bd5074ea2bb376d5df2a5e680297ba32d71885780038'],
-  ['PROGRAMS:strategist', 'd59a841e26cb9832', '66a15cb883c3a07da53d050ad5f9ebca667eb95927cad211d441537bc531f11a'],
+  ['PROGRAMS:strategist', 'c070896fd2c91115', 'c246dcffc6393fd7ea8124a8f83c8ef117de4537826050ef226c88a74c50fb61'],
   ['SAMPLES:c', '2a4bb41e3dbaa897', '65f5bbe22d128402aa2f8a86e18462a4fb0c85e0595640cfca62f4a2ab9c209c'],
   ['SAMPLES:py', 'b1549c518cb907f5', '9b598c0df3f3c27da590b0b33d3104d6b149c055564a33f7a14826ba32a73c98'],
   ['SAMPLES:js', '1c94f453307cf88f', null],   // BJ2: js はパーサ非経由（new Function）＝本文の指紋だけ（2026-10-11・bf780f8 で実測）

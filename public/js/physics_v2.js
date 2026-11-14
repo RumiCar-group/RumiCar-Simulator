@@ -27,6 +27,11 @@
 import { DynCar, DYN, DYN_DRIVE, dynDriveKey } from './physics_dyn.js';
 import { CAR, CONST, MASS, MASS_REF, REGIMES, registerRegimeHook, gPlane, gNormal, GEARS, GEAR_DEFAULT,
          SUSPS, SUSP_DEFAULT, SURFACES, SURFACE_DEFAULT, BRAKES, BRAKE_DEFAULT, steerTargetOf } from './config.js';
+import * as configNS from './config.js';
+// BO: config.js の steerAdvance は Stage BO で足した名前なので名前付き import しない (古い config.js がキャッシュに残っても起動する＝BA1 の規則)。
+//   無ければ旧式 (強さは目標舵角にだけ効き、舵の速さは一定) で進める。
+const steerAdvance = (typeof configNS.steerAdvance === 'function') ? configNS.steerAdvance
+  : (cur, tgt, maxd) => cur + Math.max(-maxd, Math.min(maxd, tgt - cur));
 
 // 駆動方式キーは physics_dyn.js の dynDriveKey を共用する (AP22 で旧 driveKeyOf の再実装を 2→1 統合)。
 
@@ -562,7 +567,7 @@ export class CarV2 extends DynCar {
     // ── ① 操舵サーボ (3値→有限速度で実舵角) ＋ アッカーマン (左右前輪) ──
     const tgt = this.steerTarget;
     const maxd = CAR.steerRate * dt;
-    this.steerAngle += Math.max(-maxd, Math.min(maxd, tgt - this.steerAngle));
+    this.steerAngle = steerAdvance(this.steerAngle, tgt, maxd, this.steerSet, this.steerAmt);   // BO: 強さは外へ切る速さにも効く (config.js)
     const delta = this.steerAngle;
     const td = Math.tan(delta);
     // δ→0 で両輪 δ に連続接続する形 (1/tanδ の発散を回避)。左旋回 δ>0 で内輪(左)が大。

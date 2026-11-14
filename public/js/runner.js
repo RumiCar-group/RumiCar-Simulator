@@ -24,15 +24,28 @@ export function buildController(src, lang, hostEnv) {
   //   する。是正前は execBlock を素で呼び、信号オブジェクトが表示層へ届いて `[object Object]` になっていた）。
   //   loop()／setup() の直下の break／continue は interp.callUser が同じエラーにする。
 
+  // Stage BO: tick() は、loop()／while True: の本体の直下の delay()（C）／time.sleep()（py）でその回を区切ったら true を返す
+  //   （evaluator の Interp.runSegment の注記）。次の tick() は同じ回の続き（同じローカル変数）から実行する。スケジューラは区切った回の後に
+  //   周期を足さず待ちの分だけで次の tick() を呼ぶ（fleet.js loopPeriodAfter）。区切りの無い回は是正前と同じく undefined 相当（false）。
+
   // Model A: loop() 関数あり
   if (interp.has('loop')) {
+    let frame = null;   // 区切った loop() の呼び出し（null＝次の tick で新しく呼ぶ）
     return {
       setup() {
+        frame = null;
         interp.resetSteps();
         interp.execTop(interp.topStmts); // グローバル変数初期化
         if (interp.has('setup')) interp.callUser('setup', []);
       },
-      tick() { interp.resetSteps(); interp.callUser('loop', []); },
+      tick() {
+        interp.resetSteps();
+        if (typeof interp.runLoopFrame !== 'function') { interp.callUser('loop', []); return false; }   // 古い evaluator.js (BA1) は区切らない
+        if (!frame) frame = interp.loopFrame('loop');
+        const paused = interp.runLoopFrame(frame);
+        if (!paused) frame = null;
+        return paused;
+      },
       line,
       interp,   // AO10: 検証オラクル専用の読み取り口 (interp.global.vars でプログラムのグローバルを観測)。
     };         //       本番の実行経路は一切参照しない (byte/verifyHash 不変)。プログラムへ course は渡さない (D-1)。
@@ -51,12 +64,18 @@ export function buildController(src, lang, hostEnv) {
     //   Model B のループは先頭の 1 つだけなので 1 tick の中で回り切ろうとしてステップ上限エラーになる（決定ログ BJ-8）。
     //   是正前は信号が tick の外へ出て `[object Object]` の実行時エラーで停止し、post は走らなかった。
     let ended = false;
+    let frame = { i: 0 };   // 本体の次に実行する文（Stage BO: time.sleep() で区切った回の続き）
     return {
-      setup() { ended = false; interp.resetSteps(); interp.execTop(pre); },
+      setup() { ended = false; frame = { i: 0 }; interp.resetSteps(); interp.execTop(pre); },
       tick() {
-        if (ended) return;
+        if (ended) return false;
         interp.resetSteps();
-        if (interp.execLoopPass(loopBody)) { ended = true; interp.execTop(post); }
+        const r = typeof interp.runPassFrame === 'function' ? interp.runPassFrame(loopBody, frame)
+          : (interp.execLoopPass(loopBody) ? 'break' : 'next');   // 古い evaluator.js (BA1) は区切らない
+        if (r === 'pause') return true;
+        frame = { i: 0 };
+        if (r === 'break') { ended = true; interp.execTop(post); }
+        return false;
       },
       line,
       interp,   // AO10: 同上 (検証オラクル専用の読み取り口)。

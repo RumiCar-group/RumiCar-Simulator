@@ -53,6 +53,8 @@
 //   ∴ 負の delay をときどき呼ぶプログラムは 60 fps×1× でも是正前と挙動が変わる（例: 1 回だけ delay(-1000) → 続く 1 sim 秒の loop() は
 //   是正前 40 回〔借りの 20 回を 1 フレーム 1 回で返す〕・是正後 21 回）。PLAN BL6 の「_pendingDelay の処理不変」から字面で外れる唯一の点
 //   （delay ≥ 0 の式と順は不変）。負債を溜めない（J-1 の負の delay の行）こととの両立のための設計判断で、決定ログ BL-8 ② に書いた。
+//   Stage BO: loop()／while True: の本体の直下の delay()（C）・time.sleep()（py）はその回を区切る（evaluator.js Interp.runSegment）。区切った回の
+//   後は P を足さず delay の分だけで続きの期限が来る（liveLoopRearm の paused）。区切った回の続きも同じ「期限の来た区間で 1 回」の規則で呼ぶ。
 
 // 1 フレームの loop() の回数の上限（1 台あたり）。根拠は冒頭。
 export const LIVE_MAX_TICKS_PER_FRAME = 3;
@@ -86,8 +88,10 @@ export function liveLoopAdvance(loopTimer, dt, loopHz) {
 // loop() を 1 回呼んだ後の loopTimer（純関数）。pendingDelayMs＝その回の loop() が積んだ delay の合計 [ms]。
 //   式と順は是正前の `loopTimer += (1 / SIM.loopHz) + (world._pendingDelay || 0) / 1000` と同じ。下限 −P は負の delay の分だけに効く
 //   （delay ≥ 0 なら loop() を呼ぶ直前の loopTimer ≥ −P に P 以上を足すので 0 以上＝下限に当たらない）。
-export function liveLoopRearm(loopTimer, loopHz, pendingDelayMs) {
-  const t = loopTimer + ((1 / loopHz) + (pendingDelayMs || 0) / 1000);
+//   Stage BO: paused＝その回が loop() の直下の delay で区切った回 (world._loopPaused) のときは周期を足さない (delay の分だけ後に続きを呼ぶ・
+//   fleet.js loopPeriodAfter と同じ)。paused でなければ是正前と同じ式・同じ double。
+export function liveLoopRearm(loopTimer, loopHz, pendingDelayMs, paused = false) {
+  const t = loopTimer + ((paused ? 0 : (1 / loopHz)) + (pendingDelayMs || 0) / 1000);
   const floor = -1 / loopHz;
   return t < floor ? floor : t;
 }
@@ -107,7 +111,7 @@ export function runLiveFrame(sdt, loopHz, slots, tick, integrate, maxTicks = LIV
       s.loopTimer = liveLoopAdvance(s.loopTimer, dt, loopHz);
       if (s.loopTimer <= 0) {
         const d = tick(s, i, k);
-        s.loopTimer = liveLoopRearm(s.loopTimer, loopHz, d);
+        s.loopTimer = liveLoopRearm(s.loopTimer, loopHz, d, !!(s.world && s.world._loopPaused));
         ticks++;
       }
     }

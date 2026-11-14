@@ -8,6 +8,8 @@ import { DYN } from './physics_dyn.js';
 import { readAll, readRear } from './sensors.js';
 import { t } from './i18n.js';
 import { RuntimeError, typeName, ONE_ARG } from './interp/evaluator.js';
+import * as interpNS from './interp/evaluator.js';   // BO: PENDING_DELAY は足した名前なので名前空間から「あれば使う」(BA1)
+const PENDING_DELAY = interpNS.PENDING_DELAY;
 
 // World は { car, walls, log(msg), rear?, encoder? } を持つ実行コンテキスト。
 // world.rear=true のとき後方センサー(任意装備)が、world.encoder=true のとき車輪エンコーダ(任意装備)が有効になる。
@@ -44,39 +46,64 @@ export function buildApi(world) {
   };
   refresh();
 
-  const clampPwm = (p) => Math.max(0, Math.min(255, Math.round(Number(p) || 0)));
-
-  // 操舵。実機 RumiCar は 3値 (LEFT/CENTER/RIGHT) — これが D-1 の学習 API 表面 (AO_spec §0)。
-  // AS12: **比例操舵サーボ (任意装備)** を積んだ車だけ第2引数で舵の強さを指定できる。
-  //   RC_steer(LEFT)        → 全舵 左 (従来どおり。装備の有無に関わらず常に有効)
-  //   RC_steer(LEFT, 128)   → 約 半舵 左 (0..255・RC_drive(direc,pwm) と同形。255=全舵で3値と bit 一致)
-  // 第2引数を省略した呼び出しは steerAmt を null へ戻す = 3値へ復帰する (直前の連続舵指令が
-  // 残り続けない)。**未装備で第2引数を渡したら 0 (失敗) を返し、舵指令を一切変えない** —
-  // 黙って全舵にすると AP16/AS4 が潰した「サイレント意味論乖離」になるため、既存の
-  // 「引数エラーは 0」契約 (下の return 0) に合わせて失敗を返す。
-  // ただし RC_steer の返り値は普通読まれない ⇒ 未装備だと「舵が一切効かない車」になり
-  // 学習者に原因が見えない (実測: 連続舵プログラム×未装備で DNF timeout)。∴ **最初の1回だけ**
-  // ログへ理由を出す (毎 tick 出すと 20Hz でログが溢れるので one-shot)。沈黙截断の禁止。
-  let steerPropWarned = false;
-  function steer(direc, amount) {
-    if (direc === CONST.LEFT || direc === CONST.CENTER || direc === CONST.RIGHT) {
-      if (amount === undefined) { world.car.steer = direc; world.car.steerAmt = null; return 1; }
-      if (world.steerSet !== 'prop') {           // 比例操舵サーボ 未装備 = 連続舵は使えない
-        if (!steerPropWarned) { steerPropWarned = true; world.log(t('log.steer.needProp'), true); }
-        return 0;
-      }
-      world.car.steer = direc; world.car.steerAmt = clampPwm(amount);
-      return 1;
-    }
+  // Stage BO: 引数の扱いを正本 (RasPi RumiCar.py の _pwm・_is_one_of と RumiCar-lib v0.6.0 の int 引数) に合わせる。
+  //   ・強さ／速さは 0 方向へ切り捨て (Python の int()・C の int 引数への変換と同じ。是正前は四捨五入＝127.6 が 128) して 0〜255 に収める。
+  //   ・数にできない値 (数字以外の文字列・None・list・NaN・±Infinity・省略) は 0 とし、最初の 1 回だけログに警告する
+  //     (正本は stderr に 1 回。同じ関数・同じ値の警告は 2 回目から出さない＝20Hz の loop() でログが溢れない)。
+  //     文字列は Python の int() と同じく前後の空白・符号・数字の間の _ だけを許す ("12"→12・"1.5"→0)。真偽は数 (True→1)。
+  //   ・方向の誤り (定数でない値・True/False) は 0 を返して何もせず、最初の 1 回だけ警告する (RC_read は従来どおり -2・警告なし＝正本と同じ)。
+  const warned = new Set();
+  const warn = (key, msgKey, params) => {
+    if (warned.has(key)) return;
+    warned.add(key);
+    world.log(t(msgKey, params), true);
+  };
+  const showVal = (v) => (v === undefined ? t('log.rc.omitted') : v === null ? 'None' : typeof v === 'string' ? `'${v}'`
+    : Array.isArray(v) ? `[${v.map(showVal).join(', ')}]` : typeof v === 'boolean' ? (v ? 'True' : 'False') : String(v));
+  // 正本の _pwm: 0..255 の整数。数にできなければ null (呼び側が 0 にして警告する)。
+  const toPwm = (p) => {
+    let n;
+    if (typeof p === 'boolean') n = p ? 1 : 0;
+    else if (typeof p === 'number') n = p;
+    else if (typeof p === 'string' && /^\s*[+-]?\d+(_\d+)*\s*$/.test(p)) n = Number(p.replace(/_/g, ''));
+    else return null;
+    if (!Number.isFinite(n)) return null;
+    n = Math.trunc(n);
+    return n < 0 ? 0 : n > 255 ? 255 : (n === 0 ? 0 : n);   // -0 は 0
+  };
+  const pwmArg = (p, fn) => {
+    const n = toPwm(p);
+    if (n !== null) return n;
+    warn(`${fn}|pwm|${showVal(p)}`, 'log.rc.badPwm', { fn, v: showVal(p) });
     return 0;
+  };
+  const isDir = (d, list) => typeof d === 'number' && list.includes(d);
+
+  // 操舵 RC_steer(direc, ipwm = 255)。正本 RumiCar-lib v0.6.0 / RasPi RumiCar.py 0.6.0 と同じ意味 (Stage BO・装備に依らない):
+  //   強さ ipwm は信号の割合 0〜255 (補正なし)。0 = CENTER と同じ (中立)、255 と1引数は従来と同じ全舵、CENTER では強さを無視。
+  //   戻り値は LEFT/CENTER/RIGHT なら 1、それ以外の方向は 0 (舵指令を変えない)。強さは引数の確認を方向より先に行う (正本の順)。
+  //   第2引数を省略した呼び出しは steerAmt を null (=255 と同じ全舵・旧式と同一式) に戻す。強さの効き方 (目標舵角＝全舵×s/255・
+  //   既定の車は外へ切る速さも ×s/255) は config.js の steerTargetOf・steerAdvance。
+  //   AS12 当時は比例操舵サーボ (任意装備) の車だけが第2引数を受け付け、既定の車では 0 を返して舵を変えなかった (v10.5.0 まで)。
+  function steer(direc, amount) {
+    const s = amount === undefined ? null : pwmArg(amount, 'RC_steer');
+    if (!isDir(direc, [CONST.LEFT, CONST.CENTER, CONST.RIGHT])) {
+      warn(`RC_steer|dir|${showVal(direc)}`, 'log.rc.badDir', { fn: 'RC_steer', v: showVal(direc), ok: 'LEFT / CENTER / RIGHT' });
+      return 0;
+    }
+    world.car.steer = direc;
+    world.car.steerAmt = (direc === CONST.CENTER || s === null || s === 255) ? null : s;   // CENTER は強さを無視・255 は1引数と同じ
+    return 1;
   }
   function drive(direc, pwm) {
-    if ([CONST.FREE, CONST.REVERSE, CONST.FORWARD, CONST.BRAKE].includes(direc)) {
-      world.car.driveDir = direc;
-      world.car.pwm = clampPwm(pwm);
-      return 1;
+    const s = pwmArg(pwm, 'RC_drive');
+    if (!isDir(direc, [CONST.FREE, CONST.REVERSE, CONST.FORWARD, CONST.BRAKE])) {
+      warn(`RC_drive|dir|${showVal(direc)}`, 'log.rc.badDir', { fn: 'RC_drive', v: showVal(direc), ok: 'FREE / REVERSE / FORWARD / BRAKE' });
+      return 0;
     }
-    return 0;
+    world.car.driveDir = direc;
+    world.car.pwm = s;
+    return 1;
   }
   // RC_read(direc): 正本 (RumiCar-lib v0.5.1 / RasPi RumiCar.py / Zero2Cam ABI 3) と同じ戻り値。
   //   0〜RC_READ_RANGE.maxMm = 距離[mm]・-1 = 読めない (後方センサー未装備も -1)・-2 = 引数エラー・
@@ -128,10 +155,11 @@ export function buildApi(world) {
   const rcParams = () => params;
   // RC_state(name): 現在の処理状態の名前 (英数字と _・24 文字まで・大文字に正規化)。正本 (RasPi) と同じく
   //   変わったときだけ `state A -> B` を出力する (Zero2Cam は PC の「判断状態」に表示)。不正な名前は 0 (無視)。
+  //   Stage BO: 正本と同じく None は str(None)＝'None'（→ NONE）として扱い、不正な名前は最初の 1 回だけログに警告する（是正前は無言で 0）。
   let state = '-';   // 正本 RasPi RumiCar.py の _state = "-" と同じ初期値 (初回は `state - -> START`)
   function rcState(name) {
-    const s = String(name == null ? '' : name).trim().toUpperCase().replace(/ /g, '_');
-    if (!s || s.length > 24 || !/^[A-Za-z0-9_]+$/.test(s)) return 0;
+    const s = String(name == null ? 'None' : typeof name === 'boolean' ? (name ? 'True' : 'False') : name).trim().toUpperCase().replace(/ /g, '_');
+    if (!s || s.length > 24 || !/^[A-Za-z0-9_]+$/.test(s)) { warn(`RC_state|${s}`, 'log.rc.badState', { v: showVal(s) }); return 0; }
     if (s !== state) { world.log(`state ${state} -> ${s}`, true); state = s; }
     return 1;
   }
@@ -264,6 +292,8 @@ export function buildApi(world) {
   // Python だけの API (正本 RasPi RumiCar.py / Zero2Cam にあり Arduino には無い): RC_params()・RC_state(name)。C/JS の名前は Arduino と
   //   同じに保つため env の名前には出さず、pythonEnv() が読む非列挙の入れ物に置く (buildJs の Object.keys にも載らない)。
   Object.defineProperty(env, PY_ONLY, { value: { RC_params: rcParams, RC_state: rcState }, enumerable: false });
+  // Stage BO: その回に積まれた delay の合計 [ms]（evaluator の Interp.runSegment が loop() の直下の delay で区切るかを決める）。非列挙。
+  if (PENDING_DELAY) Object.defineProperty(env, PENDING_DELAY, { value: () => world._pendingDelay || 0, enumerable: false });
   return env;
 }
 
@@ -290,6 +320,7 @@ export function pythonEnv(env) {
   const out = {};
   for (const k of PY_NAMES) if (k in env) out[k] = env[k];
   Object.assign(out, env[PY_ONLY] || {});
+  if (PENDING_DELAY && env[PENDING_DELAY]) Object.defineProperty(out, PENDING_DELAY, { value: env[PENDING_DELAY], enumerable: false });
   out.RumiCar = Object.fromEntries(PY_API_NAMES.map((k) => [k, out[k]]));
   return out;
 }

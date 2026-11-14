@@ -17,6 +17,11 @@
 // だと横限界が到達不能になり絶対に滑らない。横の摩擦は「滑り出しが見える」よう小さく、
 // 縦は現モデルの加速 2.5 / 制動 4.0 m/s² を出せるよう強く、と異方性を持たせる (摩擦楕円)。
 import { CAR, CONST, TRAIL, CAR_TYPE_BY_KEY, CAR_TYPE_DEFAULT, MASS_REF, MASS, REGIMES, REGIME_STATE, setRegimeScale, SENSOR_RANGE, REGIME_HOOKS, gForward, gPlane, gNormal, steerTargetOf } from './config.js';
+import * as configNS from './config.js';
+// BO: config.js の steerAdvance は Stage BO で足した名前なので名前付き import しない (古い config.js がキャッシュに残っても起動する＝BA1 の規則)。
+//   無ければ旧式 (強さは目標舵角にだけ効き、舵の速さは一定) で進める。
+const steerAdvance = (typeof configNS.steerAdvance === 'function') ? configNS.steerAdvance
+  : (cur, tgt, maxd) => cur + Math.max(-maxd, Math.min(maxd, tgt - cur));
 
 // 駆動方式ごとの動力学パラメータ。
 //   aFrac    : CG 位置 (前軸からの距離 a = aFrac×wheelBase)。小さい=前荷重 (FF)。
@@ -309,7 +314,7 @@ export class DynCar {
     // --- 操舵サーボ (キネマティック版と同一: 3値→有限速度で実舵角へ) ---
     const tgt = this.steerTarget;
     const maxd = CAR.steerRate * dt;
-    this.steerAngle += Math.max(-maxd, Math.min(maxd, tgt - this.steerAngle));
+    this.steerAngle = steerAdvance(this.steerAngle, tgt, maxd, this.steerSet, this.steerAmt);   // BO: 強さは外へ切る速さにも効く (config.js)
 
     // --- 縦方向の指令 (質量正規化 m/s²) ---
     const thr = this.driveDir === CONST.FORWARD ? this.pwm / 255 : 0; // アクセル開度 (kin と同義)

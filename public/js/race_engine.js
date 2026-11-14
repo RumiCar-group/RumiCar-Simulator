@@ -17,11 +17,14 @@
 //    verifyHash / 毎tick チェックサムでビット差を検出できるよう設計。
 import { SIM, CONST, SENSOR_NOISE, SENSOR_HOLD, SENSOR_OPTICS, REGIME_STATE, REGIMES, registerCarType, SCALE_STATE, setCarScale, APP_VERSION, PHYSICS, setPhysicsMode } from './config.js';
 import * as configNS from './config.js';   // BE3: 足した名前は名前空間から「あれば使う」(BA1・キャッシュ混在)
+import * as fleetNS from './fleet.js';   // BO: loopPeriodAfter は足した名前なので名前空間から「あれば使う」(BA1)
 import { applyRegime } from './physics_dyn.js';
 import { carEdges } from './physics.js';
 import { makeSlot, rebuildSpawns, integrateSlot, integrateFleetV2, tickSlot, othersFor, releaseDrive, applyStartGate, capacityOf, normTire, normGear, normSusp, normSteer, normBrake } from './fleet.js';
 import { buildController } from './runner.js';
 import { buildApi } from './api.js';
+// BO: loop() を呼んだ後、次に呼ぶまでの sim 時間 [s] (fleet.js loopPeriodAfter。古い fleet.js がキャッシュに残るときは是正前の式)。
+const periodAfter = (w) => (typeof fleetNS.loopPeriodAfter === 'function' ? fleetNS.loopPeriodAfter(w) : (1 / SIM.loopHz) + (w._pendingDelay || 0) / 1000);
 
 // ============================================================================
 // 正準検証ポリシー (W1 で実測確定・W_spec §5/§11)
@@ -325,7 +328,7 @@ export function runRace(spec) {
           s.loopTimer -= RACE_DT;
           if (s.loopTimer <= 0) {
             tickSlot(s, []);
-            s.loopTimer += (1 / SIM.loopHz) + (s.world._pendingDelay || 0) / 1000;
+            s.loopTimer += periodAfter(s.world);   // BO: 区切った回は周期を足さない (fleet.js)
           }
           // 2) 物理積分 (単独・interact=false)。v2 は全車同時積分を1台で (壁のみ)・他は原子棄却。
           if (PHYSICS.mode === 'v2') integrateFleetV2([s], RACE_DT, course.walls, recover, false);
@@ -390,7 +393,7 @@ export function runRace(spec) {
         s.loopTimer -= RACE_DT;
         if (s.loopTimer <= 0) {
           tickSlot(s, othersFor(edges, i, interact));
-          s.loopTimer += (1 / SIM.loopHz) + (s.world._pendingDelay || 0) / 1000;
+          s.loopTimer += periodAfter(s.world);   // BO: 区切った回は周期を足さない (fleet.js)
         }
       });
       // Stage AK7: 発走の順次化 (anti-pile-up)。積分前に全車の held を更新 (frame() と同一機構=一つのモデル)。
