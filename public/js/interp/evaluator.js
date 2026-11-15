@@ -16,6 +16,9 @@ class ContinueSignal { constructor(line) { this.line = line; } }
 const ERR_PREFIX = 'interp.err.';
 // BL7 fix2: 引数を 1 つだけ取る組込関数の印（api.js が len・random.choice に付ける・値＝文言の {fn}）。callHost が py・C の呼び出しで数える。
 export const ONE_ARG = Symbol('oneArg');
+// Stage BP: 学習 API (RC_*) の引数の数の印（api.js が付ける・値＝{ name, min, max }）。callHost が py・C の呼び出しで数え、正本と同じく
+//   足りない・多すぎる呼び出しを行番号付きの実行時エラーにする（Python は TypeError・Arduino C はコンパイルエラーになる呼び出し）。
+export const ARITY = Symbol('arity');
 // Stage BO: ホスト環境（api.js）がこの印の関数で、その回に積まれた delay の合計 [ms]（world._pendingDelay）を返す（Interp.runSegment が
 //   loop() の直下の delay()／time.sleep() で区切るかを決める）。印は列挙されない＝プログラムの名前にならない。
 export const PENDING_DELAY = Symbol('pendingDelay');
@@ -647,6 +650,13 @@ export class Interp {
   callHost(fn, self, args) {
     const one = fn[ONE_ARG];
     if (one !== undefined && args.length !== 1) throw new RuntimeError('oneArg', { fn: one, n: args.length }, this.curLine);
+    // Stage BP: 学習 API の引数の数（ARITY の印）。数えるのは ONE_ARG と同じくこの経路（py・C の呼び出し）だけ＝JS のプログラムは従来どおり
+    //   足りない引数を 0 として警告する（api.js）。種類（i18nKey）は argCount、文言は min＝max なら argCount・範囲なら argRange。
+    const ar = fn[ARITY];
+    if (ar !== undefined && (args.length < ar.min || args.length > ar.max)) {
+      throw new RuntimeError(ar.min === ar.max ? 'argCount' : 'argRange', { fn: ar.name, want: ar.min, min: ar.min, max: ar.max, n: args.length },
+        this.curLine, 'argCount');
+    }
     try { return fn.apply(self, args); }
     catch (e) {
       if (e instanceof RuntimeError && !e.line) throw new RuntimeError(e.i18nMsgKey.slice(ERR_PREFIX.length), e.i18nParams, this.curLine, e.i18nKey.slice(ERR_PREFIX.length));
