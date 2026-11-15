@@ -18,6 +18,9 @@
 //     3.3 は実行時エラーなしで強さが 40〜255 の中で変わり Power を出力する (完走数は印字)。
 //  E: 読み込み互換 (BA1) — Stage BO で足した名前 (config.js steerAdvance・evaluator.js PENDING_DELAY・fleet.js loopPeriodAfter) を
 //     名前付き import しない (古いモジュールがキャッシュに残るブラウザでも起動する)。
+//  F: 引数の数 (Stage BP) — py・C の RC_* の呼び出しは正本と同じ数 (RC_setup 0・RC_steer 1〜2・RC_drive 2・RC_read 1・
+//     RC_wheel_speed 1・Python の RC_params 0・RC_state 1) でなければ行番号付きの実行時エラー (種類 interp.err.argCount)。正しい数は
+//     従来どおり。JS は従来どおり足りない引数を 0 として警告。ARITY を名前付き import しない (BA1)。
 // =============================================================================
 import { readFileSync } from 'fs';
 import { buildApi, pythonEnv } from './public/js/api.js';
@@ -273,6 +276,57 @@ console.log('\n=== E: 読み込み互換 (Stage BO で足した名前を名前�
   ok(/\bsteerAdvance\b/.test(named(mut, 'config.js')), 'E1 変異 (physics.js が steerAdvance を名前付き import) を検出する');
   ok(/typeof configNS\.steerAdvance === 'function'/.test(src('physics.js')) && /typeof interp\.runLoopFrame !== 'function'/.test(src('runner.js'))
      && /typeof fleetNS\.loopPeriodAfter === 'function'/.test(src('race_engine.js')), 'E2 古いモジュールのときの代わりの経路がある (physics.js・runner.js・race_engine.js)');
+}
+
+// ============================================================================
+console.log('\n=== F: 引数の数 (Stage BP・正本の def／宣言と同じ数でなければ実行時エラー) ===');
+{
+  // 1 回 setup()＋tick() して、エラー (文言・種類・行) とログを返す。
+  const run = (src, lang) => {
+    const { world, env, logs } = mk('tri');
+    try { const ctl = buildController(src, lang, env); ctl.setup(); ctl.tick(); return { err: null, logs }; }
+    catch (e) { return { err: e, logs }; }
+  };
+  const PY = (body) => `from RumiCar import *\ndef setup():\n    pass\ndef loop():\n    ${body}\n`;
+  const C = (body) => `void setup(){}\nvoid loop(){\n  ${body};\n}\n`;
+  // [呼び出し, 渡した数, 受け付ける数の文言]。Python だけの関数は C では試さない。
+  const BAD = [['RC_setup(1)', 1, '0', 'both'], ['RC_steer()', 0, '1〜2', 'both'], ['RC_steer(LEFT, 9, 9)', 3, '1〜2', 'both'],
+    ['RC_drive(FORWARD)', 1, '2', 'both'], ['RC_drive(FORWARD, 9, 9)', 3, '2', 'both'], ['RC_read()', 0, '1', 'both'],
+    ['RC_read(LEFT, 1)', 2, '1', 'both'], ['RC_wheel_speed()', 0, '1', 'both'], ['RC_params(1)', 1, '0', 'py'], ['RC_state()', 0, '1', 'py']];
+  for (const [call, n, want, langs] of BAD) {
+    for (const lang of langs === 'py' ? ['py'] : ['py', 'c']) {
+      const r = run(lang === 'py' ? PY(call) : C(call), lang);
+      const fn = call.slice(0, call.indexOf('('));
+      const [lo, hi] = want.includes('〜') ? want.split('〜').map(Number) : [Number(want), Number(want)];
+      const pr = r.err ? r.err.i18nParams || {} : {};
+      ok(r.err && r.err.i18nKey === 'interp.err.argCount' && r.err.i18nMsgKey === (lo === hi ? 'interp.err.argCount' : 'interp.err.argRange')
+        && r.err.line === (lang === 'py' ? 5 : 3) && pr.fn === fn && pr.n === n && pr.min === lo && pr.max === hi && r.err.message.includes(`${fn}()`),
+        `F1 ${lang} ${call} → argCount・呼び出しの行 (${r.err ? r.err.message : 'エラーなし'})`);
+    }
+  }
+  // `import RumiCar` の形 (モジュールオブジェクト経由) も同じ
+  {
+    const r = run('import RumiCar\ndef setup():\n    pass\ndef loop():\n    RumiCar.RC_drive(RumiCar.FORWARD)\n', 'py');
+    ok(r.err && r.err.i18nKey === 'interp.err.argCount' && r.err.line === 5, `F2 py RumiCar.RC_drive(FORWARD) → argCount (${r.err ? r.err.message : 'エラーなし'})`);
+  }
+  // 正しい数はエラーにならない (1 引数・2 引数の RC_steer を含む)
+  {
+    const p = run('from RumiCar import *\ndef setup():\n    RC_setup()\ndef loop():\n    RC_steer(LEFT)\n    RC_steer(RIGHT, 100)\n    RC_drive(FORWARD, 100)\n    x = RC_read(CENTER)\n    w = RC_wheel_speed(FRONT)\n    RC_state("RUN")\n    q = RC_params()\n', 'py');
+    ok(!p.err, `F3 py 正しい数の呼び出しはエラーにならない (${p.err ? p.err.message : ''})`);
+    const c = run('void setup(){ RC_setup(); }\nvoid loop(){ RC_steer(LEFT); RC_steer(RIGHT, 100); RC_drive(FORWARD, 100); int x = RC_read(CENTER); float w = RC_wheel_speed(FRONT); }\n', 'c');
+    ok(!c.err, `F3 c 正しい数の呼び出しはエラーにならない (${c.err ? c.err.message : ''})`);
+  }
+  // JS は従来どおり (足りない引数は 0 として警告して続ける)
+  {
+    const j = run('function setup(){}\nfunction loop(){ RC_drive(FORWARD); }\n', 'js');
+    ok(!j.err && j.logs.some((l) => /RC_drive/.test(l)), `F4 js RC_drive(FORWARD) は従来どおり警告して続ける (${j.err ? j.err.message : JSON.stringify(j.logs)})`);
+  }
+  // BA1: ARITY を名前付き import しない (古い evaluator.js がキャッシュに残るブラウザでも api.js が読める)
+  {
+    const a = readFileSync('./public/js/api.js', 'utf8');
+    const named = [...a.matchAll(/import\s*\{([^}]*)\}\s*from\s*'([^']+)'/g)].filter((m) => m[2].endsWith('evaluator.js')).map((m) => m[1]).join(',');
+    ok(!/\bARITY\b/.test(named) && /interpNS\.ARITY/.test(a), 'F5 api.js は ARITY を名前空間から読む (名前付き import しない)');
+  }
 }
 
 console.log(`\n[結果] pass=${pass} fail=${fail}`);

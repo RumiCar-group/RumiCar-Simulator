@@ -10,6 +10,7 @@ import { t } from './i18n.js';
 import { RuntimeError, typeName, ONE_ARG } from './interp/evaluator.js';
 import * as interpNS from './interp/evaluator.js';   // BO: PENDING_DELAY は足した名前なので名前空間から「あれば使う」(BA1)
 const PENDING_DELAY = interpNS.PENDING_DELAY;
+const ARITY = interpNS.ARITY;   // BP: 足した名前なので名前空間から「あれば使う」(BA1。古い evaluator.js がキャッシュに残っていれば印を付けない＝従来どおり)
 
 // World は { car, walls, log(msg), rear?, encoder? } を持つ実行コンテキスト。
 // world.rear=true のとき後方センサー(任意装備)が、world.encoder=true のとき車輪エンコーダ(任意装備)が有効になる。
@@ -48,7 +49,8 @@ export function buildApi(world) {
 
   // Stage BO: 引数の扱いを正本 (RasPi RumiCar.py の _pwm・_is_one_of と RumiCar-lib v0.6.0 の int 引数) に合わせる。
   //   ・強さ／速さは 0 方向へ切り捨て (Python の int()・C の int 引数への変換と同じ。是正前は四捨五入＝127.6 が 128) して 0〜255 に収める。
-  //   ・数にできない値 (数字以外の文字列・None・list・NaN・±Infinity・省略) は 0 とし、最初の 1 回だけログに警告する
+  //   ・数にできない値 (数字以外の文字列・None・list・NaN・±Infinity) は 0 とし、最初の 1 回だけログに警告する
+  //     (省略＝引数の数の誤りは Stage BP から py・C では evaluator の callHost が実行時エラーにする。ここに undefined が届くのは JS だけ)
   //     (正本は stderr に 1 回。同じ関数・同じ値の警告は 2 回目から出さない＝20Hz の loop() でログが溢れない)。
   //     文字列は Python の int() と同じく前後の空白・符号・数字の間の _ だけを許す ("12"→12・"1.5"→0)。真偽は数 (True→1)。
   //   ・方向の誤り (定数でない値・True/False) は 0 を返して何もせず、最初の 1 回だけ警告する (RC_read は従来どおり -2・警告なし＝正本と同じ)。
@@ -292,6 +294,17 @@ export function buildApi(world) {
   // Python だけの API (正本 RasPi RumiCar.py / Zero2Cam にあり Arduino には無い): RC_params()・RC_state(name)。C/JS の名前は Arduino と
   //   同じに保つため env の名前には出さず、pythonEnv() が読む非列挙の入れ物に置く (buildJs の Object.keys にも載らない)。
   Object.defineProperty(env, PY_ONLY, { value: { RC_params: rcParams, RC_state: rcState }, enumerable: false });
+  // Stage BP: 学習 API の引数の数の印（正本 RumiCar-lib v0.6.0 の宣言・RasPi RumiCar.py 0.6.0 の def と同じ数）。evaluator の callHost が
+  //   py・C の呼び出しで数え、違えば行番号付きの実行時エラー（JS のプログラムは数えない＝従来どおり足りない引数は 0 として警告）。
+  //   RC_wheel_speed は任意装備（正本に無い）で引数 1 つ。
+  const arity = (fn, name, min, max = min) => { if (ARITY) fn[ARITY] = { name, min, max }; };
+  arity(env.RC_setup, 'RC_setup', 0);
+  arity(steer, 'RC_steer', 1, 2);
+  arity(drive, 'RC_drive', 2);
+  arity(readDir, 'RC_read', 1);
+  arity(wheelSpeed, 'RC_wheel_speed', 1);
+  arity(rcParams, 'RC_params', 0);
+  arity(rcState, 'RC_state', 1);
   // Stage BO: その回に積まれた delay の合計 [ms]（evaluator の Interp.runSegment が loop() の直下の delay で区切るかを決める）。非列挙。
   if (PENDING_DELAY) Object.defineProperty(env, PENDING_DELAY, { value: () => world._pendingDelay || 0, enumerable: false });
   return env;
