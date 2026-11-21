@@ -3,7 +3,7 @@
 // 2026-11 API 統一: Raspberry Pi 系の別名 (rc_*・read_one_sensor/read_all_sensors・sensorN.get_distance) は廃止。
 //   RasPi (RumiCar.py)・Zero2Cam (drive.py)・Arduino のプログラムがそのまま動くことが目標。Python へ出す名前は
 //   pythonEnv() で正本と同じものだけに絞る (C/JS は Arduino と同じ sensorN.readRangeSingleMillimeters/delay/millis/Serial を残す)。
-import { CONST, SENSOR_NOISE, SENSOR_HOLD, SIM, RC_READ_RANGE } from './config.js';
+import { CONST, SENSOR_NOISE, SENSOR_HOLD, SIM, RC_READ_RANGE, SENSOR_RANGE } from './config.js';
 import { DYN } from './physics_dyn.js';
 import { readAll, readRear } from './sensors.js';
 import { t } from './i18n.js';
@@ -80,6 +80,22 @@ export function buildApi(world) {
     return 0;
   };
   const isDir = (d, list) => typeof d === 'number' && list.includes(d);
+  // 正本の _limit_mm (RasPi RumiCar.py 0.7.0)・clampReadLimit (RumiCar-lib v0.7.0): RC_setReadLimit の上限 [mm]。
+  //   数の読み方は強さ・速さ (toPwm) と同じ: 0 方向へ切り捨て (200.9 → 200)・真偽は数 (True → 1)・数字だけの文字列は数 ("200" → 200)。
+  //   範囲外は 0〜測距レンジ (SENSOR_RANGE.maxMm。卓上は実機と同じ 2000) に収める。数にできない値 (数字以外の文字列・None・list・
+  //   NaN・±Infinity・JS の省略) は 0＝上限なしとし、同じ値につき 1 回だけログに警告する。
+  const limitArg = (p) => {
+    let n;
+    if (typeof p === 'boolean') n = p ? 1 : 0;
+    else if (typeof p === 'number') n = p;
+    else if (typeof p === 'string' && /^\s*[+-]?\d+(_\d+)*\s*$/.test(p)) n = Number(p.replace(/_/g, ''));
+    if (n === undefined || !Number.isFinite(n)) {
+      warn(`RC_setReadLimit|limit|${showVal(p)}`, 'log.rc.badLimit', { v: showVal(p), max: SENSOR_RANGE.maxMm });
+      return 0;
+    }
+    n = Math.trunc(n);
+    return n < 0 ? 0 : n > SENSOR_RANGE.maxMm ? SENSOR_RANGE.maxMm : (n === 0 ? 0 : n);   // -0 は 0
+  };
 
   // 操舵 RC_steer(direc, ipwm = 255)。正本 RumiCar-lib v0.6.0 / RasPi RumiCar.py 0.6.0 と同じ意味 (Stage BO・装備に依らない):
   //   強さ ipwm は信号の割合 0〜255 (補正なし)。0 = CENTER と同じ (中立)、255 と1引数は従来と同じ全舵、CENTER では強さを無視。
@@ -107,11 +123,18 @@ export function buildApi(world) {
     world.car.pwm = s;
     return 1;
   }
-  // RC_read(direc): 正本 (RumiCar-lib v0.5.1 / RasPi RumiCar.py / Zero2Cam ABI 3) と同じ戻り値。
-  //   0〜RC_READ_RANGE.maxMm = 距離[mm]・-1 = 読めない (後方センサー未装備も -1)・-2 = 引数エラー・
-  //   -3 = 範囲外 (打ち切り値より先に何も無い=開けた道・測距そのものの範囲外/低信号も同じ -3)。
-  //   打ち切りは領域に連動 (卓上 200 mm・フルスケール 0=無し。config.js RC_READ_RANGE の注記)。測距 (sensors.js) と
-  //   C/JS の生読取 sensorN.readRangeSingleMillimeters() は打ち切らない。
+  // RC_read の上限 [mm] (方向ごと・添字 LEFT・CENTER・RIGHT・REAR)。0 = 上限なし (既定)。下の RC_setReadLimit が書き、RC_read が読む。
+  const readLimit = [0, 0, 0, 0];
+  // RC_read(direc): 正本 (RumiCar-lib v0.7.0 / RasPi RumiCar.py 0.7.0 / Zero2Cam v0.7.0) と同じ戻り値。
+  //   0〜上限 = 距離[mm]・-1 = 読めない (後方センサー未装備も -1)・-2 = 引数エラー・
+  //   -3 = 範囲外 (上限を超える・測距レンジを超える・反射面なし・低信号)。走行では「遠い」として扱う値。
+  //   上限は既定では測距レンジ (SENSOR_RANGE.maxMm。卓上は実機と同じ 2000 mm) で、プログラムが RC_setReadLimit で決めると
+  //   その値になる。判定の順は正本と同じ: 読めない → -1、測距レンジ超 → -3、上限超 → -3。
+  //   測距レンジ超は、ふだんは sensors.js が -3 を返している (範囲外・反射面なし・低信号)。ここで測距レンジと比べ直すのは、センサーノイズ ON で
+  //   測距レンジの端の値が上へ振れたときのため (ノイズ OFF では sensors.js の値は測距レンジ以下なので何も変わらない。正本の「2000 mm を
+  //   超える値は -3」と同じ＝RC_read が返す距離は測距レンジを超えない)。
+  //   ライブラリの側の一律の打ち切り (RC_READ_RANGE.maxMm) は v12.0.0 からどの領域も 0＝無し (config.js の注記)。
+  //   測距 (sensors.js) と C/JS の生読取 sensorN.readRangeSingleMillimeters() は上限の影響を受けない。
   function readDir(direc) {
     refresh();
     let mm;
@@ -120,8 +143,36 @@ export function buildApi(world) {
     else if (direc === CONST.RIGHT) mm = world._sensors[2].mm;
     else if (direc === CONST.REAR) { if (!world._rear) return -1; mm = world._rear.mm; }
     else return -2;
+    if (mm > SENSOR_RANGE.maxMm) return -3;     // 測距レンジを超える
     if (RC_READ_RANGE.maxMm > 0 && mm > RC_READ_RANGE.maxMm) return -3;
+    const limit = readLimit[direc];
+    if (limit !== 0 && mm > limit) return -3;   // RC_setReadLimit で決めた上限を超える
     return mm;
+  }
+  // RC_setReadLimit(上限)／RC_setReadLimit(方向, 上限): RC_read の値を信じる距離の上限 [mm] をプログラムが決める (setup() で 1 回呼ぶ)。
+  //   正本 (RumiCar-lib v0.7.0 / RasPi RumiCar.py 0.7.0) と同じ名前・同じ意味 (Stage BQ・v12.0.0):
+  //   ・引数 1 個は前・左・右・後ろのすべてに同じ上限、2 個はその方向 (LEFT／CENTER／RIGHT／REAR) だけ。
+  //   ・上限は 1〜測距レンジ (卓上は実機と同じ 2000)。0 は上限なし (既定)。値の読み方は上の limitArg。
+  //   ・上限を超える値は RC_read が -3 を返す (上限ちょうどは距離のまま・-1 と -2 は変わらない)。
+  //   ・戻り値は 1。方向が不正 (定数でない値・True/False) なら 0 を返して何も変えず、同じ値につき 1 回だけ警告する
+  //     (正本と同じく方向を先に確かめる＝方向が不正なら上限の値は見ない)。
+  //   ・REAR は後方センサーが無くても設定できる (RC_read(REAR) は -1 のまま)。RC_setup は上限を変えない。
+  //   ・上限はこの buildApi の中にある＝走行 (▶・🏁) を始めるたびに上限なしへ戻る (前の走行の上限は残らない)。
+  //   引数の数 (1〜2) は py・C では evaluator の callHost が数える (下の ARITY の印)。ここに 0 個・3 個以上が届くのは JS だけで、
+  //   0 個は「上限を省略」(数にできない値と同じ＝上限なし＋警告)、3 個目以降は使わない (RC_steer ほかの JS の扱いと同じ)。
+  function setReadLimit(...args) {
+    if (args.length <= 1) {
+      const limit = limitArg(args[0]);
+      for (let i = 0; i < readLimit.length; i++) readLimit[i] = limit;
+      return 1;
+    }
+    const direc = args[0];
+    if (!isDir(direc, [CONST.LEFT, CONST.CENTER, CONST.RIGHT, CONST.REAR])) {
+      warn(`RC_setReadLimit|dir|${showVal(direc)}`, 'log.rc.badDir', { fn: 'RC_setReadLimit', v: showVal(direc), ok: 'LEFT / CENTER / RIGHT / REAR' });
+      return 0;
+    }
+    readLimit[direc] = limitArg(args[1]);
+    return 1;
   }
   // 実機 VL53L0X は範囲外で大きな値 (約 8190) を返す。生読取はこれに準拠 (打ち切り無し)。
   // i=3 は後方センサー (未装備時は 8190=範囲外相当)。Arduino の教材 (sensorN.readRangeSingleMillimeters()) 用。
@@ -254,6 +305,7 @@ export function buildApi(world) {
     RC_steer: steer,
     RC_drive: drive,
     RC_read: readDir,
+    RC_setReadLimit: setReadLimit,   // RC_read の値を信じる距離の上限 [mm] (正本 v0.7.0 と同じ)
     RC_wheel_speed: wheelSpeed,   // 車輪面速度[m/s] (任意装備の車輪エンコーダ)。未装備 -1
     // Arduino 標準 (C/JS 向け)
     Serial,
@@ -302,6 +354,7 @@ export function buildApi(world) {
   arity(steer, 'RC_steer', 1, 2);
   arity(drive, 'RC_drive', 2);
   arity(readDir, 'RC_read', 1);
+  arity(setReadLimit, 'RC_setReadLimit', 1, 2);
   arity(wheelSpeed, 'RC_wheel_speed', 1);
   arity(rcParams, 'RC_params', 0);
   arity(rcState, 'RC_state', 1);
@@ -314,7 +367,7 @@ const PY_ONLY = Symbol('pyOnly');
 
 // 正本 RasPi RumiCar.py の __all__ (定数と RC_* 関数)。
 const PY_API_NAMES = ['LEFT', 'CENTER', 'RIGHT', 'REAR', 'FREE', 'REVERSE', 'FORWARD', 'BRAKE',
-  'RC_setup', 'RC_steer', 'RC_drive', 'RC_read', 'RC_params', 'RC_state'];
+  'RC_setup', 'RC_steer', 'RC_drive', 'RC_read', 'RC_setReadLimit', 'RC_params', 'RC_state'];
 // Python のプログラムに見せる名前。正本と同じ API (上) ＋ 任意装備 (FRONT・RC_wheel_speed) ＋ Python 標準
 // (組込関数・math/random/time/sys)。Arduino 固有 (Serial・delay・millis・micros・map・constrain・sensorN) と
 // Raspberry Pi 系の旧別名は含めない (Python では print・time.sleep・time.time() を使う)。

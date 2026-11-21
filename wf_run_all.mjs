@@ -219,6 +219,12 @@ const GATES = [
   // Stage BO (v11.0.0): RC_steer の強さ (第2引数) を既定の車でも受け付ける・値の扱いを正本 (RasPi RumiCar.py 0.6.0 の表) に合わせる・
   //   loop() の直下の delay()／time.sleep() で区切る。A) 正本の表との照合 (RC_steer 240・RC_drive 90・RC_state 12 通り)・B) 操舵の法則
   //   (3 エンジン×卓上/フルスケール・1 引数と 255 の bit 一致)・C) delay の区切り・D) Exercise-2.5／3.3 (C・Python) を本番 runRace で・E) BA1。
+  // Stage BP (v11.1.0): F) 学習 API の引数の数。
+  // Stage BQ (v12.0.0): RC_read の一律の打ち切りの撤回と RC_setReadLimit。表を正本 RasPi RumiCar.py 0.7.0 で作り直し (RC_steer・RC_drive・RC_state の
+  //   表は 0.6.0 と同じ)、G) RC_setReadLimit の呼び出しの列 105 通り × 生の値 15 通り × 3 方向を、ホストの関数と C++・Python・JavaScript の処理系の
+  //   両方で正本と照合 (壁を置いて本番の測距に測らせる)・後方センサーあり／なし・走行ごとの初期化・3 つの領域・警告。D) は実機の見本を
+  //   v0.7.0 の本文に替え、Exercise-4.2-Answer・RasPi の Exercise-3.1／3.2・Zero2Cam の drive.py を足した。出荷の見本の verifyHash が v11.1.0 と
+  //   同じことと、説明が上限を名前で参照することは wf_bh6_docs.mjs の D 章。実ブラウザは browser/check_bq1_readlimit.mjs・check_bo1_exercise.mjs。
   'wf_bo1_steer.mjs',
 ].map((name) => ({ name, args: [] }));
 

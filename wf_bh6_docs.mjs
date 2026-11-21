@@ -21,6 +21,8 @@
 //      フィニッシュ線分と正方向が直交するコースの数を測り、説明の数字と一致。
 //   D) Python 版の車種別プログラム 3 本（Wall Hugger・2026-11 API 統一）: 冒頭と physics_model に書いた完走数 NN/56 と C 版の完走数＝本番 runRace の実測、
 //      見本 3 言語（samples.js）の verifyHash が 56 コースで一致、physics_model の g ≈ 18 + 0.976·R が config の定数と一致。旧い主張が残っていない。
+//      v12.0.0（Stage BQ・RC_read の一律の打ち切りの撤回）: 見本 3 言語と Python の 3 本は setup() の RC_setReadLimit で上限を決め、56 コースの
+//      verifyHash が v11.1.0 と同じ（説明の「v11.1.0 と同じ」）。説明文は上限を名前で参照し、数値は physics_model の「上限の決め方」にだけある。
 //   E) 並べられる台数: レースガイドの「道幅の狭いコースでは、6台を並べられないことがあります (多くのコースは6台)」を、フィニッシュの
 //      ある出荷コース × 3 エンジンで、アプリの ▶ が台数を決める関数（fitguard.settleFitRatio・ライブの既定の車体の倍率・6 台を指定）を
 //      呼んだ実測と照合。以前の説明「ナローシケインは実態容量 4 台」は実測（6 台）と合っていなかった（BH6 の層 4 が毎回指摘）。
@@ -45,6 +47,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 import fs from 'fs';
 import path from 'path';
+import { createHash } from 'crypto';
 import { fileURLToPath, pathToFileURL } from 'url';
 import { loadMods } from './wf_bg_live.mjs';
 
@@ -382,7 +385,7 @@ console.log('\nC) 周回の数え方（トライアングルの 1 周目）');
     ]); }
 }
 
-// ── D) Python 版の車種別プログラムと見本（2026-11 API 統一・RC_read 200 mm 打ち切り） ─────────────────────────────────
+// ── D) Python 版の車種別プログラムと見本（2026-11 API 統一・v12.0.0 で RC_setReadLimit） ─────────────────────────────────
 // BH6 時点の D は「Python 版 3 本は C 版の写しで後退が無く、走りは C 版と同じとは限らない」を見張っていた。API 統一で Python 版 3 本は
 // 別のアルゴリズム（右の壁に沿う Wall Hugger・後退あり）に書き直され、説明の主張は次の 3 つに変わった。
 //   D-1) 冒頭の注記と physics_model（ja/en）に書いた完走数 NN/56（Python 版 3 本と、比較に挙げた C 版 3 本）＝本番 runRace の実測
@@ -390,18 +393,27 @@ console.log('\nC) 周回の数え方（トライアングルの 1 周目）');
 //   D-2) samples.js の見本 3 本（C/Python/JavaScript）は 56 コースすべてで verifyHash が一致（samples.js 冒頭と physics_model の主張）。
 //   D-3) physics_model の `g ≈ 18 + 0.976·R` は config.js の SENSORS（dy=0.018）と視野コーン（65°+12.5° の sin）から出る値と一致。
 //   旧い主張（「走りは C 版と同じとは限らない」「C 版の土台を Python で」）が残っていない。
-console.log('\nD) Python 版の車種別プログラム（Wall Hugger）と見本 3 言語（RC_read 200 mm 打ち切り）');
+// v12.0.0（Stage BQ）: ライブラリの側の一律の打ち切り（卓上 200 mm）をやめ、上限はプログラムが setup() の RC_setReadLimit で決める。
+//   D-4) 見本 3 言語と Python の 3 本は RC_setReadLimit を 1 回だけ、RC_setup の直後（周回の処理より前）に呼ぶ。56 コースの verifyHash は
+//        v11.1.0 と同じ（下の V11_1_0 は v11.1.0＝main 8e32328 の木で同じ runRace の呼び出しから取った verifyHash 56 個の連結の sha256 の先頭
+//        16 桁。説明の「v11.1.0 と同じ」の根拠）。**走行物理や見本を意図して変えた版では、この表を刻み直し、説明の「v11.1.0 と同じ」も直す。**
+//   D-5) 説明文（アプリ内の全メッセージ・車種別プログラムの説明・physics_model）は上限を名前で参照する: RC_read／RC_setReadLimit に触れる文に
+//        一律の打ち切りの数値（20 cm・200 mm・0〜200）が無く、数値つきの RC_setReadLimit(…) と推奨の例は physics_model の「上限の決め方」の
+//        項にだけある。−3 の置き換えの例に 999（上限なしでは距離より小さい値）を使っていない。
+console.log('\nD) Python 版の車種別プログラム（Wall Hugger）と見本 3 言語（上限は setup() の RC_setReadLimit）');
 {
   const RACE_COURSES = SPECS.map((spec) => ({ spec, course: (spec.noRace || spec.bench) ? null : courseMod.buildFromSpec(spec) })).filter((b) => b.course && b.course.finish);
   ok(RACE_COURSES.length === 56, `完走が定義される卓上コースは 56（実測 ${RACE_COURSES.length}）`);
   const soloRun = (course, lang, src, carType) => race.runRace({ course, regime: null, laps: 3, field: [{ name: 'A', lang, src, carType, rear: false, encoder: false }], crashRule: { rejoin: false, penaltySec: 3 }, interact: true });
-  const finishers = (lang, src, carType) => RACE_COURSES.reduce((n, { course }) => n + (soloRun(course, lang, src, carType).finishers.length ? 1 : 0), 0);
+  // 1 本のプログラムを 56 コースで走らせた結果（完走数と verifyHash の列）。D-1・D-2・D-4 が同じ結果を使う（同じレースを 2 度走らせない）。
+  const runAll = (lang, src, carType) => { const rs = RACE_COURSES.map(({ course }) => soloRun(course, lang, src, carType)); return { fin: rs.filter((r) => r.finishers.length).length, hashes: rs.map((r) => r.verifyHash) }; };
   // D-1: 完走数。Python 版は冒頭 2 行目の「NN/56 完走 (C 版 <name> は MM/56)」、physics_model は「Wall Hugger(FR)**50/56**・4WD **53/56**・FF **48/56**」。
   const pairs = [['py_normal_fr', 'normal_fr', 'FR'], ['py_normal_awd', 'normal_awd', '4WD'], ['py_normal_ff', 'normal_ff', 'FF']];
-  const got = {};
+  const got = {}, res = {};
   for (const [pk, ck] of pairs) {
     const p = programs.PROGRAM_BY_KEY[pk], c = programs.PROGRAM_BY_KEY[ck];
-    got[pk] = finishers(p.lang, p.code, p.carType); got[ck] = finishers(c.lang, c.code, c.carType);
+    res[pk] = runAll(p.lang, p.code, p.carType);
+    got[pk] = res[pk].fin; got[ck] = runAll(c.lang, c.code, c.carType).fin;
     const head = p.code.split('\n').slice(0, 3).join('\n');
     claims(`${pk} の冒頭の注記の完走数（Python 版／C 版）`, [String(got[pk]), String(got[ck])],
       [[`programs.js ${pk} 冒頭`, head, /(\d+)\/56 完走 \(C 版 [^は]+は (\d+)\/56\)/]]);
@@ -417,9 +429,11 @@ console.log('\nD) Python 版の車種別プログラム（Wall Hugger）と見�
   ]);
   // D-2: 見本 3 言語の verifyHash 一致（56 コース）。
   const { SAMPLES } = await import(u('samples.js'));
-  const mism = RACE_COURSES.filter(({ course }) => { const h = ['c', 'py', 'js'].map((l) => soloRun(course, l, SAMPLES[l], 'normal_fr').verifyHash); return !(h[0] === h[1] && h[1] === h[2]); }).map((b) => b.spec.name);
+  const SAMPLES_SRC = fs.readFileSync(path.join(JS_DIR, 'samples.js'), 'utf8');
+  for (const l of ['c', 'py', 'js']) res['sample_' + l] = runAll(l, SAMPLES[l], 'normal_fr');
+  const mism = RACE_COURSES.filter((b, i) => { const h = ['c', 'py', 'js'].map((l) => res['sample_' + l].hashes[i]); return !(h[0] === h[1] && h[1] === h[2]); }).map((b) => b.spec.name);
   ok(mism.length === 0, `見本 3 言語（C/Python/JavaScript）の verifyHash が 56 コースすべてで一致${mism.length ? ' — 不一致: ' + mism.join('・') : ''}`);
-  ok(/verifyHash が 3 言語で全件一致/.test(SAMPLES.c.length ? fs.readFileSync(path.join(JS_DIR, 'samples.js'), 'utf8') : '') && /3 言語の見本は 56 コースすべてで `verifyHash` が一致/.test(MD) && /same `verifyHash` on all 56 courses/.test(EN),
+  ok(/verifyHash が 3 言語で全件一致/.test(SAMPLES_SRC) && /3 言語の見本は 56 コースすべてで `verifyHash` が一致/.test(MD) && /same `verifyHash` on all 56 courses/.test(EN),
     '見本 3 言語の一致の主張が samples.js 冒頭・physics_model（ja/en）にある');
   // D-3: 壁に平行なときの横距離 g = dy + sin(65°+12.5°)·R（扇の端が最近点）。
   const right = config.SENSORS.find((x) => x.name === 'RIGHT');
@@ -427,6 +441,47 @@ console.log('\nD) Python 版の車種別プログラム（Wall Hugger）と見�
   claims('physics_model（ja/en）の g ≈ dy + k·R の定数（dy[mm]・k）', [String(dyMm), k], [
     ['docs/physics_model.md §12', MD, /g ≈ (\d+) \+ ([\d.]+)·R/], ['docs/physics_model.en.md §12', EN, /g ≈ (\d+) \+ ([\d.]+)·R/]]);
   forbid('旧い主張（C 版の写し・「走りは C 版と同じとは限らない」）が残っていない', /走りは C ?版と同じとは限|C ?版 [A-Za-z ]+の土台を Python|does not always drive the same as the C version|走りは C版と同一|完全に同一 \(=|走行挙動は C 版と同一|driving is identical to the C version/, [...DOC_TEXT, ...PROG_TEXT]);
+
+  // D-4: 上限は setup() の RC_setReadLimit の 1 行で決める・56 コースの verifyHash は v11.1.0 と同じ。
+  const SHIPPED = [['sample_c', 'c', SAMPLES.c], ['sample_py', 'py', SAMPLES.py], ['sample_js', 'js', SAMPLES.js],
+    ...pairs.map(([pk]) => [pk, 'py', programs.PROGRAM_BY_KEY[pk].code])];
+  const codeOnly = (lang, src) => src.split('\n').map((l) => (lang === 'py' ? l.replace(/#.*$/, '') : l.replace(/\/\/.*$/, ''))).join('\n');
+  for (const [key, lang, src] of SHIPPED) {
+    const code = codeOnly(lang, src);
+    const calls = code.match(/RC_setReadLimit\s*\(/g) || [];
+    const m = /RC_setup\(\)\s*;?\s*\n\s*RC_setReadLimit\(\s*(\d+)\s*\)/.exec(code);
+    ok(calls.length === 1 && !!m, `${key}: RC_setReadLimit(上限) を 1 回だけ、RC_setup() の次の行で呼ぶ（呼び出し ${calls.length} 個）`);
+    ok(code.indexOf('RC_setReadLimit') < code.indexOf('RC_read'), `${key}: 上限を決めるのは RC_read を呼ぶより前`);
+  }
+  const V11_1_0 = { sample_c: '4e6bd4aa63597a21', sample_py: '4e6bd4aa63597a21', sample_js: '4e6bd4aa63597a21',
+    py_normal_fr: '4e6bd4aa63597a21', py_normal_awd: '64a6d7f3c8522b36', py_normal_ff: '257ce04a286ccc51' };
+  const digest = (hashes) => createHash('sha256').update(hashes.join(',')).digest('hex').slice(0, 16);
+  for (const [key] of SHIPPED) {
+    const d = digest(res[key].hashes);
+    ok(d === V11_1_0[key], `${key}: 56 コースの verifyHash が v11.1.0 と同じ（要約 ${d}${d === V11_1_0[key] ? '' : ' ≠ v11.1.0 の ' + V11_1_0[key]}）`);
+  }
+  ok(/`verifyHash` が v11\.1\.0 と同じ/.test(MD) && /same `verifyHash` as v11\.1\.0 on all 56 courses/.test(EN) && /verifyHash を v11\.1\.0 の値と照合/.test(SAMPLES_SRC),
+    '「v11.1.0 と同じ」の主張が physics_model（ja/en）・samples.js 冒頭にある');
+
+  // D-5: 説明文は上限を名前で参照する（数値は physics_model の「上限の決め方」の項にだけ）。
+  const sentences = (t) => t.split(/。|\. |\n/);
+  const LIMIT_NUM = /20 ?cm|200 ?mm|0〜200|0[–-]200/, LIMIT_API = /RC_read|RC_setReadLimit/;
+  const appTexts = [...Object.keys(MESSAGES).flatMap((k) => [[`${k} (ja)`, msg(k, 'ja')], [`${k} (en)`, msg(k, 'en')]]),
+    ...programs.PROGRAMS.flatMap((p) => [[`programs.js ${p.key} strategy`, p.strategy || ''], [`programs.js ${p.key} learns`, p.learns || '']])];
+  const numbered = appTexts.filter(([, t]) => sentences(t).some((x) => LIMIT_API.test(x) && LIMIT_NUM.test(x))).map(([n]) => n);
+  ok(numbered.length === 0, `アプリ内の説明（${appTexts.length} 個）で、RC_read／RC_setReadLimit に触れる文に一律の打ち切りの数値が無い${numbered.length ? ' — 残っている: ' + numbered.slice(0, 5).join('・') : ''}`);
+  const literal = appTexts.filter(([, t]) => /RC_setReadLimit\(\s*(?:[A-Z]+\s*,\s*)?\d/.test(t)).map(([n]) => n);
+  ok(literal.length === 0, `アプリ内の説明に数値つきの RC_setReadLimit(…) が無い${literal.length ? ' — 残っている: ' + literal.slice(0, 5).join('・') : ''}`);
+  forbid('−3 の置き換えの例に 999 を使っていない（上限なしでは 1000 mm 以上の距離より小さい）', /d = 999\b|== ?-3\)? ?\w+ ?= ?999\b/, [...DOC_TEXT.filter(([n]) => !/^docs\//.test(n)), ...PROG_TEXT]);
+  for (const [name, text, head, next, ex] of [['docs/physics_model.md', MD, '#### 上限の決め方', '#### 出荷の見本の走り方', /推奨の例は 200 mm/],
+    ['docs/physics_model.en.md', EN, '#### Choosing the limit', '#### How the shipped samples drive', /recommended example is 200 mm/]]) {
+    const a = text.indexOf(head), b = text.indexOf(next);
+    ok(a > 0 && b > a, `${name}: 「上限の決め方」の項がある`);
+    const inside = text.slice(a, b), outside = text.slice(0, a) + text.slice(b);
+    ok(ex.test(inside) && /RC_setReadLimit\(200\)/.test(inside), `${name}: 推奨の例と数値つきの RC_setReadLimit(…) が「上限の決め方」の項にある`);
+    const leak = sentences(outside).filter((x) => /RC_setReadLimit\(\s*(?:[A-Z]+\s*,\s*)?\d/.test(x) || (LIMIT_API.test(x) && LIMIT_NUM.test(x)));
+    ok(leak.length === 0, `${name}: 「上限の決め方」の項の外に上限の数値が無い${leak.length ? ' — ' + leak.slice(0, 2).map((x) => x.slice(0, 60)).join(' ／ ') : ''}`);
+  }
 }
 
 // ── E) 並べられる台数 ─────────────────────────────────────────────────────────────────────

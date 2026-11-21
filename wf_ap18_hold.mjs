@@ -58,26 +58,37 @@ SENSOR_HOLD.on = false; SENSOR_NOISE.on = false;
   Math.random = () => { randCount++; return realRand(); };
   const env = buildApi(world);
   const expect = readAll(car, walls, []).map(s => s.mm);   // 独立再計算 (本番 readAll)
-  // 2026-11 API 統一: RC_read は卓上で RC_READ_RANGE.maxMm (200) を超える測距を -3 に打ち切る (正本と同じ値)。生読取
-  //   sensorN.readRangeSingleMillimeters() は打ち切らない (負は 8190)。両方の読取口を本番 readAll と突き合わせる。
-  const cut = RC_READ_RANGE.maxMm;
-  const expectApi = expect.map((v) => (cut > 0 && v > cut ? -3 : v));
+  // v12.0.0 (Stage BQ): RC_read は既定では測距レンジまでの値 (本番 readAll の値) をそのまま返す。ライブラリの側の一律の打ち切り
+  //   RC_READ_RANGE.maxMm はどの領域も 0 (v11.x の卓上は 200)。上限はプログラムが RC_setReadLimit で決め、超える値は -3 になる。
+  //   生読取 sensorN.readRangeSingleMillimeters() は上限の影響を受けない (負は 8190)。両方の読取口を本番 readAll と突き合わせる。
+  chk(RC_READ_RANGE.maxMm === 0, `ライブラリの側の一律の打ち切りは無い (RC_READ_RANGE.maxMm=${RC_READ_RANGE.maxMm})`);
   const expectRaw = expect.map((v) => (v < 0 ? 8190 : v));
   const sensors = [env.sensor0, env.sensor1, env.sensor2];
-  let allEq = true, allEqRaw = true;
-  for (let tk = 0; tk < 12; tk++) {
-    world._sensGen++; world._simMs += 1000 / SIM.loopHz;
-    // 1 反復内で複数回読む典型ループ (L/C/R を各 3 回)。
-    for (let r = 0; r < 3; r++) {
-      const got = [env.RC_read(env.LEFT), env.RC_read(env.CENTER), env.RC_read(env.RIGHT)];
-      for (let i = 0; i < 3; i++) if (got[i] !== expectApi[i]) allEq = false;
-      const raw = sensors.map((sn) => sn.readRangeSingleMillimeters());
-      for (let i = 0; i < 3; i++) if (raw[i] !== expectRaw[i]) allEqRaw = false;
+  // 上限 0 (既定＝設定しない)・この姿勢の読み値を分ける値・v11.x の一律の打ち切りと同じ値。上限は同じ env に続けて設定する (最後の値が効く)。
+  const seen = expect.filter((v) => v > 0).sort((a, b) => a - b);
+  const limits = [null, seen.length ? seen[0] : 500, seen.length ? seen[0] - 1 : 499, 200, 0];
+  const used = [];
+  let allEq = true, allEqRaw = true, cutSeen = 0;
+  for (const limit of limits) {
+    if (limit !== null) chk(env.RC_setReadLimit(limit) === 1, `RC_setReadLimit(${limit}) の戻り値 1`);
+    const expectApi = expect.map((v) => (limit && v > limit ? -3 : v));
+    cutSeen += expectApi.filter((v, i) => v !== expect[i]).length;
+    used.push(`${limit === null ? '未設定' : limit}→${expectApi.join('/')}`);
+    for (let tk = 0; tk < 12; tk++) {
+      world._sensGen++; world._simMs += 1000 / SIM.loopHz;
+      // 1 反復内で複数回読む典型ループ (L/C/R を各 3 回)。
+      for (let r = 0; r < 3; r++) {
+        const got = [env.RC_read(env.LEFT), env.RC_read(env.CENTER), env.RC_read(env.RIGHT)];
+        for (let i = 0; i < 3; i++) if (got[i] !== expectApi[i]) allEq = false;
+        const raw = sensors.map((sn) => sn.readRangeSingleMillimeters());
+        for (let i = 0; i < 3; i++) if (raw[i] !== expectRaw[i]) allEqRaw = false;
+      }
     }
   }
   Math.random = realRand;
-  chk(allEq, `OFF 既定の RC_read 全読み値が本番 readAll＋打ち切り ${cut}mm と byte 一致 (期待 ${expectApi.join('/')}・readAll ${expect.join('/')})`);
-  chk(allEqRaw, `OFF 既定の生読取 sensorN.readRangeSingleMillimeters() が本番 readAll と byte 一致 (期待 ${expectRaw.join('/')})`);
+  chk(allEq, `OFF 既定の RC_read 全読み値が本番 readAll (上限を超える値だけ -3) と byte 一致 (readAll ${expect.join('/')}・上限→期待 ${used.join(' ')})`);
+  chk(cutSeen > 0, `上限で -3 になる読み値がこの姿勢にある (${cutSeen} 個＝上限の検査が空振りでない)`);
+  chk(allEqRaw, `OFF 既定の生読取 sensorN.readRangeSingleMillimeters() が本番 readAll と byte 一致・上限の影響を受けない (期待 ${expectRaw.join('/')})`);
   chk(randCount === 0, `乱数非消費 0 回 (実測 ${randCount})`);
 }
 
@@ -118,8 +129,9 @@ console.log('\n[② ON: 多数回読み平均の sd 比 (エクスプロイト�
   const M = 3000, READS = 100;
   const dt = 1000 / SIM.physicsHz;
   // HOLD ON: 各窓の先頭 tick で 100 回読む → 全て保持値 → avg==single → sd 比 1.00。
-  // 2026-11 API 統一: この姿勢の中央 1160mm は RC_read だと 200mm 打ち切りで -3 になる (分散 0=測れない) ので、同じ refresh 経路の
-  //   生読取 sensor1.readRangeSingleMillimeters() (打ち切り無し) で保持窓の統計を測る。
+  // 保持窓の統計は生読取 sensor1.readRangeSingleMillimeters() で測る (RC_read と同じ refresh 経路・上限の影響を受けない)。
+  //   v11.x は RC_read が卓上で 200 mm に打ち切られ、この姿勢の中央 1160mm が -3 (分散 0=測れない) になったので生読取に替えた。
+  //   v12.0.0 からは RC_read も上限なしで同じ値を返すが、プログラムの上限に左右されない生読取のままにする。
   SENSOR_HOLD.on = true; SENSOR_NOISE.on = true; SENSOR_NOISE.dropout = 0;
   const carH = new Car({ x: pose.x, y: pose.y, theta: pose.theta });
   const worldH = makeWorld(carH);

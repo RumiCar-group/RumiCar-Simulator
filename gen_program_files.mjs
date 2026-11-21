@@ -43,19 +43,22 @@ writeFileSync(`${OUT}/programs/README.md`, `# RumiCar Simulator — 車種別 �
 [RumiCar Simulator](https://www.rumicar.com/simulator/) 用に、各車種の物理特性を最大限に
 引き出すよう調整した走行プログラムです。C 版 (\`.ino\`, Arduino C++ 形式) は **実機 RumiCar でも動作**します。
 Python 版 (\`.py\`) のうち **卓上の Wall Hugger 3 本** (ノーマル FR/4WD/FF) は RumiCar ライブラリの API
-(\`RC_setup\`／\`RC_steer\`／\`RC_drive\`／\`RC_read\`) だけで書いてあり、Zero2Cam の形 (\`def setup()\`／\`def loop()\`) なので
-**RumiCar-Zero2Cam の走行プログラムとしてそのまま使えます**。Raspberry Pi Zero 版 (\`RasPi/RumiCar.py\` 0.6.0 以降) でも
+(\`RC_setup\`／\`RC_setReadLimit\`／\`RC_steer\`／\`RC_drive\`／\`RC_read\`) だけで書いてあり、Zero2Cam の形 (\`def setup()\`／\`def loop()\`) なので
+**RumiCar-Zero2Cam (v0.7.0 以降) の走行プログラムとしてそのまま使えます**。Raspberry Pi Zero 版 (\`RasPi/RumiCar.py\` 0.7.0 以降) でも
 書き換えずに実行コマンドでそのまま動きます (このフォルダで \`python3 ../RasPi/RumiCar.py normal_fr-wall-hugger-python.py\`。
 \`setup()\` を 1 回、\`loop()\` を 50 ms ごと＝シミュレータ・Zero2Cam と同じ 20 Hz で呼び、回数で数える定数 BACKT／SEEK／HOLD はこの周期を前提にしています)。競技 (フルスケール) の Python 版 3 本 (Recon Racer／Self-Locator／Apex Strategist) は
 車輪エンコーダ (\`RC_wheel_speed\`) など**シミュレータ専用**の機能を使います。
 tuned by **Fable 5**。
 
 ### Python 版 (Wall Hugger) の読み方
-\`RC_read\` は実機のライブラリと同じく **20 cm (200 mm) より先を見ません** (0〜200 = 距離 mm・-3 = 20 cm 以内に何もない・-1 = 読めない)。
-卓上コースの通路は 20 cm より広いので、真ん中を走ると左右とも -3 になります。そこで Python 版は **右の壁に寄って沿う**
+\`RC_read\` の値をどこまで信じるか (**上限**) は、プログラムが \`setup()\` の \`RC_setReadLimit\` で決めます
+(実機のライブラリ RumiCar-lib v0.7.0・\`RasPi/RumiCar.py\` 0.7.0 と同じ名前・同じ意味)。上限より先は \`RC_read\` が -3 を返します
+(0〜上限 = 距離 mm・-3 = 範囲外＝遠い・-1 = 読めない)。上限の値の決め方は、シミュレータの物理モデル解説
+[docs/physics_model.md](https://github.com/RumiCar-group/RumiCar-Simulator/blob/main/docs/physics_model.md) §12「上限の決め方」にあります。
+卓上コースの通路はこの上限より広いので、真ん中を走ると左右とも -3 になります。そこで Python 版は **右の壁に寄って沿う**
 (右の壁との距離を一定に保つ・前に壁が見えたら開いている方へ・見失ったら右へ切って探す・詰まったら後退して切り返す) 走り方です。
--3 は数としては最も小さいので、比較の前に \`if d == -3: d = 999\` のように「遠い」へ置き換えます。
-C 版は Arduino の教材と同じ生の値 (\`sensorN.readRangeSingleMillimeters()\`・打ち切りなし) と信頼区間 \`CONF\` を使う従来の書き方です。
+-3 は数としては最も小さいので、比較の前に「\`RC_read\` が返すどの距離よりも大きい値」(この 3 本は \`FAR = 9999\`) へ置き換えます。
+C 版は Arduino の教材と同じ生の値 (\`sensorN.readRangeSingleMillimeters()\`・上限の影響を受けない) と信頼区間 \`CONF\` を使う従来の書き方です。
 
 ## 一覧 (学習しやすいよう「単純→特性活用」の順)
 | Lv | プログラム | 車種 | 戦略 |

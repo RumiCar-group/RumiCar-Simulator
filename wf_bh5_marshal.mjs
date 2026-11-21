@@ -143,7 +143,8 @@ function poseWatch(M, course, slots, st) {
     };
   });
 }
-// 探針の見本。既定は Python 版 Wall Hugger (py_normal_fr・2026-11 API 統一で RC_read 200 mm 打ち切りに合わせて書き直したもの)。B11 の治具は
+// 探針の見本。既定は Python 版 Wall Hugger (py_normal_fr・2026-11 API 統一で RC_read 200 mm 打ち切りに合わせて書き直したもの。v12.0.0 からは
+//   setup() の RC_setReadLimit(200) で同じ値を受け取る＝走りは同じ)。B11 の治具は
 //   「走りの成り行きに頼らず」向きを回すので、自分では逆向きにならない C 版 Apex Hunter (normal_fr) を使う (Wall Hugger は前 80 mm で後退して
 //   切り返すため、精密 v2 のオーバルで自分でも 1 回逆向きになり、向き直しが 3 回でなく 4 回になった＝治具の前提に合わない)。
 const pyField = (M, n, key = 'py_normal_fr') => { const p = M.programs.PROGRAM_BY_KEY[key]; return Array.from({ length: n }, (_, i) => ({ name: 'C' + i, lang: p.lang, src: p.code, carType: p.carType })); };

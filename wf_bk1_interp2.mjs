@@ -448,7 +448,11 @@ const PIN = [
   ['recon_racer', 'cbf8c3d6/0c1c56a8/1200'], ['comp_localize', 'cbf8c3d6/0c1c56a8/1200'], ['recon_racer_c', 'cbf8c3d6/0c1c56a8/1200'],
   ['comp_localize_c', 'cbf8c3d6/0c1c56a8/1200'], ['strategist', 'cbf8c3d6/77c1c829/1200'],
 ];
-const OUT_PIN = '1c4f1ad4fc28c136';   // e65643e で採った値 129131c7aedd7e18 → 2026-11 API 統一（py_normal_fr/awd/ff の本文・recon_racer/comp_localize/strategist の Serial.println→print）で刻み直し
+// e65643e で採った値 129131c7aedd7e18 → 2026-11 API 統一（v11.0.0）で 1c4f1ad4fc28c136 に刻み直し → v12.0.0（Stage BQ）で 129131c7aedd7e18 に刻み直し（e65643e の値と同じ）。
+//   この検査は 23 本を**卓上の領域のまま**（自分の領域にせず）止まった車で 300 tick 動かす。違いが出るのは comp_estimate（Range-Flow Estimator・フルスケール用・
+//   RC_read を使い上限を決めない）だけ: v11.x は卓上の RC_read が 200 mm より先を -3 にしたので推定の出力が出ず（0 行）、v12.0.0 は測距レンジまでの値が返るので
+//   v10.x までと同じ 30 行が出る。ほかの 22 本の出力は v11.1.0 と同じ。自分の領域（フルスケール＝以前から打ち切りなし）での走りは上の PIN のとおり変わらない。
+const OUT_PIN = '129131c7aedd7e18';
 {
   // 呼び出しの入れ子の最大を数える（観測だけ・返り値と例外はそのまま）。是正前の木には depth が無いので数えない。
   let maxDepth = 0;
