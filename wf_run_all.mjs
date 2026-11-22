@@ -225,6 +225,11 @@ const GATES = [
   //   両方で正本と照合 (壁を置いて本番の測距に測らせる)・後方センサーあり／なし・走行ごとの初期化・3 つの領域・警告。D) は実機の見本を
   //   v0.7.0 の本文に替え、Exercise-4.2-Answer・RasPi の Exercise-3.1／3.2・Zero2Cam の drive.py を足した。出荷の見本の verifyHash が v11.1.0 と
   //   同じことと、説明が上限を名前で参照することは wf_bh6_docs.mjs の D 章。実ブラウザは browser/check_bq1_readlimit.mjs・check_bo1_exercise.mjs。
+  // Stage BR (v12.1.0): 出荷の見本と説明の RC_read の値の扱いを、実機の見本 (RumiCar-lib v0.7.1・RasPi の Exercise-3.1〜3.3) の決まりにそろえた
+  //   (値はまず距離とステータスに分ける・-1 は止まる・-3 は先頭の定数 FAR_MM へ・上限は先頭の定数 LIMIT_MM)。学習 API・処理系・走行物理は無改変。
+  //   D) の実機の見本を v0.7.1 と RasPi master 7b57478 の本文に替えた。出荷の見本の決まり (LIMIT_MM・FAR_MM・-1 の回は RC_drive(BRAKE, 0) だけ・
+  //   3 言語の指令の一致・verifyHash が v11.1.0 と同じ) と、説明の「前・左・右は −1 を返さない」「C++ での引数の読み方」は wf_bh6_docs.mjs の
+  //   D-4〜D-7。実ブラウザは browser/check_br1_values.mjs (新設)・check_bq1_readlimit.mjs・check_bo1_exercise.mjs。常設ゲートは 82 本のまま。
   'wf_bo1_steer.mjs',
 ].map((name) => ({ name, args: [] }));
 

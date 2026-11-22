@@ -23,6 +23,9 @@
 //      見本 3 言語（samples.js）の verifyHash が 56 コースで一致、physics_model の g ≈ 18 + 0.976·R が config の定数と一致。旧い主張が残っていない。
 //      v12.0.0（Stage BQ・RC_read の一律の打ち切りの撤回）: 見本 3 言語と Python の 3 本は setup() の RC_setReadLimit で上限を決め、56 コースの
 //      verifyHash が v11.1.0 と同じ（説明の「v11.1.0 と同じ」）。説明文は上限を名前で参照し、数値は physics_model の「上限の決め方」にだけある。
+//      v12.1.0（Stage BR・値の扱いを実機の見本の決まりに）: 上限は先頭の定数 LIMIT_MM に書いて RC_setReadLimit(LIMIT_MM)。RC_read の値は
+//      まず 0 以上（距離）か負の数（ステータス）かで分け、-1 は止まり（RC_drive(BRAKE, 0)・その回は判断しない）、-3 は比べる前に先頭の定数 FAR_MM へ
+//      置き換える（D-6）。説明に書いた「本シムの前・左・右は −1 を返さない」「C++ での引数の読み方」も実測と照合する（D-7）。
 //   E) 並べられる台数: レースガイドの「道幅の狭いコースでは、6台を並べられないことがあります (多くのコースは6台)」を、フィニッシュの
 //      ある出荷コース × 3 エンジンで、アプリの ▶ が台数を決める関数（fitguard.settleFitRatio・ライブの既定の車体の倍率・6 台を指定）を
 //      呼んだ実測と照合。以前の説明「ナローシケインは実態容量 4 台」は実測（6 台）と合っていなかった（BH6 の層 4 が毎回指摘）。
@@ -398,9 +401,19 @@ console.log('\nC) 周回の数え方（トライアングルの 1 周目）');
 //        v11.1.0 と同じ（下の V11_1_0 は v11.1.0＝main 8e32328 の木で同じ runRace の呼び出しから取った verifyHash 56 個の連結の sha256 の先頭
 //        16 桁。説明の「v11.1.0 と同じ」の根拠）。**走行物理や見本を意図して変えた版では、この表を刻み直し、説明の「v11.1.0 と同じ」も直す。**
 //   D-5) 説明文（アプリ内の全メッセージ・車種別プログラムの説明・physics_model）は上限を名前で参照する: RC_read／RC_setReadLimit に触れる文に
-//        一律の打ち切りの数値（20 cm・200 mm・0〜200）が無く、数値つきの RC_setReadLimit(…) と推奨の例は physics_model の「上限の決め方」の
-//        項にだけある。−3 の置き換えの例に 999（上限なしでは距離より小さい値）を使っていない。
-console.log('\nD) Python 版の車種別プログラム（Wall Hugger）と見本 3 言語（上限は setup() の RC_setReadLimit）');
+//        一律の打ち切りの数値（20 cm・200 mm・0〜200）が無く、数値つきの RC_setReadLimit(…)・LIMIT_MM = 数 と推奨の例は physics_model の
+//        「上限の決め方」の項にだけある。−3 の置き換えの例に 999（上限なしでは距離より小さい値）を使っていない。
+// v12.1.0（Stage BR）: 見本の RC_read の値の扱いを、実機の見本（正本 RumiCar-lib v0.7.1 の Exercise-3.3・4.2-Answer／RasPi の Exercise-3.1〜3.3）と
+//   同じ決まりにした。D-4 は「先頭の定数 LIMIT_MM ＝ 数」と「RC_setup() の次の行の RC_setReadLimit(LIMIT_MM)」を見る形に改めた。
+//   D-6) 値の扱い: 6 本とも FAR_MM を 1 回だけ数で定義し（測距レンジより大きい）、旧い名前 FAR が残っていない。見本 3 言語は RC_read が返した値のまま
+//        出力する。RC_read だけを入力の列に差し替えた本番の処理系（buildApi の環境＋buildController）で、-1 を含む回は RC_drive(BRAKE, 0) だけを出して
+//        状態を変えない（次の回は -1 の無い列と同じ指令に戻る）こと、-3 は「近い」と扱わないこと、3 言語の見本の指令が全回一致することを見る。
+//        **本シムの測距は前・左・右で -1 を作らない**（下の D-7）ので、-1 の分岐は本番の走行（runRace・▶）では実行されない。ここだけは RC_read を
+//        差し替えて確かめる（差し替えるのはホストの環境の 1 つの名前だけで、product のコードは変えない）。
+//   D-7) 説明の主張と実測: (a) 前・左・右の RC_read は -1 を返さない＝センサーノイズ ON で欠測の確率を 1 にしても -3（本番の sensors.js・buildApi）。
+//        後方センサーの無い車の RC_read(REAR) は -1。 (b) C++ での引数の読み方（physics_model の「C++ での引数の読み方」）＝方向の 0.5・true は
+//        RC_read が -2・RC_steer／RC_drive／RC_setReadLimit が 0、1.0 は方向として読む、数字だけの文字列の速さは数として読む、99.9 は 99。
+console.log('\nD) Python 版の車種別プログラム（Wall Hugger）と見本 3 言語（上限は先頭の LIMIT_MM と setup() の RC_setReadLimit・値は距離とステータスに分ける）');
 {
   const RACE_COURSES = SPECS.map((spec) => ({ spec, course: (spec.noRace || spec.bench) ? null : courseMod.buildFromSpec(spec) })).filter((b) => b.course && b.course.finish);
   ok(RACE_COURSES.length === 56, `完走が定義される卓上コースは 56（実測 ${RACE_COURSES.length}）`);
@@ -442,15 +455,19 @@ console.log('\nD) Python 版の車種別プログラム（Wall Hugger）と見�
     ['docs/physics_model.md §12', MD, /g ≈ (\d+) \+ ([\d.]+)·R/], ['docs/physics_model.en.md §12', EN, /g ≈ (\d+) \+ ([\d.]+)·R/]]);
   forbid('旧い主張（C 版の写し・「走りは C 版と同じとは限らない」）が残っていない', /走りは C ?版と同じとは限|C ?版 [A-Za-z ]+の土台を Python|does not always drive the same as the C version|走りは C版と同一|完全に同一 \(=|走行挙動は C 版と同一|driving is identical to the C version/, [...DOC_TEXT, ...PROG_TEXT]);
 
-  // D-4: 上限は setup() の RC_setReadLimit の 1 行で決める・56 コースの verifyHash は v11.1.0 と同じ。
+  // D-4: 上限は先頭の定数 LIMIT_MM に書き、setup() の RC_setReadLimit(LIMIT_MM) の 1 行で決める（v12.1.0。v12.0.0 は setup() の行に数を直接書いた）・
+  //      56 コースの verifyHash は v11.1.0 と同じ。
   const SHIPPED = [['sample_c', 'c', SAMPLES.c], ['sample_py', 'py', SAMPLES.py], ['sample_js', 'js', SAMPLES.js],
     ...pairs.map(([pk]) => [pk, 'py', programs.PROGRAM_BY_KEY[pk].code])];
   const codeOnly = (lang, src) => src.split('\n').map((l) => (lang === 'py' ? l.replace(/#.*$/, '') : l.replace(/\/\/.*$/, ''))).join('\n');
   for (const [key, lang, src] of SHIPPED) {
     const code = codeOnly(lang, src);
     const calls = code.match(/RC_setReadLimit\s*\(/g) || [];
-    const m = /RC_setup\(\)\s*;?\s*\n\s*RC_setReadLimit\(\s*(\d+)\s*\)/.exec(code);
-    ok(calls.length === 1 && !!m, `${key}: RC_setReadLimit(上限) を 1 回だけ、RC_setup() の次の行で呼ぶ（呼び出し ${calls.length} 個）`);
+    const m = /RC_setup\(\)\s*;?\s*\n\s*RC_setReadLimit\(\s*LIMIT_MM\s*\)/.exec(code);
+    ok(calls.length === 1 && !!m, `${key}: RC_setReadLimit(LIMIT_MM) を 1 回だけ、RC_setup() の次の行で呼ぶ（呼び出し ${calls.length} 個）`);
+    const defs = [...code.matchAll(/\bLIMIT_MM\s*=\s*(\d+)\b/g)];
+    ok(defs.length === 1 && defs[0].index < code.indexOf('RC_setup') && !/RC_setReadLimit\(\s*(?:[A-Z]+\s*,\s*)?\d/.test(code),
+      `${key}: 上限の数値は先頭の定数 LIMIT_MM の 1 か所だけ（定義 ${defs.length} 個${defs[0] ? '・値 ' + defs[0][1] : ''}・RC_setReadLimit に数を直接書いていない）`);
     ok(code.indexOf('RC_setReadLimit') < code.indexOf('RC_read'), `${key}: 上限を決めるのは RC_read を呼ぶより前`);
   }
   const V11_1_0 = { sample_c: '4e6bd4aa63597a21', sample_py: '4e6bd4aa63597a21', sample_js: '4e6bd4aa63597a21',
@@ -470,17 +487,119 @@ console.log('\nD) Python 版の車種別プログラム（Wall Hugger）と見�
     ...programs.PROGRAMS.flatMap((p) => [[`programs.js ${p.key} strategy`, p.strategy || ''], [`programs.js ${p.key} learns`, p.learns || '']])];
   const numbered = appTexts.filter(([, t]) => sentences(t).some((x) => LIMIT_API.test(x) && LIMIT_NUM.test(x))).map(([n]) => n);
   ok(numbered.length === 0, `アプリ内の説明（${appTexts.length} 個）で、RC_read／RC_setReadLimit に触れる文に一律の打ち切りの数値が無い${numbered.length ? ' — 残っている: ' + numbered.slice(0, 5).join('・') : ''}`);
-  const literal = appTexts.filter(([, t]) => /RC_setReadLimit\(\s*(?:[A-Z]+\s*,\s*)?\d/.test(t)).map(([n]) => n);
-  ok(literal.length === 0, `アプリ内の説明に数値つきの RC_setReadLimit(…) が無い${literal.length ? ' — 残っている: ' + literal.slice(0, 5).join('・') : ''}`);
+  const LIMIT_LITERAL = /RC_setReadLimit\(\s*(?:[A-Z]+\s*,\s*)?\d|\bLIMIT_MM\s*=\s*\d/;   // 数値つきの RC_setReadLimit(…)・LIMIT_MM = 数
+  const literal = appTexts.filter(([, t]) => LIMIT_LITERAL.test(t)).map(([n]) => n);
+  ok(literal.length === 0, `アプリ内の説明に数値つきの RC_setReadLimit(…)・LIMIT_MM = 数 が無い${literal.length ? ' — 残っている: ' + literal.slice(0, 5).join('・') : ''}`);
   forbid('−3 の置き換えの例に 999 を使っていない（上限なしでは 1000 mm 以上の距離より小さい）', /d = 999\b|== ?-3\)? ?\w+ ?= ?999\b/, [...DOC_TEXT.filter(([n]) => !/^docs\//.test(n)), ...PROG_TEXT]);
   for (const [name, text, head, next, ex] of [['docs/physics_model.md', MD, '#### 上限の決め方', '#### 出荷の見本の走り方', /推奨の例は 200 mm/],
     ['docs/physics_model.en.md', EN, '#### Choosing the limit', '#### How the shipped samples drive', /recommended example is 200 mm/]]) {
     const a = text.indexOf(head), b = text.indexOf(next);
     ok(a > 0 && b > a, `${name}: 「上限の決め方」の項がある`);
     const inside = text.slice(a, b), outside = text.slice(0, a) + text.slice(b);
-    ok(ex.test(inside) && /RC_setReadLimit\(200\)/.test(inside), `${name}: 推奨の例と数値つきの RC_setReadLimit(…) が「上限の決め方」の項にある`);
-    const leak = sentences(outside).filter((x) => /RC_setReadLimit\(\s*(?:[A-Z]+\s*,\s*)?\d/.test(x) || (LIMIT_API.test(x) && LIMIT_NUM.test(x)));
+    ok(ex.test(inside) && /\bLIMIT_MM = 200\b/.test(inside) && /RC_setReadLimit\(LIMIT_MM\)/.test(inside) && !/RC_setReadLimit\(\s*(?:[A-Z]+\s*,\s*)?\d/.test(inside),
+      `${name}: 推奨の例・LIMIT_MM = 数・RC_setReadLimit(LIMIT_MM) が「上限の決め方」の項にある（RC_setReadLimit に数を直接書いた例は無い）`);
+    const leak = sentences(outside).filter((x) => LIMIT_LITERAL.test(x) || (LIMIT_API.test(x) && LIMIT_NUM.test(x)));
     ok(leak.length === 0, `${name}: 「上限の決め方」の項の外に上限の数値が無い${leak.length ? ' — ' + leak.slice(0, 2).map((x) => x.slice(0, 60)).join(' ／ ') : ''}`);
+  }
+
+  // D-6: 値の扱い（v12.1.0）。まず字面: FAR_MM は 1 回だけ数で定義し、測距レンジより大きい。旧い名前 FAR は残っていない。
+  const RANGE_MM = config.SENSOR_RANGE.maxMm;
+  for (const [key, lang, src] of SHIPPED) {
+    const code = codeOnly(lang, src);
+    const far = [...code.matchAll(/\bFAR_MM\s*=\s*(\d+)\b/g)];
+    ok(far.length === 1 && +far[0][1] > RANGE_MM && !/\bFAR\b/.test(code), `${key}: FAR_MM を 1 回だけ定義し、測距レンジ ${RANGE_MM} mm より大きい（定義 ${far.length} 個${far[0] ? '・値 ' + far[0][1] : ''}）・旧い名前 FAR は無い`);
+    ok(/-1\s*\)?\s*[{:]\s*\n\s*RC_drive\(\s*BRAKE\s*,\s*0\s*\)/.test(code), `${key}: -1 の判定の次の行が RC_drive(BRAKE, 0)（ステータスのブロック）`);
+  }
+  // RC_read だけを入力の列に差し替えて、本番の処理系（buildApi の環境＋buildController）で 1 回ずつ進める。差し替えるのはホストの環境の RC_read の
+  //   1 つだけ（py は pythonEnv がこの環境から RC_read を取る）。指令は product の車（steer・driveDir・pwm）から読む（物理は進めない）。
+  const D = config.CONST;
+  const hostWorld = (walls = [], pose = { x: 0, y: 0, theta: 0 }) => {
+    const car = new M.physics.Car(pose), lines = []; let buf = '';
+    const world = { car, walls, log: (m2, nl) => { buf += String(m2); if (nl) { lines.push(buf); buf = ''; } }, _sensors: [], _others: [], _sensGen: 0, _simMs: 0, _pendingDelay: 0, start: pose, rear: false };
+    return { car, world, lines, env: api.buildApi(world) };
+  };
+  const scripted = (lang, src, seq) => {
+    const { car, lines, env } = hostWorld();
+    let k = 0;
+    env.RC_read = (d) => { const v = seq[Math.min(k, seq.length - 1)]; return d === D.LEFT ? v[0] : d === D.CENTER ? v[1] : d === D.RIGHT ? v[2] : -2; };
+    const ctl = runner.buildController(src, lang, env); ctl.setup();
+    const out = [];
+    for (k = 0; k < seq.length; k++) { car.driveDir = 'x'; car.steer = 'x'; ctl.tick(); out.push(`${car.steer}/${car.driveDir}/${car.pwm}`); }   // 'x' のまま＝その回は呼ばれなかった
+    return { out, lines };
+  };
+  // 入力の列 [左, 中央, 右]: 右の壁に沿う → 前に壁 → 詰まって後退 → (後退が終わるまで) → 両側の壁 → どこにも壁が見えない → 上限ちょうど・0 など。
+  const rep = (v, n) => Array.from({ length: n }, () => v);
+  const BASE = [[-3, -3, 120], [-3, -3, 90], [-3, -3, 180], [-3, 150, 120], [140, 60, -3], ...rep([-3, -3, 120], 12),
+    [100, -3, 150], [150, -3, 100], [120, -3, 125], ...rep([-3, -3, -3], 14), [200, 200, 200], [0, -3, 0], [-3, 199, -3], [-3, 200, -3]];
+  const M1 = [[-1, -3, 120], [-3, -1, 120], [-3, -3, -1], [-1, -1, -1]];   // -1 を左・中央・右・3 つとも
+  const withM1 = [], isM1 = [];
+  BASE.forEach((v, i) => { withM1.push(v); isM1.push(false); if (i % 3 === 1) { withM1.push(M1[((i - 1) / 3) % M1.length]); isM1.push(true); } });
+  const STOP = `x/${D.BRAKE}/0`;
+  const runs = {};
+  for (const [key, lang, src] of SHIPPED) {
+    const a2 = scripted(lang, src, BASE), b2 = scripted(lang, src, withM1);
+    runs[key] = b2;
+    const atM1 = b2.out.filter((_, i) => isM1[i]), rest = b2.out.filter((_, i) => !isM1[i]);
+    ok(atM1.length >= 12 && atM1.every((x) => x === STOP), `${key}: -1 を含む回（${atM1.length} 回・左／中央／右／3 つとも）は RC_drive(BRAKE, 0) だけを出す（RC_steer を呼ばない）`);
+    ok(rest.join(',') === a2.out.join(','), `${key}: -1 の回を除いた ${rest.length} 回の指令は、-1 の無い列と同じ（-1 の回は状態を変えない＝後退の残り回数なども進めない）`);
+    ok(!a2.out.includes(STOP) && a2.out.every((x) => !x.includes('x')), `${key}: -1 の無い列では止まらず、毎回 RC_steer と RC_drive を出す`);
+    const backT = +(/\bBACKT\s*=\s*(\d+)/.exec(codeOnly(lang, src)) || [])[1];
+    const rev = a2.out.filter((x) => x.split('/')[1] === String(D.REVERSE)).length;
+    const tail = a2.out.slice(20 + 8, 20 + 14);   // どこにも壁が見えない 14 回のうち後ろの 6 回
+    ok(rev === backT + 1 && tail.length === 6 && tail.every((x) => x === `${D.RIGHT}/${D.FORWARD}/180` || x === `${D.CENTER}/${D.FORWARD}/180`),
+      `${key}: 後退は前が近い 1 回と、続く BACKT 回だけ（${rev} 回＝${backT}＋1）・3 つとも -3 の回は右へ切るかまっすぐで前進（-3 を「近い」と扱わない＝後退しない）`);
+  }
+  const s3 = ['sample_c', 'sample_py', 'sample_js'].map((k2) => runs[k2].out.join(','));
+  ok(s3[0] === s3[1] && s3[1] === s3[2], `見本 3 言語: -1 を含む ${withM1.length} 回の指令が全回一致`);
+  ok(runs.py_normal_fr.out.join(',') === s3[1], 'Python 版 Wall Hugger（FR）の指令は見本と全回一致（同じロジック・同じ定数）');
+  for (const k2 of ['sample_c', 'sample_py', 'sample_js']) {
+    const lines = runs[k2].lines.map((l) => l.trim()).filter((l) => /^-?\d+ -?\d+ -?\d+$/.test(l));
+    ok(lines.length === withM1.length && lines.every((l, i) => l === withM1[i].join(' ')) && !lines.some((l) => /9999/.test(l)),
+      `${k2}: 出力は RC_read が返した値のまま（${lines.length} 行・-3 と -1 がそのまま出る・置き換えた値は出ない）`);
+  }
+  for (const [name, text, re] of [['docs/physics_model.md', MD, /出力には返ってきた値のまま出します/], ['docs/physics_model.en.md', EN, /Print the values as they came back/],
+    ['docs/physics_model.md', MD, /−1\(応答なし\)は止まります/], ['docs/physics_model.en.md', EN, /−1 \(no answer\): stop/]]) ok(re.test(text), `${name}: 「値を扱う順序」に ${re.source} がある`);
+  // アプリ内の「使い方」7 章（日英）にも同じ決まりが書いてある（-1 は止まる・FAR_MM は大小の比較だけ・上限は LIMIT_MM）。
+  for (const [name, text, re] of [['usage.s7.conf (ja)', msg('usage.s7.conf', 'ja'), /-1 \(応答なし\) は <code>RC_drive\(BRAKE, 0\)<\/code> で止まり/], ['usage.s7.conf (en)', msg('usage.s7.conf', 'en'), /On -1 \(no answer\) stop with <code>RC_drive\(BRAKE, 0\)<\/code>/],
+    ['usage.s7.conf (ja)', msg('usage.s7.conf', 'ja'), /<code>FAR_MM<\/code> は大小の比較にだけ使い/], ['usage.s7.conf (en)', msg('usage.s7.conf', 'en'), /Use <code>FAR_MM<\/code> only for comparisons/],
+    ['usage.s7.limit (ja)', msg('usage.s7.limit', 'ja'), /<code>RC_setReadLimit\(LIMIT_MM\)<\/code> と呼び/], ['usage.s7.limit (en)', msg('usage.s7.limit', 'en'), /call <code>RC_setReadLimit\(LIMIT_MM\)<\/code>/]]) ok(re.test(text), `${name}: 使い方 7 章に ${re.source} がある`);
+
+  // D-7 (a): 前・左・右の RC_read は -1 を返さない。センサーノイズ ON・欠測の確率 1 でも -3（本番の測距と buildApi）。後方センサーの無い REAR は -1。
+  {
+    const oval = courseMod.buildFromSpec({ name: 'オーバル', kind: 'track', shape: 'ellipse', rx: 1.2, ry: 0.75, width: 0.55 });
+    const N = config.SENSOR_NOISE, sav = { on: N.on, dropout: N.dropout };
+    const read = (noise, dropout) => {
+      N.on = noise; N.dropout = dropout;
+      const seen = new Set(); let n = 0;
+      for (let x = -1.0; x <= 1.0; x += 0.25) for (const th of [0, 1.2, 2.4, 3.6, 4.8]) {
+        const { env } = hostWorld(oval.walls, { x, y: 0.75, theta: th });
+        for (const d of [D.LEFT, D.CENTER, D.RIGHT]) { const v = env.RC_read(d); n++; seen.add(v >= 0 ? 'dist' : String(v)); }
+        seen.add('REAR' + env.RC_read(D.REAR));
+      }
+      return { seen: [...seen].sort().join(' '), n };
+    };
+    const off = read(false, sav.dropout), drop = read(true, 1);
+    N.on = sav.on; N.dropout = sav.dropout;
+    ok(!/(^| )-1/.test(off.seen) && /dist/.test(off.seen) && /REAR-1/.test(off.seen), `センサーノイズ OFF: 前・左・右の RC_read ${off.n} 個に -1 は無い・後方センサーの無い RC_read(REAR) は -1（${off.seen}）`);
+    ok(drop.seen === '-3 REAR-1', `センサーノイズ ON・欠測の確率 1: 前・左・右の RC_read ${drop.n} 個はすべて -3（-1 にならない）（${drop.seen}）`);
+    for (const [name, text, re] of [['docs/physics_model.md', MD, /本シムの前・左・右のセンサーは −1 を返しません/], ['docs/physics_model.en.md', EN, /front, left and right sensors never return −1/],
+      ['spec.sensor.range (ja)', msg('spec.sensor.range', 'ja'), /シミュレータでは後方センサー未装備の <code>REAR<\/code> だけ/], ['spec.sensor.range (en)', msg('spec.sensor.range', 'en'), /only by <code>REAR<\/code> without the rear sensor/]]) ok(re.test(text), `${name}: 「前・左・右は −1 を返さない」と書いてある`);
+  }
+  // D-7 (b): C++ での引数の読み方（説明の例と同じ呼び出しを C++ の処理系に通す）。
+  {
+    const cRun = (expr) => {
+      const { car, lines, env } = hostWorld();
+      const ctl = runner.buildController(`void setup(){ RC_setup(); }\nvoid loop(){ Serial.println(${expr}); }\n`, 'c', env); ctl.setup(); ctl.tick();
+      return { ret: lines.filter((l) => !/⚠/.test(l))[0], warn: lines.filter((l) => /⚠/.test(l)).length, car };
+    };
+    const got = [cRun('RC_read(0.5)'), cRun('RC_read(true)'), cRun('RC_steer(0.5)'), cRun('RC_steer(true)'), cRun('RC_drive(true, 100)'), cRun('RC_setReadLimit(0.5, 150)')];
+    ok(got[0].ret === '-2' && got[1].ret === '-2' && got.slice(2).every((g) => g.ret === '0' && g.warn === 1) && got[2].car.steer === D.CENTER && got[4].car.driveDir === D.FREE,
+      `C++: 方向の 0.5・true は不正（RC_read は ${got[0].ret}／${got[1].ret}・RC_steer／RC_drive／RC_setReadLimit は 0 を返して何もしない・警告 1 回）`);
+    const one = cRun('RC_read(1.0)'), str = cRun('RC_drive(FORWARD, "150")'), frac = cRun('RC_drive(FORWARD, 99.9)'), tru = cRun('RC_drive(FORWARD, true)');
+    ok(one.ret === '-3' && str.car.pwm === 150 && str.warn === 0 && frac.car.pwm === 99 && tru.car.pwm === 1,
+      `C++: 1.0 は方向として読む（壁なしで ${one.ret}）・"150" は速さ ${str.car.pwm}・99.9 は ${frac.car.pwm}・true は ${tru.car.pwm}`);
+    ok(/0\.5 は 0＝`LEFT`、`true` は 1＝`CENTER`/.test(MD) && /0\.5 becomes 0 = `LEFT`, `true` becomes 1 = `CENTER`/.test(EN) && /`RC_drive\(FORWARD, "150"\)` は速さ 150/.test(MD) && /`RC_drive\(FORWARD, "150"\)` is speed 150/.test(EN),
+      'physics_model（ja/en）の「C++ での引数の読み方」に、上の例と同じ読み方が書いてある');
   }
 }
 

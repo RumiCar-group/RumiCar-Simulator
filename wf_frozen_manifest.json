@@ -20,11 +20,11 @@
   "canonicalNode": {
     "node": "22.22.1",
     "v8": "12.4.254.21-node.35",
-    "resultSha256": "a56924e1f100aa90d2a29afe535f99cabaefbd2ddaaa326661b53575a0dac8b6",
-    "pinnedAt": "2026-11-21",
+    "resultSha256": "e4e1e61d5de6cbe685f6f8b0c21845147339eae9b091b80c5b0aec7484ccd648",
+    "pinnedAt": "2026-11-22",
     "eventId": "official-sample-circuit",
-    "appVersion": "v12.0.0",
-    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=e9f1da0b 照合で検証済。理由: v12.0.0（Stage BQ・MAJOR）: APP_VERSION の変更で engineVer が変わったため resultSha256 を再ピン（verifyHash e9f1da0b 不変・走行物理と測距は無改変。学習 API RC_read の一律の打ち切りの撤回と RC_setReadLimit の追加）"
+    "appVersion": "v12.1.0",
+    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=e9f1da0b 照合で検証済。理由: v12.1.0（Stage BR・MINOR）: APP_VERSION の変更で engineVer が変わったため resultSha256 を再ピン（verifyHash e9f1da0b 不変・走行物理・測距・学習 API は無改変。出荷の見本と説明の RC_read の値の扱いを実機の見本の決まりにそろえた）"
   },
   "history": [
     {
