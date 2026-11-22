@@ -348,16 +348,19 @@ console.log('\nE) 出荷サンプルの AST 指紋（本文が同じなら AST �
 //   recon_racer/comp_localize/strategist の Serial→print・SAMPLES 3 本＝Wall Hugger）は新しい本文で刻み直した（_pins 相当の同じ式で実測）。
 // Stage BO（v11.0.0）: RC_drive の速さが四捨五入から 0 方向への切り捨て（正本の int）になったので、小数の速さを渡していた 3 本
 //   （comp_launch・comp_brake の (int)(… + 0.5)・strategist の int(pwm+0.5)）に四捨五入を書き足して刻み直した（走りは是正前と traceHash・verifyHash が一致）。
+// Stage BQ（v12.0.0）: ライブラリの側の一律の打ち切りをやめ、上限はプログラムが setup() の RC_setReadLimit で決める。本文を変えた 10 本を刻み直した:
+//   py_normal_fr/awd/ff と SAMPLES 3 本＝setup() の RC_setReadLimit の行と −3 の置き換え値（AST も変わる。卓上 56 コースの verifyHash は v11.1.0 と一致＝wf_bh6_docs D-4）、
+//   drift_fr/awd/ff と comp_estimate＝コメントだけ（本文の sha は変わり、AST は v11.1.0 と同じ値のまま）。
 const AST_PIN = [
   ['PROGRAMS:normal_fr', 'd244897d62418fde', '3ba1d12415e30aacd6e250cc943ac2635b1d5e91242a382c5de3b12088236f36'],
   ['PROGRAMS:normal_awd', 'ae7a6827aea6fb4e', 'd0d1b94a58cf05ae5f0aca2845b143327bdb1f78a286a7ee406f52d0707ae782'],
   ['PROGRAMS:normal_ff', '65d50c348f206469', '5aeaccafe4c802cf7248863550bfca7ce8597e2cdc677c245c7185007648cef7'],
-  ['PROGRAMS:drift_fr', '8a8356198710859a', 'cb9868d86d2fa84bc830a5f2a11c20e7eab8fd9207693cc156e314d73abc171c'],
-  ['PROGRAMS:drift_awd', 'da5f99dd07cfd68d', 'be2408f544d093af593d4f3eebeaf2726b093bd987d9540181327a6733d3e654'],
-  ['PROGRAMS:drift_ff', '5890e388bc949846', '2fa73da56fe5ff332d10cd967cb909cd9aa8597b447bd40dc850393ba61c4d99'],
-  ['PROGRAMS:py_normal_fr', 'f6027d32f4f874aa', '584ae1f64d18bd3531edf4a4070ec81a8a727775b86058dde01b70b6b0597f5e'],
-  ['PROGRAMS:py_normal_awd', '9ab223e24ac21a74', 'efd04b170f3817ab28d94011e0e9517cb8c84b0172938d18501b4f0c535bf446'],
-  ['PROGRAMS:py_normal_ff', '36d373b65cd5dd4c', 'cbc137a36b37dcd49de4251f1b5a0e82cc329bc4228161d9a453ec71c2379e4c'],
+  ['PROGRAMS:drift_fr', 'a461332a5a390c9f', 'cb9868d86d2fa84bc830a5f2a11c20e7eab8fd9207693cc156e314d73abc171c'],
+  ['PROGRAMS:drift_awd', '7f51d0917defd41e', 'be2408f544d093af593d4f3eebeaf2726b093bd987d9540181327a6733d3e654'],
+  ['PROGRAMS:drift_ff', '9e57770b3d0d5388', '2fa73da56fe5ff332d10cd967cb909cd9aa8597b447bd40dc850393ba61c4d99'],
+  ['PROGRAMS:py_normal_fr', 'e6c4de49b2c1aca9', 'bfee3af36ddb96ccbe9ec4bc5bc949eccd669096773526e78548e77eb585bbed'],
+  ['PROGRAMS:py_normal_awd', '8c2564d696b609d6', 'c407df256f38a948a6cfacd5da1c1b80e4463e10c547ac55d4fcc9f647421493'],
+  ['PROGRAMS:py_normal_ff', '4a4093fd85021811', 'afb1710c683a9c3346e5a98511fad4d2e19817005d241d365960162fd9292ff0'],
   ['PROGRAMS:showtime', '0f8a2e2aae35fcd2', 'af3071a3885ab9b31ba6ae4e242e7ccf01fa3320ba8fdd16a1cbf3710a137e43'],
   ['PROGRAMS:zerocounter', '5d05f115101384fc', '939eb1ff2345d7bad7a33a81879f16045f4b6a7cacccbf4d7c1f29028ed8eadc'],
   ['PROGRAMS:comp_demo', '9b3eb17e92379dcd', '2bbbcff16ed01fa7c3d3c6c6ab3eec9d448a437aceb02b8efac73fc60da1f06f'],
@@ -366,15 +369,15 @@ const AST_PIN = [
   ['PROGRAMS:comp_circuit', 'b48e13fa730b7921', '8ce41932717cf449f4cc72eb93f07fb55fe3c825420f201ec58bf45f9b3a0631'],
   ['PROGRAMS:comp_drift', 'c351cf25a89271fb', '8fd400867b57c7dadd4db7529dcc9fab94497d6cb064a09ef8dca0b4e71de023'],
   ['PROGRAMS:comp_slip', 'e2dcf2c8ba532115', 'a87bdad11c8aafa6b2754f80deec57d66f1bf54158b423b4e004ee56d6a7edcf'],
-  ['PROGRAMS:comp_estimate', '1df573aea76f21dd', '78fa07769f6793ba71cbbaa20acf3111318c24746ea800cce80206be19f8c344'],
+  ['PROGRAMS:comp_estimate', '5b2d9b1c9dae84fb', '78fa07769f6793ba71cbbaa20acf3111318c24746ea800cce80206be19f8c344'],
   ['PROGRAMS:recon_racer', '3a93b8cadb57648b', '08a0f0401c6bd7d34e5ca43429fef9a250e1d11c403e9bd7d27019972b2bfe8a'],
   ['PROGRAMS:comp_localize', '5cef3fc7e18b84da', 'a5f5d9847166444b6808fdc6b8d3c0fa673a11b5eaea1792637437d481aa10b7'],
   ['PROGRAMS:recon_racer_c', '221af979a07b1799', '3b8b4aea60cdfd1f7626bad2477bd34716765ec8631254ecfc32ad01ad5bf9d4'],
   ['PROGRAMS:comp_localize_c', '5589ae03a02759bf', '2d17083effcb920d7538bd5074ea2bb376d5df2a5e680297ba32d71885780038'],
   ['PROGRAMS:strategist', 'c070896fd2c91115', 'c246dcffc6393fd7ea8124a8f83c8ef117de4537826050ef226c88a74c50fb61'],
-  ['SAMPLES:c', '2a4bb41e3dbaa897', '65f5bbe22d128402aa2f8a86e18462a4fb0c85e0595640cfca62f4a2ab9c209c'],
-  ['SAMPLES:py', 'b1549c518cb907f5', '9b598c0df3f3c27da590b0b33d3104d6b149c055564a33f7a14826ba32a73c98'],
-  ['SAMPLES:js', '1c94f453307cf88f', null],   // BJ2: js はパーサ非経由（new Function）＝本文の指紋だけ（2026-10-11・bf780f8 で実測）
+  ['SAMPLES:c', 'fc4f73a5c14459cb', '683249bf6f36b747d8c89c0ca2095a80c892350d1c4fd4e947c2a5aed5e06a1e'],
+  ['SAMPLES:py', '6f3860685a9a07f7', '4f52cbc191f82fdac3bafb74266a39ee611c69957221254b2ab1640a96c991a9'],
+  ['SAMPLES:js', '7636de4dac5e0276', null],   // BJ2: js はパーサ非経由（new Function）＝本文の指紋だけ（2026-10-11・bf780f8 で実測）
 ];
 {
   const pin = new Map(AST_PIN.map(([k, s, a]) => [k, { src16: s, ast: a }]));

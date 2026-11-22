@@ -20,11 +20,11 @@
   "canonicalNode": {
     "node": "22.22.1",
     "v8": "12.4.254.21-node.35",
-    "resultSha256": "5726b830b0bc900c0381d4209da2dfc5f38443044aa58f06c70d1dcb19d0e637",
-    "pinnedAt": "2026-11-15",
+    "resultSha256": "a56924e1f100aa90d2a29afe535f99cabaefbd2ddaaa326661b53575a0dac8b6",
+    "pinnedAt": "2026-11-21",
     "eventId": "official-sample-circuit",
-    "appVersion": "v11.1.0",
-    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=e9f1da0b 照合で検証済。理由: v11.1.0（Stage BP・MINOR）: APP_VERSION の変更で engineVer が変わったため resultSha256 を再ピン（verifyHash e9f1da0b 不変・走行物理は無改変）"
+    "appVersion": "v12.0.0",
+    "note": "AP20 公式レース正準実行ツール (wf_official_result.mjs) が pin。result.json 生成環境の Node/V8 版と正準サンプル (official-sample-circuit) の resultSha256。第三者は同 pin で再実行→verifyHash=e9f1da0b 照合で検証済。理由: v12.0.0（Stage BQ・MAJOR）: APP_VERSION の変更で engineVer が変わったため resultSha256 を再ピン（verifyHash e9f1da0b 不変・走行物理と測距は無改変。学習 API RC_read の一律の打ち切りの撤回と RC_setReadLimit の追加）"
   },
   "history": [
     {

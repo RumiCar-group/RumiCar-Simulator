@@ -2,7 +2,7 @@
 // すべての調整可能パラメータをここに集約する。
 
 // アプリのバージョン (ヘッダーのバッジ・起動ログに表示する単一ソース)。
-export const APP_VERSION = 'v11.1.0';
+export const APP_VERSION = 'v12.0.0';
 
 // 変更履歴 (CHANGELOG) は **`./changelog.js` に分離**した (Stage AS2)。表示専用のデータ塊で
 // 起動のコース初描画には使わないのに、critical path 上の本ファイル (ほぼ全モジュールが import)
@@ -23,14 +23,15 @@ export const CONST = {
   FRONT: 0,
 };
 
-// RC_read (学習 API) の打ち切り [mm]。正本 (RumiCar-lib v0.5.1・RasPi RumiCar.py・Zero2Cam ABI 3) は実機 ToF の
-// 測距を 200 mm で打ち切り、それより先に何も無いときは -3 を返す。シミュレータも卓上はこれに合わせる
-// (実機の模型と同じ条件で学ぶ)。領域ごとの値は REGIMES[*].rcReadMaxMm (卓上 200・中スケールは長さ相似で
-// ×kL・フルスケールは 0=打ち切り無し: 実車は ToF の搭載位置が高く地面を捉えないため現状のレンジのまま)。
-// 打ち切るのは RC_read だけで、測距そのもの (sensors.js のレンジ・描画) と C/JS の生読取
-// sensorN.readRangeSingleMillimeters() は変えない (走行物理の変更には当たらない)。
+// RC_read (学習 API) をライブラリの側で一律に打ち切る距離 [mm]。0 = 打ち切らない (全領域の既定・v12.0.0 から)。
+// 正本 (RumiCar-lib v0.7.0・RasPi RumiCar.py 0.7.0・Zero2Cam v0.7.0) は、v0.5.1〜v0.6.x の「200 mm で一律に打ち切る」
+// 仕様をやめ、RC_read はセンサーの測距レンジまでをそのまま返す (レンジを超える・反射面なし・低信号は -3)。
+// どこまでの値を信じるかはプログラムが setup() の RC_setReadLimit(上限) で決める (api.js・上限を超える値は -3)。
+// シミュレータも同じ: 領域ごとの値 REGIMES[*].rcReadMaxMm はどの領域も 0 (v11.x は卓上 200・中スケール 400＝長さ相似)。
+// この値が効くのは RC_read だけで、測距そのもの (sensors.js のレンジ・描画) と C/JS の生読取
+// sensorN.readRangeSingleMillimeters() には関係しない (走行物理の変更には当たらない)。
 // applyRegime が下の registerRegimeHook 経由で書き換える live holder (SENSOR_RANGE と同型)。
-export const RC_READ_RANGE = { maxMm: 200 };
+export const RC_READ_RANGE = { maxMm: 0 };
 
 export const CAR = {
   length: 0.19,        // m (車体長 / 衝突ボックス)
@@ -836,8 +837,9 @@ export const REGIMES = {
     rho: 0, Cd: 0, Cl: 0, frontalArea: 0, downforceBalance: 0.5,
     // 表示・知覚メタ。realKmh=false は displayKmh が「最高速比×topKmh」の没入写像を使う (卓上の体感維持)。
     sensorMaxMm: 2000, topKmh: 350, realKmh: false,
-    // RC_read の打ち切り [mm] (RC_READ_RANGE の注記)。卓上=正本と同じ 200 mm。
-    rcReadMaxMm: 200,
+    // RC_read をライブラリの側で打ち切る距離 [mm] (RC_READ_RANGE の注記)。0 = 打ち切らない＝正本と同じ
+    // (上限はプログラムが RC_setReadLimit で決める。v11.x は 200)。
+    rcReadMaxMm: 0,
     // ── v2 エンジン専用タイヤセット較正 (Stage AO6・AO_spec §4・車ごと car.tireSet で選択) ──
     // 卓上は RC 実機ハード相当: normal=ゴム (μ0≈0.8・§4 帯 0.7–0.9) で「通常ドリフトは起きない」
     // (最大到達 ay=v²/R≈1.6 ≪ μg≈7.8 → 機械述語 max|β|<5°)。slip=硬質プラ (μ0≈0.20・帯 0.15–0.30)
@@ -917,7 +919,7 @@ export function scaleRegime(base, { name, desc, kL = 1, kMu = 1, kG = 1, topKmh 
     frontalArea: base.frontalArea || 0,
     downforceBalance: (base.downforceBalance != null) ? base.downforceBalance : 0.5,
     sensorMaxMm: Math.round(base.sensorMaxMm * kL), topKmh: topKmh || base.topKmh,
-    rcReadMaxMm: Math.round((base.rcReadMaxMm || 0) * kL),   // RC_read の打ち切りも長さ相似 (sensorMaxMm と同じ扱い)
+    rcReadMaxMm: Math.round((base.rcReadMaxMm || 0) * kL),   // RC_read の一律の打ち切り (長さ相似・sensorMaxMm と同じ扱い)。卓上が 0 なので 0＝打ち切らない
     realKmh: base.realKmh || false,
   };
 }
@@ -1022,12 +1024,12 @@ REGIMES.fullscale = {
   // fullscale チューニング)。競技グラウンドの TC/ABS サンプルは ToF を読まない (車輪エンコーダのみ) ので
   // この拡張の影響を受けない (test_comp 不変)。卓上/中スケールの sensorMaxMm は不変 (卓上 byte 不変)。
   sensorMaxMm: 150000, topKmh: 350, realKmh: true,
-  // RC_read の打ち切り無し (0)。実車は ToF の搭載位置が高く地面を捉えないため、現状のレンジ (sensorMaxMm) のまま。
+  // RC_read の一律の打ち切り無し (0・卓上・中スケールと同じ)。RC_read は測距レンジ (sensorMaxMm) までを返す。
   rcReadMaxMm: 0,
 };
 
-// RC_read の打ち切りを領域に連動させる (applyRegime の末尾フック。SENSOR_RANGE.maxMm の sensorMaxMm 連動と同型)。
-// 未定義 (旧形式の custom 領域) は 0=打ち切り無し。
+// RC_read の一律の打ち切りを領域に連動させる (applyRegime の末尾フック。SENSOR_RANGE.maxMm の sensorMaxMm 連動と同型)。
+// v12.0.0 からどの領域も 0＝打ち切り無し。未定義 (旧形式の custom 領域) も 0。
 registerRegimeHook((r) => { RC_READ_RANGE.maxMm = (r && r.rcReadMaxMm) ? r.rcReadMaxMm : 0; });
 
 // 走行軌跡の保持量 (利用者が増減可能)。max = 保持する最大点数 (点間隔は約1cm)。

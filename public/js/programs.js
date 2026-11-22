@@ -245,7 +245,7 @@ void loop() {
   if (escRec > 0) { escRec = escRec - 1; RC_steer(CENTER); RC_drive(FORWARD, 90); cur = 90; return; }
 
   // [防御] 後方に追走車 → 約3秒防御を維持 (横に並ばれ後方レイが見失っても解かない)
-  int B = sensor3.readRangeSingleMillimeters();   // 後方(任意装備)の生読取。未装備/範囲外は 8190 (RC_read(REAR) は卓上で 200mm 打ち切り=-3 になるため生値で 650mm を見る)
+  int B = sensor3.readRangeSingleMillimeters();   // 後方(任意装備)の生読取。未装備/範囲外は 8190 (生の値は RC_setReadLimit の上限の影響を受けない)
   if (B >= 0 && B < 650) defOn = 60; else if (defOn > 0) defOn = defOn - 1;
   defT = defT + 1;
   if (DEF_STYLE > 0 && defOn > 0) {
@@ -330,7 +330,7 @@ void loop() {
   if (C < ESC) { if (L > R) RC_steer(RIGHT); else RC_steer(LEFT); RC_drive(REVERSE, 170); return; }
 
   // [防御] 後方に追走車 → 約3秒防御を維持
-  int B = sensor3.readRangeSingleMillimeters();   // 後方(任意装備)の生読取。未装備/範囲外は 8190 (RC_read(REAR) は卓上で 200mm 打ち切り=-3 になるため生値で 650mm を見る)
+  int B = sensor3.readRangeSingleMillimeters();   // 後方(任意装備)の生読取。未装備/範囲外は 8190 (生の値は RC_setReadLimit の上限の影響を受けない)
   if (B >= 0 && B < 650) defOn = 60; else if (defOn > 0) defOn = defOn - 1;
   defT = defT + 1;
   if (DEF_STYLE > 0 && defOn > 0) {
@@ -400,7 +400,7 @@ void loop() {
   if (C < ESC) { if (L > R) RC_steer(RIGHT); else RC_steer(LEFT); RC_drive(REVERSE, 170); prevPwm = 0; return; }
 
   // [防御] 後方に追走車 → 約3秒防御を維持
-  int B = sensor3.readRangeSingleMillimeters();   // 後方(任意装備)の生読取。未装備/範囲外は 8190 (RC_read(REAR) は卓上で 200mm 打ち切り=-3 になるため生値で 650mm を見る)
+  int B = sensor3.readRangeSingleMillimeters();   // 後方(任意装備)の生読取。未装備/範囲外は 8190 (生の値は RC_setReadLimit の上限の影響を受けない)
   if (B >= 0 && B < 650) defOn = 60; else if (defOn > 0) defOn = defOn - 1;
   defT = defT + 1;
   if (DEF_STYLE > 0 && defOn > 0) {
@@ -1048,7 +1048,7 @@ void loop() {
   else RC_drive(FORWARD, pwm);
 
   // ---- 姿勢推定(研究): レンジフロー ----  距離は m に直す。範囲外/未装備は無効。
-  int B = RC_read(REAR);                 // 後方(任意装備)。未装備は -1 (フルスケールは打ち切り無し)
+  int B = RC_read(REAR);                 // 後方(任意装備)。未装備は -1 (上限 RC_setReadLimit を決めていないので測距レンジまで返る)
   double enc = RC_wheel_speed(REAR);     // 車輪面速度[m/s](任意装備)。未装備は -1
   double dL = L / 1000.0; double dC = C / 1000.0; double dR = R / 1000.0; double dB = B / 1000.0;
   t = t + 1;
@@ -2713,27 +2713,31 @@ def loop():
             RC_drive(FORWARD,int(pwm+0.5))   # pwm は加速ガバナで小数になる。+0.5 で四捨五入 (RC_drive は 0 方向へ切り捨てる＝RasPi の int() と同じ)
 `;
 
-// ── 卓上 Lv1〜3 の Python 版「Wall Hugger」(2026-11 API 統一・v11.0.0) ──────────────────────────────
-// RC_read が 20 cm より先を見ない (-3) 正本 (RasPi RumiCar.py / Zero2Cam / Arduino RumiCar-lib) と同じ条件で走る Python のプログラム。
+// ── 卓上 Lv1〜3 の Python 版「Wall Hugger」(2026-11 API 統一・v11.0.0／v12.0.0 で RC_setReadLimit を追加) ──────────────────────────────
+// RC_read の値を信じる距離の上限を setup() の RC_setReadLimit で決め、上限より先は見えない (-3) 条件で走る Python のプログラム
+// (正本 RasPi RumiCar.py 0.7.0 / Zero2Cam v0.7.0 / Arduino RumiCar-lib v0.7.0 と同じ名前・同じ意味。v11.x はライブラリが卓上では 200 mm で一律に打ち切っていた。
+// 上限をその値にしたこの 3 本は、卓上では RC_read から v11.x と同じ値を受け取り、同じ走りをする＝wf_bh6_docs.mjs の D 章が verifyHash を v11.1.0 の値と照合する)。
 // C 版 (Apex Hunter ほか・生読取 sensorN.readRangeSingleMillimeters()＋信頼区間 CONF) とは別のアルゴリズム (右の壁に沿う)。
-// Zero2Cam の形 (def setup()/def loop()) で、RumiCar ライブラリの API だけで書く (RasPi RumiCar.py 0.6.0 以降は
+// Zero2Cam の形 (def setup()/def loop()) で、RumiCar ライブラリの API だけで書く (RasPi RumiCar.py 0.7.0 以降は
 // `python3 RumiCar.py <このファイル>` でそのまま動く。シム・RasPi・Zero2Cam とも loop は 20 Hz で、回数で数える定数 BACKT/SEEK/HOLD はこの周期が前提)。
 // 完走数・3 言語の見本との一致・旋回半径の定数は wf_bh6_docs.mjs の D 章が本番 runRace で実測照合する (数字を変えたら赤)。
 // 【BH6・2026-10-05 の旧注記】旧 Python 版 (C 版の土台の移植) は C 版と走りが同じとは限らなかった — 旧版の記録。本版は別物。
 const PY_FR_CODE = `# Wall Hugger (Python) — ノーマル FR 用  [卓上 Lv1 基準・Python 版]  by Fable 5.1
-# 実測 (v11.0.0・完走が定義される卓上 56 コース・ソロ走行・laps=3・rejoin=OFF): 50/56 完走 (C 版 Apex Hunter は 47/56)。
-# ★学習の出発点★ RumiCar の 3 つの ToF (左 +65°・中央・右 −65°) は 20 cm より先を見ません (RC_read は -3 を返す)。
-#   卓上コースの通路は 20 cm より広いので、真ん中を走ると左右とも -3 になり壁が見えません。
+# 実測 (v12.0.0・完走が定義される卓上 56 コース・ソロ走行・laps=3・rejoin=OFF): 50/56 完走 (C 版 Apex Hunter は 47/56)。
+# ★学習の出発点★ 3 つの ToF (左 +65°・中央・右 −65°) の値をどこまで信じるかは、プログラムが決めます。setup() の RC_setReadLimit で
+#   「上限」を決めると、RC_read は上限より先を -3 (範囲外＝遠い) で返します。実機の ToF は取り付け位置によって、ある距離から先で
+#   床を拾うためです (値の決め方は物理モデル解説 docs/physics_model.md §12「上限の決め方」)。
+#   卓上コースの通路はこの上限より広いので、真ん中を走ると左右とも -3 になり壁が見えません。
 #   そこで「右の壁に寄り、壁に沿って走る」のがこのプログラムの基本です (両側が見える狭い通路では左右の差で真ん中へ)。
 # 土台ロジック (4 つ):
-#   (1) 前方 C に壁が見えたら (20 cm 以内)、左右で「開いている方」へ切る。-3 (何もない) が最も開いている
+#   (1) 前方 C に壁が見えたら (D_TURN より近い)、左右で「開いている方」へ切る。-3 (範囲外) が最も開いている
 #   (2) 右の壁との距離を NEAR〜FARB に保つ (近ければ左へ・遠ければ右へ・ちょうどなら直進で全開)
 #   (3) 右の壁を見失ったら右へ切って探す。長く見えないときは半分の時間だけ切って大回り (同じ場所で円を描き続けない)
 #   (4) 前が ESC より近づいたら、開いている側へ鼻先が向くよう逆ハンで後退して切り返す (行き止まり脱出)
 # ※ FR は駆動 (後輪) と操舵 (前輪) が分かれるので素直に曲がる。曲げるときの速度 TURNV は全開の約 4 割 (110/255) で
 #   旋回半径が小さくなる (アクセルを開けるほどアンダーステアで大回りになる。実測: PWM 200 で走ってから全舵で切り、
 #   その PWM に切り替えたときの旋回半径は 240 で約 0.8 m・70 で約 0.45 m)。
-# ※ -3 は数としては最も小さいので、比較の前に FAR (999) へ置き換える (RasPi・Zero2Cam・Arduino でも同じ書き方)。
+# ※ -3 は数としては最も小さいので、比較の前に FAR へ置き換える (RasPi・Zero2Cam・Arduino でも同じ書き方)。
 #   -1 (読めない) は置き換えずそのまま比較に入る＝「近い」扱いで減速・後退する (安全側)。実機でタイムアウトが多ければ方針を決める。
 
 from RumiCar import *
@@ -2742,13 +2746,13 @@ TOP = 240       # 速度: 壁に沿って安定しているとき (255 = 全開)
 CRUISE = 180    # 速度: 壁を探す・寄せる・真ん中へ寄せるとき
 TURNV = 110     # 速度: 前に壁が見えて曲げるとき (FR は 110 前後で最も小さく回れる)
 BACKV = 150     # 速度: 後退
-D_TURN = 200    # 前方がこれより近ければ曲げる [mm] (20 cm = RC_read が距離を返す上限なので「見えたら曲げる」)
+D_TURN = 200    # 前方がこれより近ければ曲げる [mm] (setup() で決めた上限以下にする。上限と同じ値なら「見えたら曲げる」)
 NEAR = 100      # 右の壁がこれより近ければ左へ [mm]
 FARB = 170      # 右の壁がこれより遠ければ右へ [mm]
 ESC = 80        # 前方がこれより近ければ後退して切り返す [mm]
 BACKT = 8       # 後退を続ける回数 (loop の回数。20 Hz なら 0.4 秒)
 SEEK = 4        # 壁を見失ってから全舵で右へ切り続ける回数。その後は半分の時間だけ切る
-FAR = 999       # -3 (20 cm 以内に何もない) を比較で「遠い」として扱う値
+FAR = 9999      # -3 (範囲外) を比較で「遠い」として扱う値。RC_read が返すどの距離 (卓上は最大 2000 mm) よりも大きい＝上限を変えても直さなくてよい
 
 back = 0        # 後退の残り回数
 bdir = CENTER   # 後退中の舵
@@ -2758,6 +2762,7 @@ lost = 0        # 右の壁を見失ってからの回数
 def setup():
     global back, lost
     RC_setup()
+    RC_setReadLimit(200)    # RC_read の値を信じる距離の上限 [mm]。これより先は -3 (遠い)。上限を変えるときはこの 1 行を直す
     back = 0
     lost = 0
 
@@ -2837,14 +2842,14 @@ def loop():
 `;
 
 const PY_AWD_CODE = `# Wall Hugger 4WD (Python) — ノーマル 4WD 用  [卓上 Lv2 強みを使う・Python 版]  by Fable 5.1
-# 実測 (v11.0.0・完走が定義される卓上 56 コース・ソロ走行・laps=3・rejoin=OFF): 53/56 完走 (C 版 Traction Blitz は 48/56)。
-# FR 版「Wall Hugger」の土台 (右の壁に沿う・前に壁が見えたら開いている方へ・見失ったら探す・詰まったら後退) はそのまま。
+# 実測 (v12.0.0・完走が定義される卓上 56 コース・ソロ走行・laps=3・rejoin=OFF): 53/56 完走 (C 版 Traction Blitz は 48/56)。
+# FR 版「Wall Hugger」の土台 (setup() の RC_setReadLimit で上限を決める・右の壁に沿う・前に壁が見えたら開いている方へ・見失ったら探す・詰まったら後退) はそのまま。
 # ★引き出すロジック★ 4WD は 4 輪で駆動するので、壁に沿って安定したら迷わず TOP まで加速してよい (トラクションがある)。
 #   弱点は「アクセルを踏んだまま曲げると前輪が押されて大回りになる」こと (実測の旋回半径: PWM 200 で走ってから全舵で切り、その PWM に
 #   切り替えたとき、240 で約 1.3 m・70 まで抜くと約 0.7 m。FR は 0.8 m → 0.45 m)。∴ 曲げるときはアクセルを強く抜く (TURNV=70) ことで FR と同じ通路を通れる。
 # ★足したロジック★ (5) 切り始めたら HOLD 回は切り続ける。前方の扇は壁の端で見えたり見えなかったりするので、
 #   切ったり戻したりを繰り返すと曲がりきれない。4WD は切り始めてから曲がり始めるまでが遅いので、この「粘り」が効く。
-# ※ -3 は数としては最も小さいので、比較の前に FAR (999) へ置き換える (RasPi・Zero2Cam・Arduino でも同じ書き方)。
+# ※ -3 は数としては最も小さいので、比較の前に FAR へ置き換える (RasPi・Zero2Cam・Arduino でも同じ書き方)。
 #   -1 (読めない) は置き換えずそのまま比較に入る＝「近い」扱いで減速・後退する (安全側)。
 
 from RumiCar import *
@@ -2853,14 +2858,14 @@ TOP = 240       # 速度: 壁に沿って安定しているとき (255 = 全開)
 CRUISE = 180    # 速度: 壁を探す・寄せる・真ん中へ寄せるとき
 TURNV = 70      # 速度: 前に壁が見えて曲げるとき (4WD は強く抜くほど小さく回れる)
 BACKV = 150     # 速度: 後退
-D_TURN = 200    # 前方がこれより近ければ曲げる [mm] (20 cm = RC_read が距離を返す上限なので「見えたら曲げる」)
+D_TURN = 200    # 前方がこれより近ければ曲げる [mm] (setup() で決めた上限以下にする。上限と同じ値なら「見えたら曲げる」)
 NEAR = 100      # 右の壁がこれより近ければ左へ [mm]
 FARB = 170      # 右の壁がこれより遠ければ右へ [mm]
 ESC = 80        # 前方がこれより近ければ後退して切り返す [mm]
 BACKT = 6       # 後退を続ける回数 (loop の回数。20 Hz なら 0.3 秒)
 SEEK = 4        # 壁を見失ってから全舵で右へ切り続ける回数。その後は半分の時間だけ切る
 HOLD = 2        # (5) 前の壁で切り始めてから、壁が見えなくなっても切り続ける回数
-FAR = 999       # -3 (20 cm 以内に何もない) を比較で「遠い」として扱う値
+FAR = 9999      # -3 (範囲外) を比較で「遠い」として扱う値。RC_read が返すどの距離 (卓上は最大 2000 mm) よりも大きい＝上限を変えても直さなくてよい
 
 back = 0        # 後退の残り回数
 bdir = CENTER   # 後退中の舵
@@ -2872,6 +2877,7 @@ hdir = CENTER   # 切り続ける向き
 def setup():
     global back, lost, hold
     RC_setup()
+    RC_setReadLimit(200)    # RC_read の値を信じる距離の上限 [mm]。これより先は -3 (遠い)。上限を変えるときはこの 1 行を直す
     back = 0
     lost = 0
     hold = 0
@@ -2960,14 +2966,14 @@ def loop():
 `;
 
 const PY_FF_CODE = `# Wall Hugger FF (Python) — ノーマル FF 用  [卓上 Lv3 弱点を補う・Python 版]  by Fable 5.1
-# 実測 (v11.0.0・完走が定義される卓上 56 コース・ソロ走行・laps=3・rejoin=OFF): 48/56 完走 (C 版 Steady Nose は 47/56)。
-# FR 版「Wall Hugger」の土台 (右の壁に沿う・前に壁が見えたら開いている方へ・見失ったら探す・詰まったら後退) はそのまま。
+# 実測 (v12.0.0・完走が定義される卓上 56 コース・ソロ走行・laps=3・rejoin=OFF): 48/56 完走 (C 版 Steady Nose は 47/56)。
+# FR 版「Wall Hugger」の土台 (setup() の RC_setReadLimit で上限を決める・右の壁に沿う・前に壁が見えたら開いている方へ・見失ったら探す・詰まったら後退) はそのまま。
 # ★補う弱点★ FF は前輪が駆動と操舵を兼ねるので、アクセルを踏んだまま曲げるとほとんど曲がらない
 #   (実測の旋回半径: PWM 200 で走ってから全舵で切り、その PWM に切り替えたとき、240 で約 1.8 m・70 まで抜くと約 0.8 m。FR は 0.8 m → 0.45 m)。
 #   ∴ (a) 曲げるときはアクセルを抜く (TURNV=70)。(b) 切り始めたら HOLD 回は切り続ける (切ったり戻したりでは曲がりきれない)。
 #   (c) 右の壁には FR より近く寄る (NEAR/FARB を小さく)。大回りになる車ほど、曲がり始める位置を外側に取れないので、
 #       壁の近くを走って前方の壁を早めに (遠い位置で) 見つける。(d) 直線の TOP も少し抑える (曲げる前に落とす速度が小さくて済む)。
-# ※ -3 は数としては最も小さいので、比較の前に FAR (999) へ置き換える (RasPi・Zero2Cam・Arduino でも同じ書き方)。
+# ※ -3 は数としては最も小さいので、比較の前に FAR へ置き換える (RasPi・Zero2Cam・Arduino でも同じ書き方)。
 #   -1 (読めない) は置き換えずそのまま比較に入る＝「近い」扱いで減速・後退する (安全側)。
 
 from RumiCar import *
@@ -2976,14 +2982,14 @@ TOP = 220       # 速度: 壁に沿って安定しているとき (255 = 全開)
 CRUISE = 180    # 速度: 壁を探す・寄せる・真ん中へ寄せるとき
 TURNV = 70      # 速度: 前に壁が見えて曲げるとき (FF は抜かないと曲がらない)
 BACKV = 150     # 速度: 後退
-D_TURN = 200    # 前方がこれより近ければ曲げる [mm] (20 cm = RC_read が距離を返す上限なので「見えたら曲げる」)
+D_TURN = 200    # 前方がこれより近ければ曲げる [mm] (setup() で決めた上限以下にする。上限と同じ値なら「見えたら曲げる」)
 NEAR = 85       # 右の壁がこれより近ければ左へ [mm] (FR より壁に寄る)
 FARB = 150      # 右の壁がこれより遠ければ右へ [mm]
 ESC = 80        # 前方がこれより近ければ後退して切り返す [mm]
 BACKT = 8       # 後退を続ける回数 (loop の回数。20 Hz なら 0.4 秒)
 SEEK = 4        # 壁を見失ってから全舵で右へ切り続ける回数。その後は半分の時間だけ切る
 HOLD = 2        # (b) 前の壁で切り始めてから、壁が見えなくなっても切り続ける回数
-FAR = 999       # -3 (20 cm 以内に何もない) を比較で「遠い」として扱う値
+FAR = 9999      # -3 (範囲外) を比較で「遠い」として扱う値。RC_read が返すどの距離 (卓上は最大 2000 mm) よりも大きい＝上限を変えても直さなくてよい
 
 back = 0        # 後退の残り回数
 bdir = CENTER   # 後退中の舵
@@ -2995,6 +3001,7 @@ hdir = CENTER   # 切り続ける向き
 def setup():
     global back, lost, hold
     RC_setup()
+    RC_setReadLimit(200)    # RC_read の値を信じる距離の上限 [mm]。これより先は -3 (遠い)。上限を変えるときはこの 1 行を直す
     back = 0
     lost = 0
     hold = 0
@@ -3116,8 +3123,8 @@ const SPEC = [
   {
     key: 'py_normal_fr', name: 'Wall Hugger (Python)', label: 'ノーマル FR (Python)', level: 'Lv1 基準 (Python)',
     carType: 'normal_fr', lang: 'py', code: PY_FR_CODE,
-    strategy: 'RC_read が 20 cm より先を見ない (-3) 実機と同じ条件で走る Python の基準プログラム。右の壁に寄って沿い、前に壁が見えたら開いている方へ、見失ったら右へ切って探し、詰まったら後退して切り返す。',
-    learns: '20 cm の ToF で広い通路を走る土台 (壁に沿う・-3 を「遠い」に置き換える・両側が見えれば真ん中へ) を Python の書き方 (def/global/RC_read) で読む。',
+    strategy: 'setup() の RC_setReadLimit で RC_read の値を信じる距離の上限を決め、上限より先は見えない (-3) 条件で走る Python の基準プログラム。右の壁に寄って沿い、前に壁が見えたら開いている方へ、見失ったら右へ切って探し、詰まったら後退して切り返す。',
+    learns: '上限より広い通路を走る土台 (上限を RC_setReadLimit で決める・壁に沿う・-3 を「遠い」に置き換える・両側が見えれば真ん中へ) を Python の書き方 (def/global/RC_read) で読む。',
   },
   {
     key: 'py_normal_awd', name: 'Wall Hugger 4WD (Python)', label: 'ノーマル 4WD (Python)', level: 'Lv2 強みを使う (Python)',
